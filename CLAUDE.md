@@ -6,12 +6,12 @@ Lets **Claude Code** collaborate with **other LLMs** (OpenAI, GitHub Copilot, Go
 
 - Slash commands live in `.claude/commands/`: `/consult` (second opinion, read-only), `/consensus` (multi-model synthesis), `/delegate` (hand a coding task to another model, then review its diff).
 - All three shell out to `collab/ask.sh`, a wrapper over `opencode run` (`plan` agent = read-only, `build` agent = edits files).
-- Dev container (`.devcontainer/`) runs Claude Code **and** opencode in-container. Host subscription credentials are bind-mounted **read-only**. Image build is verified.
+- Dev container (`.devcontainer/`) runs Claude Code **and** opencode in-container. Auth is **in-container login**, persisted across rebuilds via named volumes (`claudecollab-claude`, `claudecollab-opencode`). Verified: container starts, both agents run as `node`, volumes are node-writable.
 
 ## Outstanding / gotchas
 
-- **opencode must be authed on the host** (`opencode auth login`) before the container is built — the mount points at `~/.local/share/opencode/auth.json`, which only exists after login.
-- **Read-only credential mounts can't refresh expired OAuth tokens.** If in-container auth lapses, re-auth on the host or drop `,readonly` from the credential mounts in `.devcontainer/devcontainer.json`.
+- **Log in once inside the container**: `claude` → `/login`, and `opencode auth login`. State persists in the named volumes. (Host-credential mounting was tried and abandoned — on macOS the 600/root-owned secret is unreadable by the non-root `node` user.)
+- Volume ownership is seeded node-owned from the image dirs (the `mkdir`+`chown` in the Dockerfile). `postCreate.sh` also chowns defensively.
 - No network firewall on the container (decided against — low threat for trusted repos + frontier models). Revisit if delegating on untrusted repos.
 - PAL/Zen MCP was intentionally **not** used (it needs API keys, conflicting with the subscription-only choice).
 

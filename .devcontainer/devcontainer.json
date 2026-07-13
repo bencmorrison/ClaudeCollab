@@ -1,34 +1,22 @@
 {
   // ClaudeCollab dev container — Claude Code + opencode both run in here.
-  // Host LLM subscription credentials are bind-mounted read-only (see below).
   //
-  // The initializeCommand below creates empty placeholder credential files on the
-  // host if they don't exist yet, so the container always starts. To actually reach
-  // the models, authenticate on the HOST, then rebuild/restart the container:
-  //   opencode auth login          # writes real creds to ~/.local/share/opencode/auth.json
-  //   claude                       # ~/.claude/.credentials.json (already present once logged in)
+  // Auth model: you log in ONCE inside the container. Login state is kept in the
+  // named volumes below, so it survives rebuilds and the agents can refresh their
+  // own OAuth tokens (no host credential mounts — those don't work for a non-root
+  // container user on macOS, where secrets are mode 600 / root-owned via the mount).
+  //
+  //   claude                 -> then /login  (device-code OAuth in your browser)
+  //   opencode auth login    -> pick OpenAI / Copilot / Gemini
   "name": "ClaudeCollab",
   "build": { "dockerfile": "Dockerfile" },
   "remoteUser": "node",
 
-  // Runs on the HOST before the container is created. Guarantees the bind-mount
-  // sources exist (Docker errors if a mount source file is missing). Never
-  // overwrites real credentials — only creates an empty {} placeholder if absent.
-  "initializeCommand": [
-    "bash", "-c",
-    "mkdir -p \"$HOME/.local/share/opencode\" \"$HOME/.claude\" \"$HOME/.config/opencode\"; [ -s \"$HOME/.local/share/opencode/auth.json\" ] || echo '{}' > \"$HOME/.local/share/opencode/auth.json\"; [ -s \"$HOME/.claude/.credentials.json\" ] || echo '{}' > \"$HOME/.claude/.credentials.json\""
-  ],
-
   "mounts": [
-    // opencode subscription auth (OpenAI / Copilot / Gemini). Must exist on host first.
-    "source=${localEnv:HOME}/.local/share/opencode/auth.json,target=/home/node/.local/share/opencode/auth.json,type=bind,readonly",
-    // opencode config (models, defaults).
-    "source=${localEnv:HOME}/.config/opencode,target=/home/node/.config/opencode,type=bind,readonly",
-    // Claude Code subscription auth.
-    // NOTE: readonly means the container cannot refresh an expired OAuth token.
-    // If in-container auth lapses, either run `claude` on the host to refresh, or
-    // drop `,readonly` from the two lines above/below so the container can refresh.
-    "source=${localEnv:HOME}/.claude/.credentials.json,target=/home/node/.claude/.credentials.json,type=bind,readonly"
+    // Persistent login/state volumes. Seeded node-owned from the image dirs on
+    // first use (see the mkdir+chown in the Dockerfile), so the node user can write.
+    "source=claudecollab-claude,target=/home/node/.claude,type=volume",
+    "source=claudecollab-opencode,target=/home/node/.local/share/opencode,type=volume"
   ],
 
   "containerEnv": {

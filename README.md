@@ -37,21 +37,24 @@ That's it. The slash commands below are already in `.claude/commands/`.
 
 ## Dev container (recommended)
 
-Development runs in a dev container (`.devcontainer/`) with **Claude Code and opencode both preinstalled**. Your host LLM subscription credentials are bind-mounted read-only — you authenticate once on the host, and the container reuses it. No API keys are ever baked into the image.
+Development runs in a dev container (`.devcontainer/`) with **Claude Code and opencode both preinstalled**. You log in **once inside the container**; login state persists across rebuilds in named volumes (`claudecollab-claude`, `claudecollab-opencode`). No API keys or host credentials are baked into the image.
 
-**Before first build**, authenticate both agents *on the host* so the credential files exist to mount:
-```bash
-opencode auth login     # creates ~/.local/share/opencode/auth.json
-# Claude Code: ~/.claude/.credentials.json already exists once you've logged in
-```
-Then open the folder in the container:
-- **VS Code**: "Dev Containers: Reopen in Container", or
-- **CLI**: `devcontainer up --workspace-folder .` (from `@devcontainers/cli`)
+> Why in-container login and not host-credential mounts? On macOS, the host credential files are mode `600` and appear `root`-owned through Docker's mount layer, so the non-root `node` user the agents run as can't read them. In-container login sidesteps that and lets the agents refresh their own tokens.
 
-The container starts even if you haven't authed yet (an `initializeCommand` creates empty credential placeholders on the host so the mounts resolve). But to actually reach the models you must `opencode auth login` on the host, then **restart the container** so it picks up the real credentials. The `postCreate` step reports whether creds came through.
+1. Open the folder in the container:
+   - **VS Code**: "Dev Containers: Reopen in Container", or
+   - **CLI**: `devcontainer up --workspace-folder .` (from `@devcontainers/cli`)
+2. Inside the container, log in once:
+   ```bash
+   claude               # then type: /login   (device-code OAuth in your browser)
+   opencode auth login  # pick OpenAI / Copilot / Gemini
+   ```
+3. Verify:
+   ```bash
+   opencode models
+   ```
 
-### Credential refresh caveat
-The credential mounts are **read-only**, so the container cannot refresh an expired OAuth token. If in-container auth lapses (tokens expire after a few hours), either run `claude` / `opencode` on the host to refresh, or remove `,readonly` from the credential mounts in [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json) so the container refreshes them in place.
+The `postCreate` step reports login status each time. Because state lives in the named volumes, you only log in again if you delete those volumes.
 
 ## Usage
 

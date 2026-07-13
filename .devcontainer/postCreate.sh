@@ -1,28 +1,31 @@
 #!/usr/bin/env bash
-# Runs once after the container is created. Verifies the toolchain and reports
-# whether the mounted credentials came through.
+# Runs once after the container is created. Ensures the persistent volumes are
+# writable by `node`, verifies the toolchain, and reports auth status.
 set -euo pipefail
 
-echo "== ClaudeCollab dev container =="
+# Named volumes are normally seeded node-owned from the image dirs, but chown
+# defensively in case a volume initialized root-owned.
+sudo chown node:node "$HOME/.claude" "$HOME/.local/share/opencode" 2>/dev/null || true
 chmod +x collab/ask.sh 2>/dev/null || true
 
+echo "== ClaudeCollab dev container =="
 printf 'node:     %s\n' "$(node --version 2>/dev/null || echo MISSING)"
 printf 'claude:   %s\n' "$(claude --version 2>/dev/null || echo MISSING)"
 printf 'opencode: %s\n' "$(opencode --version 2>/dev/null || echo MISSING)"
 
 echo
-echo "-- credential check --"
-if [ -s "$HOME/.claude/.credentials.json" ]; then
-  echo "claude   auth: mounted"
+echo "-- auth status --"
+if claude -p "ok" >/dev/null 2>&1; then
+  echo "claude:   logged in"
 else
-  echo "claude   auth: MISSING — run 'claude' on the host to authenticate, then rebuild"
+  echo "claude:   NOT logged in — run 'claude' then '/login' inside this container"
 fi
-if [ -s "$HOME/.local/share/opencode/auth.json" ]; then
-  echo "opencode auth: mounted"
-  opencode auth list 2>/dev/null | tail -n +1 || true
+if opencode auth list 2>/dev/null | grep -qiE '[1-9][0-9]* credential|: '; then
+  echo "opencode: has credentials"
 else
-  echo "opencode auth: MISSING — run 'opencode auth login' on the host, then rebuild"
+  echo "opencode: no credentials — run 'opencode auth login' inside this container"
 fi
 
 echo
-echo "Ready. Try:  /consult <question>   |   /consensus <question>   |   /delegate <task>"
+echo "Log in once (persists across rebuilds via named volumes), then try:"
+echo "  /consult <question>   |   /consensus <question>   |   /delegate <task>"
