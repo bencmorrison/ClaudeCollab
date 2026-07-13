@@ -48,7 +48,7 @@ Then open the folder in the container:
 - **VS Code**: "Dev Containers: Reopen in Container", or
 - **CLI**: `devcontainer up --workspace-folder .` (from `@devcontainers/cli`)
 
-The `postCreate` step verifies node/claude/opencode and confirms the mounted credentials came through.
+The container starts even if you haven't authed yet (an `initializeCommand` creates empty credential placeholders on the host so the mounts resolve). But to actually reach the models you must `opencode auth login` on the host, then **restart the container** so it picks up the real credentials. The `postCreate` step reports whether creds came through.
 
 ### Credential refresh caveat
 The credential mounts are **read-only**, so the container cannot refresh an expired OAuth token. If in-container auth lapses (tokens expire after a few hours), either run `claude` / `opencode` on the host to refresh, or remove `,readonly` from the credential mounts in [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json) so the container refreshes them in place.
