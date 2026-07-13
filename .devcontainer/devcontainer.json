@@ -1,14 +1,23 @@
 {
   // ClaudeCollab dev container — Claude Code + opencode both run in here.
-  // Host LLM subscription credentials are bind-mounted read-only (see PREREQ below).
+  // Host LLM subscription credentials are bind-mounted read-only (see below).
   //
-  // PREREQ before first build/open: authenticate BOTH agents on the HOST so the
-  // credential files exist to mount:
-  //   opencode auth login          # creates ~/.local/share/opencode/auth.json
-  //   claude  (already authed)     # ~/.claude/.credentials.json already present
+  // The initializeCommand below creates empty placeholder credential files on the
+  // host if they don't exist yet, so the container always starts. To actually reach
+  // the models, authenticate on the HOST, then rebuild/restart the container:
+  //   opencode auth login          # writes real creds to ~/.local/share/opencode/auth.json
+  //   claude                       # ~/.claude/.credentials.json (already present once logged in)
   "name": "ClaudeCollab",
   "build": { "dockerfile": "Dockerfile" },
   "remoteUser": "node",
+
+  // Runs on the HOST before the container is created. Guarantees the bind-mount
+  // sources exist (Docker errors if a mount source file is missing). Never
+  // overwrites real credentials — only creates an empty {} placeholder if absent.
+  "initializeCommand": [
+    "bash", "-c",
+    "mkdir -p \"$HOME/.local/share/opencode\" \"$HOME/.claude\" \"$HOME/.config/opencode\"; [ -s \"$HOME/.local/share/opencode/auth.json\" ] || echo '{}' > \"$HOME/.local/share/opencode/auth.json\"; [ -s \"$HOME/.claude/.credentials.json\" ] || echo '{}' > \"$HOME/.claude/.credentials.json\""
+  ],
 
   "mounts": [
     // opencode subscription auth (OpenAI / Copilot / Gemini). Must exist on host first.
