@@ -35,6 +35,24 @@ Claude Code  ──(slash command)──▶  collab/ask.sh  ──▶  opencode 
 
 That's it. The slash commands below are already in `.claude/commands/`.
 
+## Dev container (recommended)
+
+Development runs in a dev container (`.devcontainer/`) with **Claude Code and opencode both preinstalled**. Your host LLM subscription credentials are bind-mounted read-only — you authenticate once on the host, and the container reuses it. No API keys are ever baked into the image.
+
+**Before first build**, authenticate both agents *on the host* so the credential files exist to mount:
+```bash
+opencode auth login     # creates ~/.local/share/opencode/auth.json
+# Claude Code: ~/.claude/.credentials.json already exists once you've logged in
+```
+Then open the folder in the container:
+- **VS Code**: "Dev Containers: Reopen in Container", or
+- **CLI**: `devcontainer up --workspace-folder .` (from `@devcontainers/cli`)
+
+The `postCreate` step verifies node/claude/opencode and confirms the mounted credentials came through.
+
+### Credential refresh caveat
+The credential mounts are **read-only**, so the container cannot refresh an expired OAuth token. If in-container auth lapses (tokens expire after a few hours), either run `claude` / `opencode` on the host to refresh, or remove `,readonly` from the credential mounts in [`.devcontainer/devcontainer.json`](.devcontainer/devcontainer.json) so the container refreshes them in place.
+
 ## Usage
 
 Run these inside Claude Code in this repo:

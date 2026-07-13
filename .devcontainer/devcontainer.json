@@ -1,0 +1,39 @@
+{
+  // ClaudeCollab dev container — Claude Code + opencode both run in here.
+  // Host LLM subscription credentials are bind-mounted read-only (see PREREQ below).
+  //
+  // PREREQ before first build/open: authenticate BOTH agents on the HOST so the
+  // credential files exist to mount:
+  //   opencode auth login          # creates ~/.local/share/opencode/auth.json
+  //   claude  (already authed)     # ~/.claude/.credentials.json already present
+  "name": "ClaudeCollab",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "node",
+
+  "mounts": [
+    // opencode subscription auth (OpenAI / Copilot / Gemini). Must exist on host first.
+    "source=${localEnv:HOME}/.local/share/opencode/auth.json,target=/home/node/.local/share/opencode/auth.json,type=bind,readonly",
+    // opencode config (models, defaults).
+    "source=${localEnv:HOME}/.config/opencode,target=/home/node/.config/opencode,type=bind,readonly",
+    // Claude Code subscription auth.
+    // NOTE: readonly means the container cannot refresh an expired OAuth token.
+    // If in-container auth lapses, either run `claude` on the host to refresh, or
+    // drop `,readonly` from the two lines above/below so the container can refresh.
+    "source=${localEnv:HOME}/.claude/.credentials.json,target=/home/node/.claude/.credentials.json,type=bind,readonly"
+  ],
+
+  "containerEnv": {
+    // Default model for /consult (optional). Forwarded from host if set.
+    "COLLAB_MODEL": "${localEnv:COLLAB_MODEL}"
+    // If your host Claude relies on a custom endpoint, add:
+    // "ANTHROPIC_BASE_URL": "${localEnv:ANTHROPIC_BASE_URL}"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["anthropic.claude-code"]
+    }
+  },
+
+  "postCreateCommand": "bash .devcontainer/postCreate.sh"
+}
