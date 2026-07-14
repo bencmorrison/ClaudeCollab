@@ -1,0 +1,16 @@
+# Local, per-user Claude Code settings (personal permission grants, etc.)
+.claude/settings.local.json
+
+# Secrets / local env — never commit these
+.env
+*.env
+!*.env.example
+
+# macOS
+.DS_Store
+
+# Node (opencode/claude are installed globally; this is just in case deps land here)
+node_modules/
+
+# Logs / temp
+*.log
