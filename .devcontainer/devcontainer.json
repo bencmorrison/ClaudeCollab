@@ -24,7 +24,18 @@
     "source=claudecollab-claude,target=/home/node/.claude,type=volume",
     "source=claudecollab-opencode,target=/home/node/.local/share/opencode,type=volume",
     // gh CLI auth (device-code login persists here across rebuilds).
-    "source=claudecollab-gh,target=/home/node/.config/gh,type=volume"
+    "source=claudecollab-gh,target=/home/node/.config/gh,type=volume",
+
+    // Your host user-level Claude config, mounted read-only at a staging path so
+    // host edits show through. postCreate links the safe pieces (CLAUDE.md,
+    // commands, agents) into the active ~/.claude; settings.json is left staged
+    // for review (host hooks/statusLine/paths may not work in-container). Reads
+    // only world-readable config — never host credentials (600/root-owned on
+    // macOS). Whole-dir mount avoids per-file rebuild failures on missing paths.
+    "source=${localEnv:HOME}/.claude,target=/home/node/.claude-host,type=bind,readonly",
+    // Many setups (incl. this one) symlink ~/.claude/* into a dotfiles repo, so
+    // mount ~/.dotfiles too — otherwise those symlinks dangle in the container.
+    "source=${localEnv:HOME}/.dotfiles,target=/home/node/.dotfiles,type=bind,readonly"
   ],
 
   "containerEnv": {

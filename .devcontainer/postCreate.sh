@@ -8,6 +8,40 @@ set -euo pipefail
 sudo chown node:node "$HOME/.claude" "$HOME/.local/share/opencode" "$HOME/.config/gh" 2>/dev/null || true
 chmod +x collab/ask.sh 2>/dev/null || true
 
+# Link host user-level Claude config (read-only staging mount) into the active
+# ~/.claude, whichever pieces exist. settings.json is left staged on purpose —
+# review ~/.claude-host/settings.json before activating (host hooks/statusLine/
+# paths may not work in-container).
+host_claude="$HOME/.claude-host"
+if [ -d "$host_claude" ]; then
+  # CLAUDE.md / statusline are often dotfiles symlinks; -e follows them (needs
+  # ~/.dotfiles mounted). Link whichever host files exist into the active ~/.claude.
+  [ -e "$host_claude/CLAUDE.md" ]             && ln -sfn "$host_claude/CLAUDE.md"             "$HOME/.claude/CLAUDE.md"
+  [ -e "$host_claude/statusline-command.sh" ] && ln -sfn "$host_claude/statusline-command.sh" "$HOME/.claude/statusline-command.sh"
+  # commands/agents may sit directly in ~/.claude, or in the dotfiles .claude dir
+  # that CLAUDE.md resolves into. Link whichever exists.
+  real_claude="$(dirname "$(readlink -f "$host_claude/CLAUDE.md" 2>/dev/null)" 2>/dev/null)"
+  for sub in commands agents; do
+    if   [ -d "$host_claude/$sub" ]; then ln -sfn "$host_claude/$sub" "$HOME/.claude/$sub"
+    elif [ -n "$real_claude" ] && [ -d "$real_claude/$sub" ]; then ln -sfn "$real_claude/$sub" "$HOME/.claude/$sub"
+    fi
+  done
+  # Activate host settings.json on a fresh volume (won't clobber once it exists).
+  [ -f "$HOME/.claude/settings.json" ] || { [ -e "$host_claude/settings.json" ] && cp -f "$host_claude/settings.json" "$HOME/.claude/settings.json"; }
+  echo "host config: linked $(ls -d "$HOME/.claude/CLAUDE.md" "$HOME/.claude/commands" "$HOME/.claude/agents" "$HOME/.claude/statusline-command.sh" 2>/dev/null | wc -l) item(s) from host config"
+fi
+
+# Persist ~/.claude.json (Claude Code account/onboarding state). It lives in HOME,
+# OUTSIDE the ~/.claude volume, so a rebuild wipes it and forces a re-login even
+# though the tokens (~/.claude/.credentials.json) persist. Keep the real file in the
+# volume and symlink it back so login survives rebuilds.
+persist="$HOME/.claude/home-dot-claude.json"
+if [ ! -L "$HOME/.claude.json" ]; then
+  [ -f "$HOME/.claude.json" ] && [ ! -f "$persist" ] && mv "$HOME/.claude.json" "$persist"
+  [ -f "$persist" ] || echo '{}' > "$persist"
+  ln -sfn "$persist" "$HOME/.claude.json"
+fi
+
 echo "== ClaudeCollab dev container =="
 printf 'node:     %s\n' "$(node --version 2>/dev/null || echo MISSING)"
 printf 'claude:   %s\n' "$(claude --version 2>/dev/null || echo MISSING)"
