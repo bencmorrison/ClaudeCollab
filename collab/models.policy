@@ -1,0 +1,25 @@
+# collab/models.policy — governs which models the ClaudeCollab commands
+# (/consult, /panel, /review, /research, /delegate, /collaborate) may use.
+#
+# Format:  <tier>  <glob-pattern>        # optional comment
+#   tier    = deny | ask | allow
+#   pattern = a shell glob matched against the FULL provider/model id
+#             (e.g. openai/gpt-5.6-sol, opencode/deepseek-v4-flash-free)
+#
+# FIRST MATCH WINS, top to bottom. Put specific rules above broad ones.
+#   deny   — collab/ask.sh hard-refuses to run this model.
+#   ask    — Claude must confirm with you before using it (ask.sh requires
+#            COLLAB_CONFIRMED=1, which Claude sets only after asking).
+#   allow  — use freely.
+#
+# Ships permissive (default-allow). Uncomment / edit to gate what YOU care about.
+# Note: a bare `collab/ask.sh` with no -m uses opencode's default model, whose id
+# isn't known here, so it can't be policed — pass -m to bring a model under policy.
+#
+# Examples (delete the leading '# ' to activate):
+#   deny   *-sol*             # never use any Sol variant
+#   ask    *fable*            # confirm before using Fable
+#   ask    openai/gpt-5.6-*   # confirm before this whole family
+#   allow  opencode/*         # free tier is always fine
+
+allow  *                      # default: everything is allowed
