@@ -8,6 +8,7 @@ Get multiple independent perspectives on:
 $ARGUMENTS
 
 1. Choose 2-3 models from different providers/families for genuine diversity (run `opencode models` if unsure what's available). Avoid picking the same underlying model twice.
+   - Your role decides whether Anthropic is on the panel: if you're purely **coordinating** (the user asked you to hand the work out and synthesize, not weigh in yourself), an **Anthropic model may be one of the 2-3** so that perspective is represented. If you're also **authoring** your own view as the tie-breaker, lean toward **non-Anthropic** models — you already supply the Anthropic perspective.
 2. Ask each the SAME question, one call per model:
    `bash collab/ask.sh -m <provider/model> "<the question with full context>"`
    - **Model policy:** check `collab/models.policy` before picking each model. Skip any `deny`-matched model; for an `ask`-matched model, confirm with the user first, then invoke as `COLLAB_CONFIRMED=1 bash collab/ask.sh …`. Report the exact model ids used.

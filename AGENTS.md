@@ -36,7 +36,7 @@ Claude Code ──(slash command)──▶ collab/ask.sh ──▶ opencode run 
 
 ## Conventions
 
-- Prefer a **non-Claude** model for `/consult` and `/consensus` so the outside perspective is genuinely independent. Set a repo-wide default with `export COLLAB_MODEL=provider/model`.
+- **Model choice depends on Claude's role.** When Claude is *authoring* the work (collaborating with you directly), prefer a **non-Claude** model for `/consult`/`/panel` so the outside view is genuinely independent — Claude already brings the Anthropic perspective. When Claude is purely *coordinating* (handing the work to other agents and only synthesizing), an **Anthropic model is eligible** in the panel too, since its own reasoning isn't the deliverable. Anthropic is never denied by default. Set a repo-wide default with `export COLLAB_MODEL=provider/model`.
 - `/delegate` uses `--auto` (auto-approves opencode's tool use so it doesn't block). **Always review the resulting diff** with `git status` / `git diff` — that's step 2 of the command, not optional.
 - When delegating, keep your own edits distinct from the delegated model's in your summary.
 - Commits are **signed** (SSH signing backed by the 1Password agent, which VS Code forwards into the container; git is preconfigured with `gpg.format=ssh` + `commit.gpgsign=true`, using the "GitHub Signing Key"). A commit fires a **1Password approval prompt on the host** — approve it. Only when running truly headless (no host to approve) fall back to `git -c commit.gpgsign=false commit …`.

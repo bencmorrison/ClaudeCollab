@@ -13,7 +13,7 @@ A **"bring other minds to bear"** tool where model *diversity is the point*, not
 **Principles:**
 1. **Claude's role is contextual** — coordinator/"boss" by default; *peer* when explicitly invoked via `/collaborate`.
 2. **Anti-goal: Claude must not dismiss the other models.** Engagement must be *observable* — see the collaboration contract below. Diversity Claude ignores is worse than useless.
-3. Prefer non-Claude models for independence. No API keys stored or managed by this repo.
+3. **Anthropic models — eligibility depends on mode.** When Claude *authors* the work (collaborator/direct mode) it already supplies the Anthropic view, so external opinions lean **non-Anthropic** for real diversity. When Claude only *coordinates* (delegates the work out and synthesizes, without authoring it itself), its reasoning isn't the deliverable, so an **Anthropic model is eligible** among the fanned-out agents — otherwise that perspective is absent from the actual work. Never denied by default; this is selection preference, not permission. No API keys stored or managed by this repo.
 
 ## Command surface (target)
 
