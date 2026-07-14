@@ -12,11 +12,19 @@
   "build": { "dockerfile": "Dockerfile" },
   "remoteUser": "node",
 
+  "features": {
+    // GitHub CLI (gh) for repo / PR / Actions work. Installed as a Feature so it
+    // persists across rebuilds; its auth lives in the claudecollab-gh volume below.
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
   "mounts": [
     // Persistent login/state volumes. Seeded node-owned from the image dirs on
     // first use (see the mkdir+chown in the Dockerfile), so the node user can write.
     "source=claudecollab-claude,target=/home/node/.claude,type=volume",
-    "source=claudecollab-opencode,target=/home/node/.local/share/opencode,type=volume"
+    "source=claudecollab-opencode,target=/home/node/.local/share/opencode,type=volume",
+    // gh CLI auth (device-code login persists here across rebuilds).
+    "source=claudecollab-gh,target=/home/node/.config/gh,type=volume"
   ],
 
   "containerEnv": {
