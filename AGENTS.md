@@ -30,6 +30,9 @@ Claude Code ──(slash command)──▶ collab/ask.sh ──▶ opencode run 
 - Auth is **in-container login**, persisted across rebuilds via named volumes (`claudecollab-claude`, `claudecollab-opencode`). Log in once: `claude` → `/login`, and `opencode auth login`.
 - Host-credential mounting was tried and **abandoned** — on macOS the mode-600/root-owned secret is unreadable by the non-root `node` user through the mount.
 - Volume ownership is seeded node-owned via the `mkdir`+`chown` in the `Dockerfile`; `postCreate.sh` also chowns defensively and reports login status on each create.
+- **`gh` CLI** is installed via a dev-container Feature; its auth persists in the `claudecollab-gh` volume (`gh auth login` once).
+- **Host config import:** the host `~/.claude` and `~/.dotfiles` are mounted read-only; `postCreate.sh` links your global `CLAUDE.md`, `statusline-command.sh`, and (if present) `commands`/`agents` into the active `~/.claude`, and activates `settings.json` on a fresh volume. Config only — never host credentials.
+- **Login persistence gotcha:** Claude Code splits state between `~/.claude/` (the volume, persists) and `~/.claude.json` (in `$HOME`, on the ephemeral FS — would be wiped each rebuild, forcing re-login). `postCreate.sh` keeps the real file in the volume (`home-dot-claude.json`) and symlinks `~/.claude.json` to it.
 
 ## Conventions
 
