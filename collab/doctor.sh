@@ -100,7 +100,10 @@ done
 
 # --- 5. Model policy file ----------------------------------------------------
 hdr "Model policy"
-pol="${COLLAB_POLICY:-$repo_root/collab/models.policy}"
+# Same resolution ask.sh uses: $COLLAB_POLICY, else the git-ignored .local, else default.
+if [ -n "${COLLAB_POLICY:-}" ]; then pol="$COLLAB_POLICY"
+elif [ -f "$repo_root/collab/models.policy.local" ]; then pol="$repo_root/collab/models.policy.local"
+else pol="$repo_root/collab/models.policy"; fi
 if [ -f "$pol" ]; then
   rules=0; badlines=""
   while IFS= read -r line || [ -n "$line" ]; do

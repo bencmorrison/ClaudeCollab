@@ -1,6 +1,10 @@
 # Local, per-user Claude Code settings (personal permission grants, etc.)
 .claude/settings.local.json
 
+# Per-user model policy written by /configure-collab (personal deny/ask/allow rules;
+# ask.sh auto-prefers it over the committed default). Never commit personal prefs.
+collab/models.policy.local
+
 # Secrets / local env — never commit these
 .env
 *.env

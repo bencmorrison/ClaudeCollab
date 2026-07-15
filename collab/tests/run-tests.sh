@@ -262,6 +262,24 @@ FAKE_OPENCODE_TEXT="" run_ask --emit-session -m openai/gpt-5.5 "q"
   && ok "--emit-session empty answer warns, exit 0" \
   || no "emit-session empty-answer handling wrong (rc=$RC, err: $ERR)"
 
+# 20. Policy resolution: a git-ignored collab/models.policy.local is preferred over
+#     the committed models.policy when $COLLAB_POLICY is unset; $COLLAB_POLICY still
+#     overrides both. (What /configure-collab relies on.)
+presol="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$presol/collab"
+cp "$ask" "$presol/collab/ask.sh"
+printf 'allow *\n' > "$presol/collab/models.policy"                    # default: allow all
+printf 'deny openai/gpt-5.5\n' > "$presol/collab/models.policy.local"  # personal: deny it
+: > "$argsfile"
+bash "$presol/collab/ask.sh" -m openai/gpt-5.5 "q" >/dev/null 2>&1; RC=$?   # no COLLAB_POLICY
+[ "$RC" -eq 3 ] \
+  && ok "policy: models.policy.local preferred over the committed default" \
+  || no "policy .local not preferred (rc=$RC, expected 3=deny)"
+COLLAB_POLICY="$allow_pol" bash "$presol/collab/ask.sh" -m openai/gpt-5.5 "q" >/dev/null 2>&1; RC=$?
+[ "$RC" -eq 0 ] \
+  && ok "policy: \$COLLAB_POLICY overrides .local" \
+  || no "\$COLLAB_POLICY did not override .local (rc=$RC)"
+rm -rf "$presol"
+
 # --- panel-models.sh (the /panel model-set resolver; opencode-free) --------------
 panel="$repo_root/collab/panel-models.sh"
 perrf="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"

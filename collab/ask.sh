@@ -42,10 +42,11 @@
 #   collab/ask.sh -m google/gemini-2.5-pro "Second opinion..." # specific model
 #   collab/ask.sh --edit "Add input validation to parser.c"    # delegate coding
 #
-# Model policy: the requested -m model is checked against a deny/ask/allow policy
-# (default collab/models.policy, override with $COLLAB_POLICY). A `deny` model is
-# refused; an `ask` model requires $COLLAB_CONFIRMED=1 (Claude sets it only after
-# confirming with the user). See that file for the format.
+# Model policy: the requested -m model is checked against a deny/ask/allow policy.
+# The policy file is resolved as: $COLLAB_POLICY if set, else a git-ignored personal
+# collab/models.policy.local if present (written by /configure-collab), else the
+# shipped collab/models.policy. A `deny` model is refused; an `ask` model requires
+# $COLLAB_CONFIRMED=1 (Claude sets it only after confirming with the user).
 #
 # Env: $COLLAB_MODEL (default model), $COLLAB_TIMEOUT (seconds; unset = no timeout,
 #      so long-running model/coding work is never cut off), $COLLAB_REQUIRE_HARDENED
@@ -62,7 +63,16 @@ usage() {
   exit "${1:-1}"
 }
 
-policy_file="${COLLAB_POLICY:-$(dirname "$0")/models.policy}"
+# Policy file resolution: $COLLAB_POLICY wins if set; otherwise prefer a personal,
+# git-ignored collab/models.policy.local (what /configure-collab writes, so a user's
+# prefs never touch the committed default) if it exists; else the shipped default.
+if [ -n "${COLLAB_POLICY:-}" ]; then
+  policy_file="$COLLAB_POLICY"
+elif [ -f "$(dirname "$0")/models.policy.local" ]; then
+  policy_file="$(dirname "$0")/models.policy.local"
+else
+  policy_file="$(dirname "$0")/models.policy"
+fi
 
 # policy_tier <model> — echo the deny/ask/allow tier for a model per the policy
 # file (first matching glob wins). Defaults to allow: no file, no model id, or no

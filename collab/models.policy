@@ -12,7 +12,10 @@
 #            COLLAB_CONFIRMED=1, which Claude sets only after asking).
 #   allow  — use freely.
 #
-# Ships permissive (default-allow). Uncomment / edit to gate what YOU care about.
+# Ships permissive (default-allow). Uncomment / edit to gate what YOU care about,
+# or run `/configure-collab` for a guided setup. Personal prefs should go in a
+# git-ignored `collab/models.policy.local` (ask.sh auto-prefers it) so they aren't
+# committed; edit THIS file only to change the shared/committed default.
 # Note: a bare `collab/ask.sh` with no -m uses opencode's default model, whose id
 # isn't known here, so it can't be policed — pass -m to bring a model under policy.
 #

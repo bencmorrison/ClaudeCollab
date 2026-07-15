@@ -83,7 +83,7 @@ Not every reachable model should be usable by these commands without a check. A 
     #   ask    openai/gpt-5.6-*   # example: confirm before a specific family
     allow  *                      # default: everything is allowed
 
-Because a `deny` rule can sit above `ask`/`allow`, a broad "ask before family X" rule can still hard-deny a specific variant. The point is the *mechanism*: any developer expresses their own allow/ask/deny preferences without touching code. (Later: allow a per-user override file outside the repo so preferences aren't committed.)
+Because a `deny` rule can sit above `ask`/`allow`, a broad "ask before family X" rule can still hard-deny a specific variant. The point is the *mechanism*: any developer expresses their own allow/ask/deny preferences without touching code. **Per-user prefs are now non-committed (DONE 2026-07-15):** `ask.sh`/`doctor.sh` resolve `$COLLAB_POLICY` → git-ignored `collab/models.policy.local` → committed `collab/models.policy`, and **`/configure-collab`** (`.claude/commands/configure-collab.md`) is a guided, interactive setup that interviews the user (deny/ask, preferred default + panel set, personal-vs-shared scope), writes `models.policy.local`, prints the `COLLAB_MODEL`/`COLLAB_MODELS` export lines, and validates via `doctor.sh` + `--dry-run`. Unit-tested (`.local` preferred over default; `$COLLAB_POLICY` overrides both).
 
 ## Roadmap
 
