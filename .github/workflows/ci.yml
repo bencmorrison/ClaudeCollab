@@ -52,5 +52,12 @@ jobs:
       - name: Frontmatter validation
         run: bash collab/tests/check-frontmatter.sh
 
+      - name: Agent permission invariants (source-level allowlist lint)
+        # Opencode-free: guards the realistic regression (a human weakens an agent
+        # def — re-adds "*": allow, drops the deny floor, flips mode). It does NOT
+        # prove opencode's resolved enforcement — that's verify-collab-*.sh, which
+        # needs the opencode binary and runs locally / via doctor.sh, not here.
+        run: bash collab/tests/check-agent-permissions.sh
+
       - name: Wrapper unit tests (fake opencode, no model calls)
         run: bash collab/tests/run-tests.sh

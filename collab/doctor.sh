@@ -120,15 +120,23 @@ else
   info "no policy file at $pol — default-allow (every model permitted). Add one to gate models."
 fi
 
-# --- 6. Static agent verification (token-free) -------------------------------
-hdr "Agent permission proof (static)"
+# --- 6a. Agent permission invariants (source-level lint; no opencode needed) --
+hdr "Agent permission invariants (source lint)"
+if bash collab/tests/check-agent-permissions.sh >/dev/null 2>&1; then
+  pass "agent defs hold the default-deny-allowlist invariants ('*': deny floor, no re-open, expected allow-set)"
+else
+  bad "agent permission invariants VIOLATED — run: bash collab/tests/check-agent-permissions.sh"
+fi
+
+# --- 6b. Static agent verification (resolved config; needs opencode) ---------
+hdr "Agent permission proof (resolved config)"
 if command -v opencode >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-  if bash collab/verify-collab-read.sh --static >/dev/null 2>&1; then pass "collab-read denies mutation/secrets/egress by construction (static)"
+  if bash collab/verify-collab-read.sh --static >/dev/null 2>&1; then pass "collab-read denies mutation/secrets/egress by construction (resolved config)"
   else bad "collab-read static verification FAILED — run: bash collab/verify-collab-read.sh --static"; fi
-  if bash collab/verify-collab-build.sh --static >/dev/null 2>&1; then pass "collab-build has the expected allow/deny shape (static)"
+  if bash collab/verify-collab-build.sh --static >/dev/null 2>&1; then pass "collab-build has the expected allow/deny shape (resolved config)"
   else bad "collab-build static verification FAILED — run: bash collab/verify-collab-build.sh --static"; fi
 else
-  warn "static verification skipped (needs opencode + jq)"
+  warn "resolved-config proof skipped (needs opencode + jq) — the source lint above still ran"
 fi
 
 # --- 7. Wrapper unit tests (token-free) --------------------------------------
