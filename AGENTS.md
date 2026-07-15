@@ -4,6 +4,8 @@ Lets **Claude Code** collaborate with **other LLMs** (OpenAI, GitHub Copilot, Go
 
 > **This file is read by every agent that works here.** `CLAUDE.md` is a symlink to it (Claude Code reads `CLAUDE.md`), and opencode reads `AGENTS.md` natively — so both the driver and any delegated model share one source of truth.
 >
+> **`CLAUDE.md` is a symlink to this file — verify that, don't assume it.** `doctor.sh` checks it (`Agent guide`), because the symlink is the *only* mechanical guarantee behind "one source of truth": Claude Code reads `CLAUDE.md`, opencode reads `AGENTS.md`, and if they are ever two files they drift silently — leaving a **delegated model following different instructions than the Claude reviewing its diff**. It has already happened once: an in-place `perl -pi` sweep over `git ls-files '*.md'` replaced the symlink with a regular file (`perl -i` and `sed -i` unlink and recreate; they do not follow symlinks), and the copy drifted within the same session before anyone noticed. **If you rewrite `*.md` in place, exclude `CLAUDE.md` or restore the link afterwards.**
+>
 > **Keep it current.** Treat this as living documentation: update it whenever you change a command, the wrapper, the dev container, or a convention — in the *same* change, not "later". A stale guide misleads the next agent. When you finish a task that changes how the repo works, ask yourself "does AGENTS.md still describe reality?" and edit it if not.
 
 ## Architecture

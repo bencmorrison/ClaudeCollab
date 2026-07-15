@@ -196,6 +196,31 @@ elif [ -z "$missing" ]; then
   pass "${present} of ${ncmds} ClaudeCollab slash commands are ours (see the warning above)"
 fi
 
+# --- 4c. The agent guide is ONE file --------------------------------------------
+# CLAUDE.md must be a symlink to AGENTS.md. This is the only mechanical guarantee
+# behind the "one source of truth for every agent" convention: Claude Code reads
+# CLAUDE.md, opencode reads AGENTS.md natively, and if they are two files they drift
+# — silently, and in the worst possible way, because a DELEGATED model would then be
+# working from different instructions than the Claude reviewing its diff.
+#
+# Not hypothetical: an in-place `perl -pi` sweep over `git ls-files '*.md'` replaced
+# the symlink with a regular file (perl -i unlinks and recreates; it does not follow
+# symlinks), and the copy drifted within the same session. sed -i does the same.
+# If you must rewrite *.md in place, exclude CLAUDE.md or restore the link after.
+hdr "Agent guide"
+if [ ! -e CLAUDE.md ]; then
+  warn "no CLAUDE.md — Claude Code reads that file; without it Claude gets no project guide"
+elif [ -L CLAUDE.md ] && [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]; then
+  pass "CLAUDE.md -> AGENTS.md (one guide, both agents read the same bytes)"
+elif [ -L CLAUDE.md ]; then
+  bad "CLAUDE.md is a symlink to '$(readlink CLAUDE.md)', expected AGENTS.md"
+else
+  bad "CLAUDE.md is a REGULAR FILE, not a symlink to AGENTS.md — the two guides can now drift, and a delegated model (reads AGENTS.md) would follow different instructions than Claude (reads CLAUDE.md). Fix: rm CLAUDE.md && ln -s AGENTS.md CLAUDE.md"
+  if ! diff -q AGENTS.md CLAUDE.md >/dev/null 2>&1; then
+    bad "  ...and they have ALREADY drifted ($(diff AGENTS.md CLAUDE.md | grep -c '^[<>]') lines differ) — reconcile before restoring the link, or you will discard whichever edits landed in the copy"
+  fi
+fi
+
 # --- 5. Model policy file ----------------------------------------------------
 hdr "Model policy"
 # Same resolution ask.sh uses: $COLLAB_POLICY, else a RULEFUL .local, else default.
