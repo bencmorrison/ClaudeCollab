@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# verify-collab-watch.sh — check the `collab-watch` opencode agent (the /witness
+# verify-collab-watch.sh — check the `collab-watch` opencode agent (the /collab:witness
 # oversight path) has the permission shape it claims.
 #
 # What collab-watch claims, and what this proves:
 #   * It CAN read the evidence log — read 'collab/logs/**' resolves to `allow` (else
-#     /witness is broken and the auditor has nothing to audit). Asserted positively.
+#     /collab:witness is broken and the auditor has nothing to audit). Asserted positively.
 #   * It can read NOTHING ELSE — read '*' resolves to `deny`. This is the inverse of
 #     every other agent here, and it is the point: an auditor with whole-repo read
 #     "verifies" by reading the current SOURCE instead of THE LOG, silently becoming
 #     a second consultant rather than a check on Claude's account. Keeping it on the
-#     log via the /witness prompt would be compliance — and that prompt is written by
+#     log via the /collab:witness prompt would be compliance — and that prompt is written by
 #     the party under audit. So the scope is enforced by construction.
 #   * It has NO other capability at all — bash/edit/write/patch/grep/glob/task/
 #     webfetch/websearch/... all resolve to `deny`. Two of those matter especially:
@@ -89,12 +89,12 @@ effective_read() {
 [ "$(last_action '*')" = "deny" ] && pass "'*' catch-all => deny (default-deny allowlist)" \
   || bad "'*' catch-all is NOT deny — un-listed tools would be ALLOWED"
 
-# The ONE capability: reading the evidence log. Without it /witness has no data and
+# The ONE capability: reading the evidence log. Without it /collab:witness has no data and
 # the whole oversight story is theatre.
 if [ "$(effective_read 'collab/logs/20260101T000000Z-abc/calls.jsonl')" = "allow" ]; then
   pass "read 'collab/logs/**' => allow (the auditor can read the log)"
 else
-  bad "read of collab/logs/** is NOT allowed — /witness cannot read the evidence it exists to audit"
+  bad "read of collab/logs/** is NOT allowed — /collab:witness cannot read the evidence it exists to audit"
 fi
 
 # ...and NOTHING else. This is the inverted map that keeps an auditor auditing.

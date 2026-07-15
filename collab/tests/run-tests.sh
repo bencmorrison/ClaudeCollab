@@ -110,7 +110,7 @@ args_has 'collab-watch' && ! args_has 'collab-read' \
 
 # 3e. The watcher must NOT be a Claude model without explicit confirmation: Claude is
 #     the party under audit, so a same-family auditor is not the independent check
-#     /witness reports itself to be — and the developer can't tell from the report.
+#     /collab:witness reports itself to be — and the developer can't tell from the report.
 for m in anthropic/claude-opus-4-5 some-provider/claude-3; do
   : > "$argsfile"
   COLLAB_POLICY="$allow_pol" bash "$ask" --watch --dry-run -m "$m" "audit" >/dev/null 2>&1; RC=$?
@@ -126,7 +126,7 @@ COLLAB_POLICY="$allow_pol" COLLAB_CONFIRMED=1 bash "$ask" --watch --dry-run -m a
 #      check had: with no -m and no $COLLAB_WATCH_MODEL/$COLLAB_MODEL, `model` is
 #      empty, no -m reaches opencode, opencode uses ITS OWN default — and the check
 #      below never fires, because "" matches no pattern. If that default is Claude,
-#      Claude audits Claude in silence. (Found by dogfooding /review, 2026-07-15.)
+#      Claude audits Claude in silence. (Found by dogfooding /collab:review, 2026-07-15.)
 : > "$argsfile"
 ( unset COLLAB_MODEL COLLAB_WATCH_MODEL
   COLLAB_POLICY="$allow_pol" bash "$ask" --watch --dry-run "audit" >/dev/null 2>&1 ); RC=$?
@@ -372,7 +372,7 @@ FAKE_OPENCODE_TEXT="" run_ask --emit-session -m openai/gpt-5.5 "q"
 
 # 20. Policy resolution: a git-ignored collab/models.policy.local is preferred over
 #     the committed models.policy when $COLLAB_POLICY is unset; $COLLAB_POLICY still
-#     overrides both. (What /configure-collab relies on.)
+#     overrides both. (What /collab:configure relies on.)
 presol="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$presol/collab"
 cp "$ask" "$presol/collab/ask.sh"
 printf 'allow *\n' > "$presol/collab/models.policy"                    # default: allow all
@@ -451,7 +451,7 @@ cg_a="$(xget "$repo_root/collab/ask.sh")"; cg_p="$(xget "$repo_root/collab/panel
   && ok "conf_get identical across ask.sh/panel-models.sh/doctor.sh (no drift)" \
   || no "conf_get copies have DRIFTED — fix all three"
 
-# --- panel-models.sh (the /panel model-set resolver; opencode-free) --------------
+# --- panel-models.sh (the /collab:panel model-set resolver; opencode-free) --------------
 panel="$repo_root/collab/panel-models.sh"
 perrf="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"
 # P1. Two distinct cross-provider models -> both listed in order, no warning.
@@ -500,7 +500,7 @@ rm -rf "$pconf"
 
 # --- check-agent-permissions.sh meta-tests -------------------------------------
 # The lint is itself a security control, so assert it (a) passes the real agents and
-# (b) CATCHES the order/bounding evasions that dogfooding /review found (2026-07-15):
+# (b) CATCHES the order/bounding evasions that dogfooding /collab:review found (2026-07-15):
 # a good-looking block in the markdown BODY, and last-match reorderings.
 lintdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$lintdir/collab/tests" "$lintdir/.opencode/agent"
 cp "$repo_root/collab/tests/check-agent-permissions.sh" "$lintdir/collab/tests/"
@@ -612,10 +612,10 @@ logsh="$repo_root/collab/log.sh"
 run_logged() {
   local rid="$1"; shift
   : > "$argsfile"
-  COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$rid" COLLAB_COMMAND=/consult \
+  COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$rid" COLLAB_COMMAND=/collab:consult \
     bash "$ask" "$@" >/dev/null 2>&1 || true
 }
-newrun() { bash "$logsh" new-run /consult; }
+newrun() { bash "$logsh" new-run /collab:consult; }
 entries() { cat "$COLLAB_LOG_DIR/$1/calls.jsonl" 2>/dev/null; }
 
 # A call writes BOTH halves of the pair, keyed by one call_id.
@@ -656,7 +656,7 @@ bash "$logsh" verify "$r" >/dev/null 2>&1 \
 
 # Logging must NEVER fail the call it records: a broken log write costs the entry,
 # never the answer. Simulated by making the response temp file unwritable via TMPDIR.
-out="$(COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$(newrun)" COLLAB_COMMAND=/consult \
+out="$(COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$(newrun)" COLLAB_COMMAND=/collab:consult \
         TMPDIR=/nonexistent-dir-for-tmp bash "$ask" -m m/x "q" 2>/dev/null)"; rc=$?
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'canned answer'; } \
   && ok "log: a failing log write does not fail the model call (answer still returned, rc=0)" \
@@ -666,7 +666,7 @@ out="$(COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$(newrun)" COLLAB_COMMAND=/cons
 r="$(newrun)"; run_logged "$r" -m openai/gpt-5 --research "q"
 { [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].model')" = "openai/gpt-5" ] \
   && [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].agent')" = "collab-research" ] \
-  && [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].command')" = "/consult" ]; } \
+  && [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].command')" = "/collab:consult" ]; } \
   && ok "log: records model, agent and command" \
   || no "log: model/agent/command not recorded correctly"
 
@@ -681,7 +681,7 @@ r="$(newrun)"; FAKE_OPENCODE_EXIT=3 run_logged "$r" -m m/x "boom"
 # gap; a completed with no started is the same silent loss wearing a disguise (the
 # prompt and turn are gone) and a one-way check reports "all paired" over it.
 r="$(newrun)"
-bash "$logsh" started --call-id c-orphan --command /consult --model m/x --agent collab-read >/dev/null 2>&1
+bash "$logsh" started --call-id c-orphan --command /collab:consult --model m/x --agent collab-read >/dev/null 2>&1
 bash "$logsh" verify "$r" >/dev/null 2>&1 \
   && no "log: verify PASSED a started with no completed (a silent gap would read as clean)" \
   || ok "log: verify fails an unpaired started (exit 7)"
@@ -715,7 +715,7 @@ bash "$logsh" verify "$r" >/dev/null 2>&1 \
   && no "log: verify PASSED an edited LAST entry (the chain cannot cover the tail — response_hash must)" \
   || ok "log: verify fails an edited last entry (response_hash self-check covers the tail)"
 
-# Concurrency is real: /panel fires 2-3 calls at once. Every line must stay valid JSON
+# Concurrency is real: /collab:panel fires 2-3 calls at once. Every line must stay valid JSON
 # (no torn appends) and turns must be distinct — computing `turn` outside the lock made
 # all three claim turn 1.
 r="$(newrun)"
@@ -750,8 +750,8 @@ r="$(newrun)"; COLLAB_LOG_PROMPTS=off run_logged "$r" -m m/x "SENTINEL-abc123"
 # convention, and env-only would be a trap: a Claude-driven session runs each command
 # in a subshell, so `export COLLAB_LOG_PROMPTS=hash` cannot durably hold.
 conf="$fakedir/conf.local"; printf 'COLLAB_LOG_PROMPTS=off\n' > "$conf"
-r="$(COLLAB_CONF="$conf" bash "$logsh" new-run /consult)"
-COLLAB_POLICY="$allow_pol" COLLAB_CONF="$conf" COLLAB_RUN_ID="$r" COLLAB_COMMAND=/consult \
+r="$(COLLAB_CONF="$conf" bash "$logsh" new-run /collab:consult)"
+COLLAB_POLICY="$allow_pol" COLLAB_CONF="$conf" COLLAB_RUN_ID="$r" COLLAB_COMMAND=/collab:consult \
   bash "$ask" -m m/x "SENTINEL-abc123" >/dev/null 2>&1 || true
 { ! entries "$r" | grep -qF 'SENTINEL-abc123'; } \
   && ok "log: COLLAB_LOG_PROMPTS honoured from collab.conf.local (not env-only)" \
@@ -789,12 +789,12 @@ COLLAB_RUN_ID="$r" bash "$logsh" disposition --model m/x --point "p" --verdict M
 
 # new-run must MINT a run, never hand back an ambient one — that would silently merge
 # two workflows into a single audit unit.
-r1="$(newrun)"; r2="$(COLLAB_RUN_ID="$r1" bash "$logsh" new-run /panel)"
+r1="$(newrun)"; r2="$(COLLAB_RUN_ID="$r1" bash "$logsh" new-run /collab:panel)"
 [ -n "$r2" ] && [ "$r1" != "$r2" ] \
   && ok "log: new-run mints a fresh id even when \$COLLAB_RUN_ID is set" \
   || no "log: new-run returned the ambient run id ($r1 == $r2)"
 
-# `latest` — /witness resolves the most recent run with it, and must not have to shell
+# `latest` — /collab:witness resolves the most recent run with it, and must not have to shell
 # out to `readlink` (which it is not permitted to run, and whose flags differ on BSD).
 r="$(newrun)"; run_logged "$r" -m m/x "q"
 [ "$(bash "$logsh" latest 2>/dev/null)" = "$r" ] \

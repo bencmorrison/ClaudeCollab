@@ -4,7 +4,7 @@ description: >-
   reading the evidence log (collab/logs/**) — the read map is inverted relative to
   every other agent here ("*": deny, logs re-allowed), so it cannot read the repo's
   source at all. Mutation, shell, search/glob, sub-agent spawning and network egress
-  are denied at opencode's permission layer. Used by /witness to audit whether
+  are denied at opencode's permission layer. Used by /collab:witness to audit whether
   Claude's account of a model exchange matches what the models actually said.
 mode: all
 permission:
@@ -26,7 +26,7 @@ permission:
   # second consultant offering opinions about the code. That failure is silent: it
   # still produces a confident, plausible report.
   #
-  # Keeping it on the log via the /witness PROMPT would be compliance — the thing
+  # Keeping it on the log via the /collab:witness PROMPT would be compliance — the thing
   # this project rejects everywhere else (see AGENTS.md "Option B", and the
   # denylist→allowlist rewrite). The prompt is written by Claude, the very party
   # under audit. So the scope is enforced by construction: there is nothing else it
@@ -53,10 +53,10 @@ permission:
     # The evidence log — this agent's only window onto anything. Both forms are
     # listed because opencode matches the path as resolved: the repo-relative form
     # covers an in-repo relative read, and the `**/` form is LOAD-BEARING because
-    # /witness passes an ABSOLUTE path (`log.sh path` returns one), which the
-    # repo-relative pattern does not match. Removing it breaks /witness outright.
+    # /collab:witness passes an ABSOLUTE path (`log.sh path` returns one), which the
+    # repo-relative pattern does not match. Removing it breaks /collab:witness outright.
     #
-    # Known and accepted (raised by /review 2026-07-15): `**/collab/logs/**` matches
+    # Known and accepted (raised by /collab:review 2026-07-15): `**/collab/logs/**` matches
     # ANY project's collab/logs/, not just this one's. $COLLAB_LOG_DIR is
     # configurable, so no static glob can name the real root. The exposure is other
     # ClaudeCollab log dirs — same class of data, and this agent has no egress to

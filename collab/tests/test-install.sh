@@ -23,7 +23,7 @@ bash "$installer" --dest "$T" >/dev/null 2>&1
 check "installs ask.sh"                 "[ -f '$T/collab/ask.sh' ]"
 check "ask.sh is executable"            "[ -x '$T/collab/ask.sh' ]"
 check "fake-opencode is executable"     "[ -x '$T/collab/tests/fake-opencode' ]"
-check "installs a slash command"        "[ -f '$T/.claude/commands/consult.md' ]"
+check "installs a slash command"        "[ -f '$T/.claude/commands/collab/consult.md' ]"
 check "installs an agent def"           "[ -f '$T/.opencode/agent/collab-read.md' ]"
 check "writes an install manifest"      "[ -f '$T/collab/.install-manifest' ]"
 check "gitignore has our block"         "grep -q 'ClaudeCollab >>>' '$T/.gitignore'"
@@ -37,7 +37,7 @@ check "re-install keeps one gitignore block" "[ '$n' -eq 1 ]"
 # --- uninstall removes exactly ours ------------------------------------------
 bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
 check "uninstall removes collab/"       "[ ! -d '$T/collab' ]"
-check "uninstall removes commands"      "[ ! -f '$T/.claude/commands/consult.md' ]"
+check "uninstall removes commands"      "[ ! -f '$T/.claude/commands/collab/consult.md' ]"
 check "uninstall removes agent defs"    "[ ! -f '$T/.opencode/agent/collab-read.md' ]"
 check "uninstall drops gitignore block" "! grep -q 'ClaudeCollab' '$T/.gitignore' 2>/dev/null"
 rm -rf "$T"
@@ -57,13 +57,33 @@ rm -rf "$T"
 
 # --- SAME-PATH conflict: a user file at our exact path is never clobbered -----
 T="$(newrepo)"
-mkdir -p "$T/.claude/commands"
-echo "USER-OWNED consult" > "$T/.claude/commands/consult.md"
+mkdir -p "$T/.claude/commands/collab"
+echo "USER-OWNED consult" > "$T/.claude/commands/collab/consult.md"
 bash "$installer" --dest "$T" >/dev/null 2>&1
-check "install does NOT overwrite user's same-name file" "grep -q 'USER-OWNED' '$T/.claude/commands/consult.md'"
-check "skipped file is not in the manifest"              "! grep -qx '.claude/commands/consult.md' '$T/collab/.install-manifest'"
+check "install does NOT overwrite user's same-name file" "grep -q 'USER-OWNED' '$T/.claude/commands/collab/consult.md'"
+check "skipped file is not in the manifest"              "! grep -qx '.claude/commands/collab/consult.md' '$T/collab/.install-manifest'"
 bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
-check "uninstall does NOT delete user's same-name file"  "[ -f '$T/.claude/commands/consult.md' ] && grep -q 'USER-OWNED' '$T/.claude/commands/consult.md'"
+check "uninstall does NOT delete user's same-name file"  "[ -f '$T/.claude/commands/collab/consult.md' ] && grep -q 'USER-OWNED' '$T/.claude/commands/collab/consult.md'"
+rm -rf "$T"
+
+# --- a skipped file must stay VISIBLE, at install time and afterwards ---------
+# Keeping the user's file is deliberate; leaving them unaware that OUR version is
+# therefore absent is not. The command still exists, so nothing looks broken —
+# it just isn't ours. Both signals below are the only thing standing between the
+# user and a silently shadowed command.
+T="$(newrepo)"
+mkdir -p "$T/.claude/commands/collab"
+echo "USER-OWNED consult" > "$T/.claude/commands/collab/consult.md"
+# Capture to FILES, not variables: `check` eval's its argument, so interpolating
+# multi-line output into the string breaks the eval and the case fails for reasons
+# that have nothing to do with the behaviour under test.
+outf="$T/.install-out.txt"; docf="$T/.doctor-out.txt"
+bash "$installer" --dest "$T" > "$outf" 2>&1
+check "install SUMMARISES the skip by name at the end (not just an inline warning)" \
+  "grep -q 'were NOT installed' '$outf' && grep -q 'commands/collab/consult.md' '$outf'"
+( cd "$T" && bash collab/doctor.sh > "$docf" 2>&1 )
+check "doctor reports the shadowed command afterwards"  "grep -q 'did NOT install' '$docf'"
+check "doctor does NOT claim all commands are ours"     "! grep -q 'present and ours' '$docf'"
 rm -rf "$T"
 
 # --- pre-existing collab/ contents survive uninstall (no rm -rf) --------------
@@ -89,7 +109,7 @@ bash "$installer" --dest "$T" >/dev/null 2>&1
 rm -f "$T/collab/.install-manifest"                  # simulate a lost/corrupt manifest
 bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
 check "fallback uninstall removes collab/"  "[ ! -d '$T/collab' ]"
-check "fallback uninstall removes commands" "[ ! -f '$T/.claude/commands/panel.md' ]"
+check "fallback uninstall removes commands" "[ ! -f '$T/.claude/commands/collab:panel.md' ]"
 rm -rf "$T"
 
 # --- dest path containing a space --------------------------------------------

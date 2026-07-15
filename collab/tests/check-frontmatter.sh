@@ -39,9 +39,18 @@ check() {  # <file> <key1> [key2 ...]
   if [ -n "$missing" ]; then bad "$f" "frontmatter missing key(s):$missing"; else pass "$f"; fi
 }
 
-echo "== slash commands (.claude/commands/*.md) =="
+echo "== slash commands (.claude/commands/**/*.md) =="
 shopt -s nullglob
-cmds=(.claude/commands/*.md)
+# Recursive on purpose: the commands live in .claude/commands/collab/. A flat glob
+# would match nothing and this lint would "pass" by checking zero files — a green
+# tick for an empty set is worse than a red one. The count assertion below is what
+# makes that impossible.
+cmds=()
+while IFS= read -r _f; do cmds+=("$_f"); done < <(find .claude/commands -name '*.md' -type f | sort)
+if [ "${#cmds[@]}" -eq 0 ]; then
+  printf '\033[31mFAIL\033[0m no slash commands found under .claude/commands/ — this lint would otherwise pass vacuously\n'
+  exit 1
+fi
 # Guard the array expansion with the count: `"${arr[@]}"` on an empty array under
 # `set -u` errors on bash < 4.4 (macOS system bash 3.2), so only loop when non-empty.
 if [ ${#cmds[@]} -eq 0 ]; then echo "  (none found)"

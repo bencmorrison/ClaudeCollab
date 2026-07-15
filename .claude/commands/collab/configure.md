@@ -11,13 +11,13 @@ $ARGUMENTS
 
 2. **Explain the model briefly** (one or two lines each):
    - The **policy** has three tiers over glob patterns, **first-match-wins, default-allow**: `deny` (ask.sh hard-refuses it), `ask` (usable only after you confirm — the command sets `COLLAB_CONFIRMED=1`), `allow` (free to use; the default for anything unmatched).
-   - **"Preferred" is not a policy tier** — it's your default single model (used by `/consult`) and your default panel set (used by `/panel`). These live in a git-ignored config file `collab/collab.conf.local` (as `COLLAB_MODEL=` / `COLLAB_MODELS=`), which you'll write here so they persist. (The matching env vars still work as one-off overrides.)
+   - **"Preferred" is not a policy tier** — it's your default single model (used by `/collab:consult`) and your default panel set (used by `/collab:panel`). These live in a git-ignored config file `collab/collab.conf.local` (as `COLLAB_MODEL=` / `COLLAB_MODELS=`), which you'll write here so they persist. (The matching env vars still work as one-off overrides.)
 
 3. **Interview** (use AskUserQuestion or plain questions; the user may skip any):
    - Models/providers to **deny** — e.g. one they distrust or that's too expensive. Accept exact ids or globs (`openai/*-terra*`, `*-fast`).
    - Models to gate with **ask** — confirm before each use (e.g. the priciest/slowest).
-   - Their **preferred default model** for `/consult` — recommend a **non-Claude** model so opinions are independent.
-   - Their **preferred panel set** for `/panel` — 2–3 ordered ids from **different providers** (run `bash collab/panel-models.sh <ids…>` to sanity-check diversity).
+   - Their **preferred default model** for `/collab:consult` — recommend a **non-Claude** model so opinions are independent.
+   - Their **preferred panel set** for `/collab:panel` — 2–3 ordered ids from **different providers** (run `bash collab/panel-models.sh <ids…>` to sanity-check diversity).
    - **Scope:** personal (written to git-ignored `collab/models.policy.local`, **recommended** — never committed) or shared (edit the committed `collab/models.policy` for the whole repo/team).
 
 4. **Draft and confirm.** Show the exact policy file you'll write and get a yes before writing. Ordering matters (first-match-wins): put `deny` lines above `ask` lines above any broad rule, so a specific rule beats a broad one. Keep the shipped comment header if editing the committed file. Comments start with `#`.
@@ -32,7 +32,7 @@ $ARGUMENTS
      ```
      These take effect immediately (no shell reload needed) — that's the point of using a file. Do NOT print `export` lines; the file is the durable home now.
 
-6. **Validate.** Run `bash collab/doctor.sh` — it confirms the active policy parses, checks the default model's tier, **and now policy-checks each `/panel` member** (so a denied panel member is caught here, not at runtime). Then spot-check intent with dry-runs (token-free):
+6. **Validate.** Run `bash collab/doctor.sh` — it confirms the active policy parses, checks the default model's tier, **and now policy-checks each `/collab:panel` member** (so a denied panel member is caught here, not at runtime). Then spot-check intent with dry-runs (token-free):
    - a **denied** id must refuse: `bash collab/ask.sh --dry-run -m <denied-id> "x"` → exits 3, "denied by …";
    - an **allowed** id prints the command and exits 0;
    - if you set a panel, also confirm each member: `bash collab/ask.sh --dry-run -m <panel-id> "x"` per id (`panel-models.sh` checks *diversity*, not policy).

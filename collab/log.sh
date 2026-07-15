@@ -7,7 +7,7 @@
 # engaged with another model is *Claude's own summary* — self-report by the party
 # under scrutiny. This script is the independent record that makes a watcher agent
 # possible at all: `ask.sh` writes every model call here, raw and untruncated, and a
-# watcher (Phase W2, `/witness`) reads THIS FILE rather than Claude's account. No
+# watcher (Phase W2, `/collab:witness`) reads THIS FILE rather than Claude's account. No
 # watcher until the data source exists — a watcher reading Claude's summary is
 # theatre.
 #
@@ -21,14 +21,14 @@
 # LAYOUT — one directory per run, so a run's entries, watcher reports and metadata
 # have a home (a bare field wasn't enough; reports need somewhere to live):
 #   collab/logs/<run_id>/calls.jsonl    the entries (append-only JSONL)
-#   collab/logs/<run_id>/reports/       /witness reports land here (Phase W2)
+#   collab/logs/<run_id>/reports/       /collab:witness reports land here (Phase W2)
 #   collab/logs/latest                  symlink to the most recent run dir
 #
 # ENTRIES. Every model call writes TWO lines with a status flip: `started` before the
 # call and `completed` after. Integrity is defined as **every `started` has a matching
 # `completed`** — without the pair, a crash mid-call reads as a clean log, a silent
 # gap a watcher cannot detect. The two are paired by **`call_id`, never by
-# run_id+turn**: retries and parallel panel calls (a /panel or /workshop round fires
+# run_id+turn**: retries and parallel panel calls (a /collab:panel or /collab:workshop round fires
 # 2-3 concurrently) break turn-based pairing.
 #
 # Entry types:
@@ -66,11 +66,11 @@
 #   COLLAB_LOG=off               disable logging entirely (default: on)
 #   COLLAB_LOG_DIR=<dir>         where runs live (default: <repo>/collab/logs)
 #   COLLAB_RUN_ID=<id>           group several calls into one run (a slash command
-#                                sets this once, so a whole /panel or /workshop is
+#                                sets this once, so a whole /collab:panel or /collab:workshop is
 #                                one auditable unit). Unset = a fresh run per call.
 #   COLLAB_LOG_PROMPTS=full|hash|off   what to record of the prompt Claude SENT.
 #                                Default `full`: the brief Claude wrote is itself
-#                                prime audit material (a /workshop brief that
+#                                prime audit material (a /collab:workshop brief that
 #                                editorialised is exactly how one real bug was
 #                                found), and the logs are git-ignored and local.
 #                                But `full` means the log holds whatever private
@@ -124,7 +124,7 @@ cfg() {  # cfg <KEY> <default> — env override > config file > default
 
 # Logging is best-effort infrastructure, never a reason to fail a consult. If it
 # can't run we say so once, loudly, and get out of the way — a missing log is
-# visible to `verify` and `/witness` refuses to audit one, so a silent gap can't be
+# visible to `verify` and `/collab:witness` refuses to audit one, so a silent gap can't be
 # mistaken for a clean record.
 LOG_DIR="$(cfg COLLAB_LOG_DIR "$here/logs")"
 disabled() { [ "$(cfg COLLAB_LOG on)" = "off" ]; }
@@ -147,8 +147,8 @@ _rand() {  # short random hex; /dev/urandom where available, else $RANDOM/$$
 }
 
 # ---- run resolution ---------------------------------------------------------
-# A run_id groups a whole workflow (all three calls of a /panel round, both rounds
-# of a /workshop) so a watcher can audit the unit the developer actually asked for.
+# A run_id groups a whole workflow (all three calls of a /collab:panel round, both rounds
+# of a /collab:workshop) so a watcher can audit the unit the developer actually asked for.
 run_dir() { printf '%s\n' "$LOG_DIR/$1"; }
 resolve_run() {
   if [ -n "${1:-}" ]; then printf '%s\n' "$1"
@@ -165,7 +165,7 @@ ensure_run() {  # ensure_run <run_id> — create the dir tree, refresh `latest`
 }
 
 # ---- append -----------------------------------------------------------------
-# Concurrency is real, not hypothetical: a /panel fires 2-3 calls at once, each
+# Concurrency is real, not hypothetical: a /collab:panel fires 2-3 calls at once, each
 # appending a line that is far larger than the PIPE_BUF write the kernel would keep
 # atomic for us. So take a lock. mkdir is the portable atomic primitive (flock(1)
 # doesn't exist on macOS/BSD, which we intend to support).
@@ -213,7 +213,7 @@ _line_hash() { tr -d '\n' | _sha; }
 #
 # EVERYTHING that reads the file to decide what to write must happen in here, inside
 # the lock: both the prev_hash read and the turn count. Computing either outside the
-# lock is a race — and not a theoretical one. A /panel fires 2-3 calls at once, and
+# lock is a race — and not a theoretical one. A /collab:panel fires 2-3 calls at once, and
 # with the turn count taken outside the lock all three read "0 so far" and every one
 # of them logged itself as turn 1.
 _append_locked() {
@@ -256,7 +256,7 @@ cmd_new_run() {
   printf '%s\n' "$rid"
 }
 
-# latest — the most recent run's id. /witness needs this and must not have to shell
+# latest — the most recent run's id. /collab:witness needs this and must not have to shell
 # out to `readlink` (which it isn't permitted to run, and whose flags differ on BSD).
 cmd_latest() {
   local l="$LOG_DIR/latest"
@@ -411,7 +411,7 @@ cmd_disposition() {
 
 # verify — the integrity contract: every `started` has a matching `completed`. A gap
 # means a call crashed, timed out or was killed, and its response never reached the
-# log. `/witness` (W2) refuses to audit a failed-integrity log rather than report
+# log. `/collab:witness` (W2) refuses to audit a failed-integrity log rather than report
 # "clean" over a hole.
 cmd_verify() {
   local rid rd file; rid="$(resolve_run "${1:-}")"; rd="$(run_dir "$rid")"; file="$rd/calls.jsonl"

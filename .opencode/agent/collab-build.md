@@ -9,7 +9,7 @@ description: >-
   tool-native paths a compliant model defaults to) — NOT a by-construction guarantee:
   a determined model can `cat .env` / `curl` / grep via bash, or even launch a fresh
   unrestricted opencode. The trust boundary is the human diff review, not the
-  permission map. Used by /delegate (--edit).
+  permission map. Used by /collab:delegate (--edit).
 mode: all
 permission:
   # DEFAULT-DENY ALLOWLIST (same construction as collab-read). `"*": deny` flips

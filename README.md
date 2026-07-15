@@ -18,20 +18,20 @@ ClaudeCollab is three drop-in directories you add to a project:
 
 | Directory | What it is |
 |---|---|
-| `.claude/commands/` | The slash commands Claude Code runs (`/consult`, `/panel`, `/review`, `/delegate`, `/collaborate`, `/configure-collab`). |
-| `.opencode/agent/` | Three **hardened** opencode agents: `collab-read` (read-only), `collab-build` (the `/delegate` write path), and `collab-research` (the `/research` web path). |
+| `.claude/commands/collab/` | The slash commands Claude Code runs. The `collab/` folder is the namespace: they appear as `/collab:consult`, `/collab:panel`, `/collab:review`, `/collab:delegate`, `/collab:collaborate`, `/collab:witness`, `/collab:configure` — so they can't clash with commands you already have. |
+| `.opencode/agent/` | Three **hardened** opencode agents: `collab-read` (read-only), `collab-build` (the `/collab:delegate` write path), and `collab-research` (the `/collab:research` web path). |
 | `collab/` | The `ask.sh` wrapper plus the `log`, `panel`, `doctor`, and `verify` scripts, tests, and the model policy. |
-| `collab/logs/` | Git-ignored. A record of every model call, and where `/witness` reports land — see [The record it keeps](#the-record-it-keeps). |
+| `collab/logs/` | Git-ignored. A record of every model call, and where `/collab:witness` reports land — see [The record it keeps](#the-record-it-keeps). |
 
-- `collab-read` → read-only **by construction** for opinions (`/consult`, `/panel`, `/review`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`.
-- `collab-build` → can edit files for `/delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`.
-- `collab-research` → can reach the web for `/research`: same allowlist construction, re-allowing only `webfetch`/`websearch` + reading non-secret files. Mutation, shell, and content search/glob are denied — and because `bash` is denied, the secret-read denies genuinely hold here. But this is the one agent with **both local read and network egress**, so it is *not* an exfiltration boundary: point it at repos whose non-secret contents you'd accept leaking. Verified by `collab/verify-collab-research.sh`.
+- `collab-read` → read-only **by construction** for opinions (`/collab:consult`, `/collab:panel`, `/collab:review`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`.
+- `collab-build` → can edit files for `/collab:delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`.
+- `collab-research` → can reach the web for `/collab:research`: same allowlist construction, re-allowing only `webfetch`/`websearch` + reading non-secret files. Mutation, shell, and content search/glob are denied — and because `bash` is denied, the secret-read denies genuinely hold here. But this is the one agent with **both local read and network egress**, so it is *not* an exfiltration boundary: point it at repos whose non-secret contents you'd accept leaking. Verified by `collab/verify-collab-research.sh`.
 
 ## Requirements
 
 - **[opencode](https://opencode.ai)** on your PATH, authenticated to at least one provider (below).
-- **`jq`** (used by `/collaborate` and the verify scripts).
-- A **git repo** for the project you install into (so you can review `/delegate` diffs). Not strictly required for read-only commands.
+- **`jq`** (used by `/collab:collaborate` and the verify scripts).
+- A **git repo** for the project you install into (so you can review `/collab:delegate` diffs). Not strictly required for read-only commands.
 
 ## Install
 
@@ -67,21 +67,21 @@ Run these inside Claude Code in a project you've installed into:
 
 | Command | What it does |
 |---|---|
-| `/consult <question>` | Get a second opinion from another LLM on a plan or approach (read-only). Claude weighs it against its own view. |
-| `/panel <question>` | Ask 2–3 different models the same question and have Claude synthesize + break ties. Warns if the panel isn't cross-provider. |
-| `/workshop <goal>` | A **multi-LLM planning session**: 2–3 models write independent plans, Claude synthesizes them, then those same models **critique Claude's synthesis** ("what did you drop?") before Claude dispositions each point into a final plan. ~2 calls per model. |
-| `/review <target>` | Findings-first code review by another model, then Claude verifies each finding against the code before reporting. Target a path, the diff, or a branch. |
-| `/research <question>` | Source-backed investigation by a **web-capable** model, then Claude fetches the cited sources and verifies each claim before reporting. Fabricated citations get refuted, not repeated. |
-| `/delegate <coding task>` | Hand a coding task to another model (it edits files), then Claude reviews the diff. |
-| `/collaborate <question>` | Bounded multi-turn peer exchange with another model; Claude dispositions each point (read-only). |
-| `/configure-collab` | Interactive setup: writes your model policy and preferred-model defaults to git-ignored config files. |
+| `/collab:consult <question>` | Get a second opinion from another LLM on a plan or approach (read-only). Claude weighs it against its own view. |
+| `/collab:panel <question>` | Ask 2–3 different models the same question and have Claude synthesize + break ties. Warns if the panel isn't cross-provider. |
+| `/collab:workshop <goal>` | A **multi-LLM planning session**: 2–3 models write independent plans, Claude synthesizes them, then those same models **critique Claude's synthesis** ("what did you drop?") before Claude dispositions each point into a final plan. ~2 calls per model. |
+| `/collab:review <target>` | Findings-first code review by another model, then Claude verifies each finding against the code before reporting. Target a path, the diff, or a branch. |
+| `/collab:research <question>` | Source-backed investigation by a **web-capable** model, then Claude fetches the cited sources and verifies each claim before reporting. Fabricated citations get refuted, not repeated. |
+| `/collab:delegate <coding task>` | Hand a coding task to another model (it edits files), then Claude reviews the diff. |
+| `/collab:collaborate <question>` | Bounded multi-turn peer exchange with another model; Claude dispositions each point (read-only). |
+| `/collab:configure` | Interactive setup: writes your model policy and preferred-model defaults to git-ignored config files. |
 
 Examples:
 ```
-/consult Is an actor the right concurrency model here, or should I use a serial queue?
-/panel What's the best migration path off Core Data for this app?
-/review the uncommitted diff
-/delegate Add bounds checking to the ring buffer in src/buffer.c and a test
+/collab:consult Is an actor the right concurrency model here, or should I use a serial queue?
+/collab:panel What's the best migration path off Core Data for this app?
+/collab:review the uncommitted diff
+/collab:delegate Add bounds checking to the ring buffer in src/buffer.c and a test
 ```
 
 ### Picking the model
@@ -93,7 +93,7 @@ collab/ask.sh -m google/gemini-2.5-pro "..."
 ```
 Run `opencode models` to see the exact provider/model ids available with your auth.
 
-To set **persistent defaults** — a default single model for `/consult` and a default panel set for `/panel` — run **`/configure-collab`** (it walks you through it), or copy `collab/collab.conf.example` to `collab/collab.conf.local` (git-ignored) and set:
+To set **persistent defaults** — a default single model for `/collab:consult` and a default panel set for `/collab:panel` — run **`/collab:configure`** (it walks you through it), or copy `collab/collab.conf.example` to `collab/collab.conf.local` (git-ignored) and set:
 ```
 COLLAB_MODEL=openai/gpt-5
 COLLAB_MODELS=openai/gpt-5 google/gemini-2.5-pro
@@ -112,9 +112,9 @@ See the header of [`collab/ask.sh`](collab/ask.sh) (or `bash collab/ask.sh -h`) 
 
 ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Use it on trusted repositories. See **[SECURITY.md](SECURITY.md)** for the full threat model; the essentials:
 
-- **Read-only commands (`/consult`, `/panel`, `/review`, `/collaborate`)** run under a default-deny allowlist agent that can *only* read non-secret files — no mutation, no content search, no network — enforced at opencode's permission layer, not by asking the model nicely. Proven by `collab/verify-collab-read.sh`.
-- **`/research` trades egress for capability, on purpose.** It's the only path with both local read and network access, so while it can't mutate, shell out, or grep (and therefore *can't* reach your `.env`/keys), a non-secret file it reads could in principle leave over an outbound fetch — and fetched pages are attacker-controlled. Use it on repos whose non-secret contents you'd accept leaking. Proven by `collab/verify-collab-research.sh`.
-- **`/delegate` can edit files and run shell.** Its non-mutation restrictions are defense-in-depth, not a guarantee (a coding task needs `bash`, and `bash` can reach around them), so **the trust boundary is you reviewing the diff.** The wrapper refuses to delegate on a dirty worktree and prints the pre-edit `HEAD` so the diff is exactly the model's work.
+- **Read-only commands (`/collab:consult`, `/collab:panel`, `/collab:review`, `/collab:collaborate`)** run under a default-deny allowlist agent that can *only* read non-secret files — no mutation, no content search, no network — enforced at opencode's permission layer, not by asking the model nicely. Proven by `collab/verify-collab-read.sh`.
+- **`/collab:research` trades egress for capability, on purpose.** It's the only path with both local read and network access, so while it can't mutate, shell out, or grep (and therefore *can't* reach your `.env`/keys), a non-secret file it reads could in principle leave over an outbound fetch — and fetched pages are attacker-controlled. Use it on repos whose non-secret contents you'd accept leaking. Proven by `collab/verify-collab-research.sh`.
+- **`/collab:delegate` can edit files and run shell.** Its non-mutation restrictions are defense-in-depth, not a guarantee (a coding task needs `bash`, and `bash` can reach around them), so **the trust boundary is you reviewing the diff.** The wrapper refuses to delegate on a dirty worktree and prints the pre-edit `HEAD` so the diff is exactly the model's work.
 - **External model output is treated as data, not instructions** — a consulted model can't smuggle commands into Claude's control flow.
 - Run `bash collab/doctor.sh` to check your setup before relying on any of this.
 
@@ -122,15 +122,15 @@ ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Us
 
 Every model call is logged to `collab/logs/<run_id>/calls.jsonl` — the exact prompt sent, the model's full untruncated answer, which model and agent, and the exit code. It's git-ignored and stays on your machine.
 
-This isn't for debugging. When Claude tells you "GPT-5 agreed with my approach", that summary is written by the party you'd be checking up on. The log is the other model's actual words, so you can read them yourself — and it's the data source for the planned `/witness` command, which hands a *different* model the log and asks whether Claude's account of the exchange holds up.
+This isn't for debugging. When Claude tells you "GPT-5 agreed with my approach", that summary is written by the party you'd be checking up on. The log is the other model's actual words, so you can read them yourself — and it's the data source for the planned `/collab:witness` command, which hands a *different* model the log and asks whether Claude's account of the exchange holds up.
 
 - **See it:** `cat collab/logs/latest/calls.jsonl | jq` — or check a run is complete with `bash collab/log.sh verify $(readlink collab/logs/latest)`. A call that died mid-flight shows up as a gap rather than passing for a clean record.
 - **Privacy:** by default the log keeps the full prompt, which means whatever context Claude pasted in from your repo. Set `COLLAB_LOG_PROMPTS=hash` (keep a digest, not the text) or `off` in `collab/collab.conf.local` if that's not OK for your work. Runs older than 14 days are pruned automatically (`COLLAB_LOG_RETENTION_DAYS`); `COLLAB_LOG=off` turns the whole thing off.
 - **What it is not:** tamper-proofing. The hashes catch accidental corruption; they're not a chain of custody, and anything that can write the log can rewrite them.
 
-### `/witness` — have another model check Claude's account
+### `/collab:witness` — have another model check Claude's account
 
-`/witness` hands the log to a **non-Claude** model whose only capability is reading `collab/logs/` — no shell, no web, and no access to your source, so it audits the record rather than drifting into reviewing your code. It reports what Claude dropped, misrepresented, or flattened, with the model's actual words next to Claude's rendering of them, and a verdict of OK / Concerns / Inconclusive. The report is saved under `collab/logs/<run_id>/reports/`, so Claude isn't the only thing standing between you and it.
+`/collab:witness` hands the log to a **non-Claude** model whose only capability is reading `collab/logs/` — no shell, no web, and no access to your source, so it audits the record rather than drifting into reviewing your code. It reports what Claude dropped, misrepresented, or flattened, with the model's actual words next to Claude's rendering of them, and a verdict of OK / Concerns / Inconclusive. The report is saved under `collab/logs/<run_id>/reports/`, so Claude isn't the only thing standing between you and it.
 
 It refuses to audit a log that fails its integrity check, rather than reporting "clean" over a gap. Set `COLLAB_WATCH_MODEL` in `collab/collab.conf.local` to pin the auditor; a Claude model is refused unless you explicitly confirm it.
 
@@ -167,8 +167,8 @@ The first time Claude Code runs `collab/ask.sh` it will ask for permission. To p
 ## Notes & limits
 
 - **Cost**: calls run against your opencode-authenticated providers; usage counts against those plans (free tiers included). `opencode stats` shows token usage/cost.
-- **`--auto`**: `/delegate` auto-approves opencode's tool use so it doesn't block on prompts. Always review the diff — that's step 2 of the command.
-- **Not just for coding**: `/consult` and `/panel` are great for planning and design reviews, which is often where a second model helps most.
+- **`--auto`**: `/collab:delegate` auto-approves opencode's tool use so it doesn't block on prompts. Always review the diff — that's step 2 of the command.
+- **Not just for coding**: `/collab:consult` and `/collab:panel` are great for planning and design reviews, which is often where a second model helps most.
 
 ## Working on ClaudeCollab itself
 

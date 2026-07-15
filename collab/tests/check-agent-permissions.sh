@@ -14,7 +14,7 @@
 #   - in the `read` map, `*` effectively allows and each secret glob effectively denies
 #
 # Order-aware + frontmatter-bounded on purpose: earlier presence-only checks on the
-# whole file were fooled three ways (found by dogfooding /review 2026-07-15) — an
+# whole file were fooled three ways (found by dogfooding /collab:review 2026-07-15) — an
 # unprotected frontmatter passed via a look-alike block in the markdown BODY; a
 # `"*": deny` placed AFTER the allows (or a `"*": allow` after the secret denies)
 # passed while resolving the opposite way. This version reads only the frontmatter
@@ -88,7 +88,7 @@ EOF
 #
 # read-spec describes the SHAPE of the read map, because they are not all alike:
 #   nonsecret          (default) `*` allows, each secret glob denies — the shape used
-#                      by collab-read/build/research: "read the repo, except secrets".
+#                      by collab-read/build/collab:research: "read the repo, except secrets".
 #   scoped:<glob>      `*` DENIES and only <glob> allows — collab-watch's inverted
 #                      map: "read nothing except the log". Secrets need no globs
 #                      here; they're denied by the floor, and listing them would
@@ -158,13 +158,13 @@ check_agent ".opencode/agent/collab-read.md" ""
 echo "== collab-build (allowlist: edit/write/patch/bash) =="
 check_agent ".opencode/agent/collab-build.md" "edit write patch bash"
 
-# collab-research is the /research path: the ONLY agent allowed network egress.
+# collab-research is the /collab:research path: the ONLY agent allowed network egress.
 # `bash` must stay OUT of this allow-set — it's what keeps the secret-read and
 # grep/glob denies real on a path that can reach the network.
 echo "== collab-research (allowlist: webfetch/websearch) =="
 check_agent ".opencode/agent/collab-research.md" "webfetch websearch"
 
-# collab-watch is the /witness oversight path. Its read map is INVERTED (deny floor,
+# collab-watch is the /collab:witness oversight path. Its read map is INVERTED (deny floor,
 # only collab/logs/** allowed) — that scoping is the construction guarantee that keeps
 # an auditor auditing the log instead of drifting into reviewing the source.
 echo "== collab-watch (allowlist: no tool; read scoped to collab/logs/**) =="

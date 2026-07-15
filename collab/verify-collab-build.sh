@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # verify-collab-build.sh — check the `collab-build` opencode agent (the --edit /
-# /delegate write path) has the permission shape it claims.
+# /collab:delegate write path) has the permission shape it claims.
 #
 # What collab-build claims, and what this proves:
-#   * It CAN edit — edit/write/patch/bash resolve to `allow` (else /delegate is
+#   * It CAN edit — edit/write/patch/bash resolve to `allow` (else /collab:delegate is
 #     broken). This script asserts that positively.
 #   * The tool-native escape/egress paths are REMOVED — task, webfetch, websearch
 #     resolve to `deny`, and the `read` tool denies secret globs (.env/keys/creds).
@@ -13,7 +13,7 @@
 # bash can `cat .env` or `curl`, bypassing the read-tool and webfetch denies. So on
 # THIS path those denies are defense-in-depth (they strip the default, tool-native
 # route a compliant model would take) — the real trust boundary is the human diff
-# review in /delegate step 2, not the permission map. Do not oversell it.
+# review in /collab:delegate step 2, not the permission map. Do not oversell it.
 #
 # Method mirrors verify-collab-read.sh: a STATIC last-match-wins check of opencode's
 # resolved config (authoritative, fail-CLOSED) + a known-key typo lint + a RUNTIME
@@ -65,9 +65,9 @@ effective_action() {
 # Foundation: default-deny allowlist floor.
 [ "$(last_action '*')" = "deny" ] && pass "'*' catch-all => deny (default-deny allowlist)" \
   || bad "'*' catch-all is NOT deny — un-listed tools would be ALLOWED"
-# The mutation set MUST be allowed (else /delegate can't edit).
+# The mutation set MUST be allowed (else /collab:delegate can't edit).
 for cap in edit write patch bash; do
-  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (edit path works)"; else bad "$cap is NOT allow — /delegate cannot edit"; fi
+  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (edit path works)"; else bad "$cap is NOT allow — /collab:delegate cannot edit"; fi
 done
 # Everything else — escape hatch, egress, AND the tool-native secret-search routes
 # (grep/glob) a compliant model would default to — must be effectively denied.
@@ -114,9 +114,9 @@ fi  # end runtime probe (skipped under --static)
 echo
 if [ "$fail" -eq 0 ]; then
   if [ -n "$static_only" ]; then
-    printf '\033[32mcollab-build VERIFIED (static)\033[0m — edit/write/patch/bash=allow; task/webfetch/websearch + secret READS=deny (resolved config). Runtime edit probe not run (--static). NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /delegate diff review is the trust boundary.\n'
+    printf '\033[32mcollab-build VERIFIED (static)\033[0m — edit/write/patch/bash=allow; task/webfetch/websearch + secret READS=deny (resolved config). Runtime edit probe not run (--static). NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /collab:delegate diff review is the trust boundary.\n'
   else
-    printf '\033[32mcollab-build VERIFIED\033[0m — edit path works; task/webfetch/websearch and secret READS are denied at the tool layer. NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /delegate diff review is the trust boundary.\n'
+    printf '\033[32mcollab-build VERIFIED\033[0m — edit path works; task/webfetch/websearch and secret READS are denied at the tool layer. NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /collab:delegate diff review is the trust boundary.\n'
   fi
 else
   printf '\033[31mcollab-build NOT verified\033[0m — permission shape is wrong; check the agent def against verify-collab-read.sh conventions.\n'

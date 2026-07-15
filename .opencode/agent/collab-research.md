@@ -4,7 +4,7 @@ description: >-
   reading non-secret files plus network egress (webfetch/websearch) — mutation
   (bash/edit/write/patch), content search/glob, and sub-agent spawning are denied at
   opencode's permission layer, and secret files are carved out of reads. Used by
-  /research. NOTE: this is the ONLY ClaudeCollab agent with both local read and
+  /collab:research. NOTE: this is the ONLY ClaudeCollab agent with both local read and
   network egress, so it is deliberately NOT non-exfiltrating — see the comment below.
 mode: all
 permission:
@@ -30,7 +30,7 @@ permission:
   # What is NOT contained: a non-secret-but-private file that matches none of the
   # globs below is readable AND reachable by an outbound fetch. Fetched web pages
   # are attacker-controlled, so a page can attempt to induce exactly that. Run
-  # /research on repos whose non-secret contents you'd accept leaking.
+  # /collab:research on repos whose non-secret contents you'd accept leaking.
   # ---------------------------------------------------------------------------
   "*": deny
   # The web: the reason this agent exists.

@@ -64,7 +64,7 @@ fi
 if command -v jq >/dev/null 2>&1; then
   pass "jq present (needed for --emit-session and the verify scripts)"
 else
-  bad "jq NOT found — /collaborate (--emit-session) and the verify scripts need it. Install jq."
+  bad "jq NOT found — /collab:collaborate (--emit-session) and the verify scripts need it. Install jq."
 fi
 
 if command -v timeout >/dev/null 2>&1; then pass "timeout present (COLLAB_TIMEOUT backstop available)"
@@ -107,18 +107,18 @@ if [ -n "$eff_model" ]; then
   fi
 else
   info "default model: <opencode's own default> (no COLLAB_MODEL in env or collab.conf.local)."
-  info "note: set one via /configure-collab (writes collab.conf.local); prefer a non-Claude model for consults. The policy backstop can't police opencode's built-in default (no -m passed)."
+  info "note: set one via /collab:configure (writes collab.conf.local); prefer a non-Claude model for consults. The policy backstop can't police opencode's built-in default (no -m passed)."
 fi
 # Panel default, if configured — policy-check each member too (a denied member
-# passes the single-model check above silently and only fails at /panel runtime).
+# passes the single-model check above silently and only fails at /collab:panel runtime).
 eff_models="${COLLAB_MODELS:-}"; [ -n "$eff_models" ] || eff_models="$(conf_get COLLAB_MODELS)"
 if [ -n "$eff_models" ]; then
-  info "default /panel set: ${eff_models}"
+  info "default /collab:panel set: ${eff_models}"
   for pm in ${eff_models//,/ }; do
     bash collab/ask.sh --dry-run -m "$pm" "x" >/dev/null 2>&1
     case $? in
-      3) bad "/panel member ${pm} is DENIED by the model policy — /panel will refuse it" ;;
-      4) warn "/panel member ${pm} is gated 'ask' — /panel needs COLLAB_CONFIRMED=1 for it" ;;
+      3) bad "/collab:panel member ${pm} is DENIED by the model policy — /collab:panel will refuse it" ;;
+      4) warn "/collab:panel member ${pm} is gated 'ask' — /collab:panel needs COLLAB_CONFIRMED=1 for it" ;;
     esac
   done
 fi
@@ -129,6 +129,48 @@ for def in collab-read collab-build collab-research collab-watch; do
   if [ -f ".opencode/agent/${def}.md" ]; then pass "${def} agent def present"
   else bad "${def} agent def MISSING (.opencode/agent/${def}.md) — ask.sh falls back to a weaker/unrestricted built-in"; fi
 done
+
+# --- 4b. Slash commands ------------------------------------------------------
+# The commands live in .claude/commands/collab/, which Claude Code exposes as the
+# namespace `/collab:<name>` — so they cannot collide with the user's own commands
+# or a bundled skill. (The published docs claim subdirectories do NOT affect the
+# command name; observed behaviour contradicts that, and observed is what ships.)
+#
+# This check exists because the installer's merge-not-clobber rule has a silent side:
+# a file already at one of our paths is SKIPPED, so the user keeps their file (good)
+# and simply doesn't get ours (invisible). Before this, doctor printed "OK — all
+# required checks passed" while a command was shadowed. That's the failure mode this
+# project keeps killing: a check that reports clean over a hole.
+hdr "Slash commands"
+cmds="consult panel workshop review research delegate collaborate witness configure"
+missing=""; shadowed=""; present=0
+manifest="$repo_root/collab/.install-manifest"
+for c in $cmds; do
+  f=".claude/commands/collab/${c}.md"
+  if [ ! -f "$repo_root/$f" ]; then
+    missing="$missing $c"
+  elif [ -f "$manifest" ] && ! grep -qxF "$f" "$manifest"; then
+    # The file is there but this install didn't put it there — it's the user's.
+    shadowed="$shadowed $c"
+  else
+    present=$((present+1))
+  fi
+done
+ncmds=$(printf '%s\n' $cmds | wc -l | tr -d ' ')
+if [ -n "$missing" ]; then bad "slash command(s) MISSING (as /collab:<name>):$missing — reinstall, or they simply won't exist"; fi
+if [ -n "$shadowed" ]; then
+  warn "these paths hold a file ClaudeCollab did NOT install:$shadowed"
+  warn "  yours was kept (deliberate) but ours is absent — that command is not what our docs describe"
+  warn "  rename or remove yours and re-run install.sh, or accept that it's shadowed"
+fi
+# Report the count that is actually OURS. Saying "all 9 present" while warning that
+# one of them isn't ours is the self-contradicting clean bill this check exists to
+# prevent — the file being present is not the property anyone cares about.
+if [ -z "$missing" ] && [ -z "$shadowed" ]; then
+  pass "all ${ncmds} ClaudeCollab slash commands present and ours (/collab:*)"
+elif [ -z "$missing" ]; then
+  pass "${present} of ${ncmds} ClaudeCollab slash commands are ours (see the warning above)"
+fi
 
 # --- 5. Model policy file ----------------------------------------------------
 hdr "Model policy"
@@ -196,7 +238,7 @@ fi
 # exact silent gap that would otherwise read as a clean log.
 hdr "Evidence layer (collab/log.sh)"
 if [ "${COLLAB_LOG:-on}" = "off" ]; then
-  warn "logging is OFF (\$COLLAB_LOG=off) — no evidence is being recorded, so /witness has nothing to audit"
+  warn "logging is OFF (\$COLLAB_LOG=off) — no evidence is being recorded, so /collab:witness has nothing to audit"
 elif [ ! -f collab/log.sh ]; then
   warn "collab/log.sh not present — model calls are not being recorded"
 elif ! command -v jq >/dev/null 2>&1; then
@@ -211,7 +253,7 @@ else
       bad "latest run FAILS integrity — run: bash collab/log.sh verify \$(readlink $logdir/latest)"
     fi
   else
-    info "no runs logged yet — the log appears on the first /consult, /panel, …"
+    info "no runs logged yet — the log appears on the first /collab:consult, /collab:panel, …"
   fi
 fi
 

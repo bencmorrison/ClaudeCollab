@@ -3,8 +3,8 @@
 # ask.sh — let Claude Code consult or delegate to another LLM via opencode.
 #
 # opencode handles model access and auth (subscription/OAuth — no API keys needed
-# here). This script is the single entry point the /consult, /delegate, /panel and
-# /collaborate slash commands shell out to.
+# here). This script is the single entry point the /collab:consult, /collab:delegate, /collab:panel and
+# /collab:collaborate slash commands shell out to.
 #
 # Usage:
 #   collab/ask.sh [-m provider/model] [-a plan|build] [--edit|--research|--watch] [--allow-dirty] <prompt...>
@@ -23,7 +23,7 @@
 #                       files (edit/write/patch/bash), but with task + network egress
 #                       + secret reads denied at the tool layer. Falls back to the
 #                       unrestricted `build` agent if the collab-build def is missing.
-#   --watch             Shorthand for `-a collab-watch` — the OVERSIGHT path (/witness).
+#   --watch             Shorthand for `-a collab-watch` — the OVERSIGHT path (/collab:witness).
 #                       The agent can read collab/logs/** and nothing else: no shell,
 #                       no search/glob, no egress, no other file. Used to audit whether
 #                       Claude's account of an exchange matches what the models really
@@ -39,7 +39,7 @@
 #                       back to `plan` (weaker) if the collab-research def is missing.
 #   -s, --session <id>  Continue an existing opencode session (multi-turn dialogue).
 #   --emit-session      Print "SESSION: <id>\n---\n<answer>" so a caller can capture
-#                       the session id and continue with -s (used by /collaborate,
+#                       the session id and continue with -s (used by /collab:collaborate,
 #                       Option B: opencode carries the peer's turns, not Claude).
 #                       Requires `jq`.
 #   --dry-run           Print the exact opencode command that WOULD run (safely
@@ -60,12 +60,12 @@
 #
 # Model policy: the requested -m model is checked against a deny/ask/allow policy.
 # The policy file is resolved as: $COLLAB_POLICY if set, else a git-ignored personal
-# collab/models.policy.local if present (written by /configure-collab), else the
+# collab/models.policy.local if present (written by /collab:configure), else the
 # shipped collab/models.policy. A `deny` model is refused; an `ask` model requires
 # $COLLAB_CONFIRMED=1 (Claude sets it only after confirming with the user).
 #
 # Config: your persistent default model lives in collab/collab.conf.local (git-ignored,
-#      written by /configure-collab) as `COLLAB_MODEL=provider/model`. $COLLAB_CONF
+#      written by /collab:configure) as `COLLAB_MODEL=provider/model`. $COLLAB_CONF
 #      overrides the file path. The env var $COLLAB_MODEL still works as a one-off
 #      override for a single shell/call (precedence: -m flag > $COLLAB_MODEL > file).
 #
@@ -74,7 +74,7 @@
 #      evidence layer a watcher agent audits INSTEAD of Claude's own summary; see
 #      collab/log.sh for the format, the knobs ($COLLAB_LOG, $COLLAB_LOG_PROMPTS,
 #      $COLLAB_LOG_RETENTION_DAYS) and what it deliberately does not claim.
-#      $COLLAB_RUN_ID groups several calls into one run (a /panel or /workshop sets it
+#      $COLLAB_RUN_ID groups several calls into one run (a /collab:panel or /collab:workshop sets it
 #      once); $COLLAB_COMMAND records which slash command drove the call.
 #
 # Env: $COLLAB_MODEL (one-off default-model override), $COLLAB_TIMEOUT (seconds; unset = no timeout,
@@ -103,7 +103,7 @@ usage() {
 _has_rules() { [ -f "$1" ] && grep -qE '^[[:space:]]*(allow|ask|deny)([[:space:]]|$)' "$1" 2>/dev/null; }
 
 # Policy file resolution: $COLLAB_POLICY wins if set; otherwise prefer a personal,
-# git-ignored collab/models.policy.local (what /configure-collab writes) — but ONLY
+# git-ignored collab/models.policy.local (what /collab:configure writes) — but ONLY
 # if it actually has rules, so an empty or comment-only .local (e.g. a half-written
 # file from a crashed setup) can't silently VOID a committed/shared deny set. Else
 # the shipped default.
@@ -176,7 +176,7 @@ agent="collab-read"  # our read-only agent: denies mutation (bash/edit/write), s
                      # collab/verify-collab-read.sh. Falls back to `plan` (weaker) if
                      # the def is missing — see below.
 session=""      # opencode session id to continue (Option B multi-turn), forwarded via -s
-emit_session="" # when set, emit "SESSION: <id>" + the extracted answer (for /collaborate)
+emit_session="" # when set, emit "SESSION: <id>" + the extracted answer (for /collab:collaborate)
 dry_run=""      # when set, print the opencode command and exit without running it
 model_explicit="" # set when -m was passed, so --watch won't override a deliberate choice
 allow_dirty=""  # when set, skip the clean-worktree guard on the write (--edit) path
@@ -227,7 +227,7 @@ case "$agent" in
   *) echo "note: '-a $agent' is not one of collab-read|collab-build|collab-research|collab-watch|plan|build; using it as-is." >&2 ;;
 esac
 
-# ---- the oversight path (--watch / /witness) --------------------------------
+# ---- the oversight path (--watch / /collab:witness) --------------------------------
 # Three rules apply here that apply nowhere else, because this agent's job is to
 # check up on Claude and each exists to stop that check quietly becoming worthless.
 #
@@ -243,7 +243,7 @@ fi
 if [ "$agent" = "collab-watch" ]; then
   # 1. Model: prefer $COLLAB_WATCH_MODEL (env or config) so the auditor can be pinned
   #    to a different model from the one doing the work, without disturbing the
-  #    default used by /consult and friends. An explicit -m still wins.
+  #    default used by /collab:consult and friends. An explicit -m still wins.
   if [ -z "$model_explicit" ]; then
     watch_model="${COLLAB_WATCH_MODEL:-$(conf_get COLLAB_WATCH_MODEL)}"
     [ -n "$watch_model" ] && model="$watch_model"
@@ -255,7 +255,7 @@ if [ "$agent" = "collab-watch" ]; then
   #    empty string matches no pattern. If that default is a Claude model, Claude
   #    audits Claude and nothing says a word. The refusal below is worthless unless we
   #    know what we're refusing, and we only know that if the id is explicit.
-  #    (Found by dogfooding /review on this very commit — the guarantee held only in
+  #    (Found by dogfooding /collab:review on this very commit — the guarantee held only in
   #    the case that had been tested.)
   if [ -z "$model" ]; then
     {
@@ -269,7 +269,7 @@ if [ "$agent" = "collab-watch" ]; then
 
   # 3. Refuse to let Claude audit Claude unless the user explicitly says so. An
   #    auditor from the same family as the party under audit is not the independent
-  #    view /witness claims to provide — and the developer would have no way to tell
+  #    view /collab:witness claims to provide — and the developer would have no way to tell
   #    from the report. This is a fail-CLOSED heuristic on the model id, not a
   #    policy tier: the policy ships default-allow and Anthropic is never denied
   #    there (see AGENTS.md), so the check has to live here.
@@ -278,7 +278,7 @@ if [ "$agent" = "collab-watch" ]; then
       if [ -z "${COLLAB_CONFIRMED:-}" ]; then
         {
           echo "error: refusing to run the watcher on '$model' — that is a Claude model, and Claude is the"
-          echo "party under audit. An auditor from the same family is not the independent check /witness"
+          echo "party under audit. An auditor from the same family is not the independent check /collab:witness"
           echo "reports itself to be. Pick a non-Claude model (COLLAB_WATCH_MODEL, or -m), or, if you"
           echo "genuinely want this, confirm with the user and re-run with COLLAB_CONFIRMED=1."
         } >&2
@@ -423,7 +423,7 @@ echo "collab: model=${model:-<opencode default>} agent=${agent}${session:+ sessi
 #
 # Logging is best-effort and must NEVER fail the call it is recording: every hook is
 # `|| true`. A missing entry is not silently benign — `log.sh verify` catches the
-# unpaired `started`, and /witness refuses to audit a failed-integrity log.
+# unpaired `started`, and /collab:witness refuses to audit a failed-integrity log.
 log_sh="$(dirname "$0")/log.sh"
 log_enabled=""
 call_id=""
@@ -432,7 +432,7 @@ prompt_file=""
 log_setting="${COLLAB_LOG:-$(conf_get COLLAB_LOG)}"
 if [ "${log_setting:-on}" != "off" ] && [ -f "$log_sh" ] && command -v jq >/dev/null 2>&1; then
   # Resolve the run ONCE and export it. A slash command that groups several calls
-  # (/panel, /workshop) sets $COLLAB_RUN_ID itself so the whole workflow is one
+  # (/collab:panel, /collab:workshop) sets $COLLAB_RUN_ID itself so the whole workflow is one
   # auditable unit; a standalone call mints its own run here. Without pinning it,
   # each `log.sh` invocation below would mint a *different* run id and scatter one
   # call across three directories.
@@ -492,7 +492,7 @@ run_opencode() {
 status=0
 if [ -n "$emit_session" ]; then
   # Option B (multi-turn): run in JSON mode, then extract the session id and the
-  # assistant's answer. The caller (/collaborate) captures the id from the SESSION:
+  # assistant's answer. The caller (/collab:collaborate) captures the id from the SESSION:
   # line and threads it back with -s on later turns, so opencode — not Claude —
   # carries the peer's prior words (fidelity by construction, not by Claude's
   # discipline). Two-stage jq tolerates any stray non-JSON line before slurping.

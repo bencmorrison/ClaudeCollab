@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# panel-models.sh — resolve and sanity-check the model set for a /panel run.
+# panel-models.sh — resolve and sanity-check the model set for a /collab:panel run.
 #
 # The panel asks the SAME question of several models and has Claude synthesize.
 # This helper decides WHICH models and guards against "diversity theater" (a panel
@@ -67,7 +67,7 @@ done
 
 if [ "${#models[@]}" -eq 0 ]; then
   echo "error: no models. Pass provider/model ids, set COLLAB_MODELS, or add a" >&2
-  echo "       COLLAB_MODELS= line to collab/collab.conf.local (run /configure-collab)." >&2
+  echo "       COLLAB_MODELS= line to collab/collab.conf.local (run /collab:configure)." >&2
   echo "       e.g. COLLAB_MODELS=\"openai/gpt-5 google/gemini-2.5-pro\"" >&2
   exit 2
 fi

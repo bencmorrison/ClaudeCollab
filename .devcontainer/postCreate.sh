@@ -73,4 +73,4 @@ fi
 
 echo
 echo "Log in once (persists across rebuilds via named volumes), then try:"
-echo "  /consult <question>   |   /panel <question>   |   /delegate <task>   |   /collaborate <problem>"
+echo "  /collab:consult <question>   |   /collab:panel <question>   |   /collab:delegate <task>   |   /collab:collaborate <problem>"

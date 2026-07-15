@@ -3,7 +3,7 @@
 #
 # ClaudeCollab is three drop-in directories that let Claude Code shell out to
 # other LLMs via opencode:
-#   .claude/commands/   the slash commands (/consult, /panel, /review, /delegate, …)
+#   .claude/commands/collab/  the slash commands (/collab:consult, /collab:panel, …)
 #   .opencode/agent/    the hardened collab-read / collab-build agent defs
 #   collab/             the ask.sh wrapper, panel/doctor/verify scripts, policy
 # This script copies those into your project and adds the git-ignore entries the
@@ -34,14 +34,14 @@ PAYLOAD_DIRS=(".claude/commands" ".opencode/agent" "collab")
 # any file of yours keeps its parent dir alive).
 # `collab/logs` is listed so an empty log dir is tidied up, but it is rmdir-only like
 # the rest: if you have audit logs, they survive an uninstall. They are yours.
-PRUNE_DIRS=(".claude/commands" ".claude" ".opencode/agent" ".opencode" "collab/tests" "collab/logs" "collab")
+PRUNE_DIRS=(".claude/commands/collab" ".claude/commands" ".claude" ".opencode/agent" ".opencode" "collab/tests" "collab/logs" "collab")
 
 # git-ignore block we manage in the target's .gitignore (idempotent, fenced).
 GITIGNORE_BEGIN="# >>> ClaudeCollab >>>"
 GITIGNORE_END="# <<< ClaudeCollab <<<"
 read -r -d '' GITIGNORE_BODY <<'EOF' || true
 # >>> ClaudeCollab >>>
-# Per-user config written by /configure-collab — never commit personal prefs.
+# Per-user config written by /collab:configure — never commit personal prefs.
 collab/models.policy.local
 collab/collab.conf.local
 # Probe sentinels the verify scripts create (normally auto-cleaned).
@@ -134,7 +134,7 @@ if [ "$action" = "uninstall" ]; then
     # Last resort: no manifest and no source. Remove only files we can name; some
     # may remain, but we never blow away a directory (your files stay).
     warn "no manifest and no source payload — removing only the known ClaudeCollab files (any others must be removed by hand)"
-  rm -f "$dest/.claude/commands/"{consult,panel,workshop,review,research,delegate,collaborate,witness,configure-collab}.md
+  rm -f "$dest/.claude/commands/collab/"{consult,panel,workshop,review,research,delegate,collaborate,witness,configure}.md
     rm -f "$dest/.opencode/agent/"{collab-read,collab-build,collab-research,collab-watch}.md
     for k in ask.sh log.sh panel-models.sh doctor.sh verify-collab-read.sh verify-collab-build.sh \
              verify-collab-research.sh verify-collab-watch.sh models.policy collab.conf.example .install-manifest \
@@ -162,7 +162,7 @@ if ! have_payload "$src"; then
   git clone --depth 1 "$REPO_URL" "$tmp_src" >/dev/null 2>&1 || die "git clone failed: $REPO_URL"
   src="$tmp_src"
 fi
-cleanup() { [ -n "$tmp_src" ] && rm -rf "$tmp_src"; }
+cleanup() { [ -n "$tmp_src" ] && rm -rf "$tmp_src"; [ -n "${skipped_list:-}" ] && rm -f "$skipped_list"; return 0; }
 trap cleanup EXIT
 
 # Refuse to install onto the source itself (would be a no-op that self-clobbers).
@@ -173,18 +173,20 @@ fi
 say "Installing ClaudeCollab"
 say "  from: $src"
 say "  into: $dest"
-[ -d "$dest/.git" ] || warn "$dest is not a git repo — install works, but you won't be able to review /delegate diffs with git."
+[ -d "$dest/.git" ] || warn "$dest is not a git repo — install works, but you won't be able to review /collab:delegate diffs with git."
 
 # A path is "ours" (safe to overwrite on re-install/upgrade) iff the PREVIOUS
 # manifest listed it. Anything else already present is the user's — we skip it.
 is_owned() { [ -f "$dest/$MANIFEST_REL" ] && grep -qxF "$1" "$dest/$MANIFEST_REL"; }
 
 manifest_tmp="$(mktemp)"
+skipped_list="$(mktemp)"
 count=0; skipped=0
 copy_one() {  # copy_one <relpath> ; records it in the new manifest (unless skipped)
   local rel="$1"
   if [ -e "$dest/$rel" ] && ! is_owned "$rel"; then
     warn "skipping $rel — a file you already have is there; leaving it untouched"
+    printf '%s\n' "$rel" >> "$skipped_list"
     skipped=$((skipped+1)); return
   fi
   mkdir -p "$dest/$(dirname "$rel")"
@@ -208,8 +210,19 @@ rm -f "$manifest_tmp"
 
 add_gitignore_block
 ok "Installed ${count} file(s)$( [ "$skipped" -gt 0 ] && printf ', skipped %d already-present file(s)' "$skipped")."
+if [ "$skipped" -gt 0 ]; then
+  # Repeat the skips as a summary. Inline warnings scroll away, and a skipped
+  # command is INVISIBLE afterwards: the file is there, it's just not ours, so
+  # nothing later looks wrong. Name them and say what it means.
+  warn "These ClaudeCollab files were NOT installed because you already had a file at that path:"
+  while IFS= read -r rel; do warn "    $rel"; done < "$skipped_list"
+  warn "Your files were left untouched — that part is deliberate. But the ClaudeCollab version of"
+  warn "each is absent: if it's a slash command, that command is YOURS, not ours, and will not do"
+  warn "what our docs describe. Rename or remove yours and re-run, or accept that it's shadowed."
+  warn "'bash collab/doctor.sh' re-reports this, so you don't have to remember it from here."
+fi
 say "Next steps:"
 say "  1. Authenticate opencode to your providers:  opencode auth login"
 say "  2. Check the setup:                          bash collab/doctor.sh"
-say "  3. (optional) Set default models:            run /configure-collab in Claude Code"
-say "  4. Use it in Claude Code:                     /consult, /panel, /review, /delegate"
+say "  3. (optional) Set default models:            run /collab:configure in Claude Code"
+say "  4. Use it in Claude Code:                     /collab:consult, /collab:panel, /collab:review, /collab:delegate"

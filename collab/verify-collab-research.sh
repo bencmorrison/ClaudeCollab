@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # verify-collab-research.sh — check the `collab-research` opencode agent (the
-# --research / /research path) has the permission shape it claims.
+# --research / /collab:research path) has the permission shape it claims.
 #
 # What collab-research claims, and what this proves:
 #   * It CAN research — webfetch/websearch resolve to `allow` and read '*' allows
-#     (else /research is broken). Asserted positively.
+#     (else /collab:research is broken). Asserted positively.
 #   * It CANNOT mutate — bash/edit/write/patch resolve to `deny`. Unlike collab-build,
 #     `bash` is DENIED here, which is what makes the rest of these denies real
 #     rather than advisory: there's no shell to route around them.
@@ -70,9 +70,9 @@ effective_action() {
 [ "$(last_action '*')" = "deny" ] && pass "'*' catch-all => deny (default-deny allowlist)" \
   || bad "'*' catch-all is NOT deny — un-listed tools would be ALLOWED"
 
-# The research capability MUST be allowed (else /research is broken).
+# The research capability MUST be allowed (else /collab:research is broken).
 for cap in webfetch websearch; do
-  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (research path works)"; else bad "$cap is NOT allow — /research cannot reach the web"; fi
+  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (research path works)"; else bad "$cap is NOT allow — /collab:research cannot reach the web"; fi
 done
 
 # Mutation MUST be denied. `bash` denied is load-bearing here: it's what stops a

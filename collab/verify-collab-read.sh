@@ -2,8 +2,8 @@
 # verify-collab-read.sh — prove the `collab-read` opencode agent is read-only AND
 # non-exfiltrating BY CONSTRUCTION, not by model compliance.
 #
-# Why this exists: ClaudeCollab's read-only commands (/consult, /panel,
-# /collaborate) claim the delegated model "cannot" mutate the repo, read secrets,
+# Why this exists: ClaudeCollab's read-only commands (/collab:consult, /collab:panel,
+# /collab:collaborate) claim the delegated model "cannot" mutate the repo, read secrets,
 # or reach the network. That claim is only honest if opencode actually strips
 # those tools / denies those paths. This script proves it two ways:
 #

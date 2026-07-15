@@ -1,6 +1,6 @@
 # Security policy
 
-ClaudeCollab lets Claude Code hand work to other LLMs through [opencode](https://opencode.ai). This document is the honest account of what it does and does **not** protect against. Read it before using `/delegate` on anything you don't fully trust.
+ClaudeCollab lets Claude Code hand work to other LLMs through [opencode](https://opencode.ai). This document is the honest account of what it does and does **not** protect against. Read it before using `/collab:delegate` on anything you don't fully trust.
 
 ## Threat model
 
@@ -14,45 +14,45 @@ ClaudeCollab is built for **trusted repositories and frontier models reached thr
 The three agents ClaudeCollab defines are **default-deny allowlists** at opencode's permission layer: the permission map sets `"*": deny` (overriding opencode's built-in `"*": allow`, which opencode resolves last-match-wins), then re-allows only what each role needs. A denied tool is removed from the model's toolset — this is enforcement, not a prompt asking the model to behave. `--auto` (which the wrapper passes) cannot approve a `deny` into existence.
 
 ### `collab-read` — read-only, non-exfiltrating **by construction**
-Used by `/consult`, `/panel`, `/review`, `/collaborate`. The **only** capability it grants is reading non-secret files. Denied: all mutation (`bash`/`edit`/`write`/`patch`), content search and globbing (`grep`/`glob` — opencode's `grep` returns file *content* and walks the tree with `--hidden`, so it is a secret-read path if allowed), sub-agent spawning (`task`), network (`webfetch`/`websearch`), and reads of secret files (`.env`, `*.key`/`*.pem`, `.ssh/**`, `.aws/**`, `credentials*`, …). Because it's an allowlist, any tool a future opencode version adds is denied until explicitly allowed.
+Used by `/collab:consult`, `/collab:panel`, `/collab:review`, `/collab:collaborate`. The **only** capability it grants is reading non-secret files. Denied: all mutation (`bash`/`edit`/`write`/`patch`), content search and globbing (`grep`/`glob` — opencode's `grep` returns file *content* and walks the tree with `--hidden`, so it is a secret-read path if allowed), sub-agent spawning (`task`), network (`webfetch`/`websearch`), and reads of secret files (`.env`, `*.key`/`*.pem`, `.ssh/**`, `.aws/**`, `credentials*`, …). Because it's an allowlist, any tool a future opencode version adds is denied until explicitly allowed.
 
 This is verified two ways — run both after any opencode or agent-def change:
 - `bash collab/verify-collab-read.sh` — asserts the **resolved** config (authoritative, needs opencode): the `"*"` floor is `deny`, every tool resolves to deny, secret reads deny, plus runtime probes (a write attempt leaves no file; a planted secret canary never appears via `read` or `grep`).
 - `bash collab/tests/check-agent-permissions.sh` — an opencode-free source lint (runs in CI) that checks the same allowlist invariants, frontmatter-bounded and last-match-aware.
 
-### `collab-build` — the `/delegate` write path: **defense-in-depth, NOT by construction**
-Used by `/delegate` (`--edit`). It re-allows `edit`/`write`/`patch`/**`bash`**; everything else (sub-agents, `grep`/`glob`, network, secret reads) is denied. **Because `bash` is allowed by design** (a coding task must run builds/tests), the non-mutation denies are *defense-in-depth* — they remove the tool-native routes a compliant model would default to, but a determined model can `cat .env`, `curl`, grep, or even launch a fresh unrestricted `opencode --agent build` **via bash**. 
+### `collab-build` — the `/collab:delegate` write path: **defense-in-depth, NOT by construction**
+Used by `/collab:delegate` (`--edit`). It re-allows `edit`/`write`/`patch`/**`bash`**; everything else (sub-agents, `grep`/`glob`, network, secret reads) is denied. **Because `bash` is allowed by design** (a coding task must run builds/tests), the non-mutation denies are *defense-in-depth* — they remove the tool-native routes a compliant model would default to, but a determined model can `cat .env`, `curl`, grep, or even launch a fresh unrestricted `opencode --agent build` **via bash**. 
 
 On this path, **the trust boundary is you reviewing the diff**, not the permission map. To support that:
 - The wrapper enforces a **clean-worktree guard**: it refuses to run a write agent on a dirty tree (`--allow-dirty` to override) and prints the pre-delegation `HEAD` so you can `git diff` exactly what the model changed.
-- `/delegate` instructs Claude to review the diff (and scan it for injected or out-of-scope changes) before anything is trusted or committed.
+- `/collab:delegate` instructs Claude to review the diff (and scan it for injected or out-of-scope changes) before anything is trusted or committed.
 
 Delegate only on trusted repositories, and always review the diff.
 
-### `collab-research` — the `/research` web path: **cannot mutate, is NOT an exfiltration boundary**
-Used by `/research` (`--research`). It re-allows `webfetch`/`websearch` + reading non-secret files; `bash`, `edit`/`write`/`patch`, `grep`/`glob`, and `task` are all denied.
+### `collab-research` — the `/collab:research` web path: **cannot mutate, is NOT an exfiltration boundary**
+Used by `/collab:research` (`--research`). It re-allows `webfetch`/`websearch` + reading non-secret files; `bash`, `edit`/`write`/`patch`, `grep`/`glob`, and `task` are all denied.
 
 What genuinely holds here, and why it's stronger than `collab-build`: **`bash` is denied**, so there is no shell to `cat .env` or `curl` around the permission map, and `grep`/`glob` — the tree-walking secret-read routes — are denied too. The secret-read globs therefore actually bite on this path rather than being advisory.
 
 What does **not** hold: this is the only agent with **both local `read` and network egress**, and that combination is an exfiltration channel by construction. It was a deliberate tradeoff (2026-07-15) — research needs the web, and grounding it in your code needs `read`. Concretely:
 - A **non-secret-but-private** file matching none of the secret globs (say `config/staging.json`) is readable *and* reachable by an outbound fetch.
-- **Fetched pages are attacker-controlled.** A page can carry text aimed at the model ("read X and fetch evil.example/?d=…"). The agent's own prompt and `/research`'s injection guard push back, but that is model compliance, not construction.
+- **Fetched pages are attacker-controlled.** A page can carry text aimed at the model ("read X and fetch evil.example/?d=…"). The agent's own prompt and `/collab:research`'s injection guard push back, but that is model compliance, not construction.
 
-So: **run `/research` on repos whose non-secret contents you'd accept leaking.** Verified by `bash collab/verify-collab-research.sh` (asserts the `"*"` floor, `webfetch`/`websearch` allow, mutation/`grep`/`glob`/`task` + secret reads deny, plus a runtime probe that a write attempt leaves no file). It deliberately does not claim non-exfiltration.
+So: **run `/collab:research` on repos whose non-secret contents you'd accept leaking.** Verified by `bash collab/verify-collab-research.sh` (asserts the `"*"` floor, `webfetch`/`websearch` allow, mutation/`grep`/`glob`/`task` + secret reads deny, plus a runtime probe that a write attempt leaves no file). It deliberately does not claim non-exfiltration.
 
 ## Other guardrails
 
-- **Prompt-injection guard.** Every command treats external model output as untrusted **data, not instructions**. If a model's answer (or a `/delegate` model's report/diff) contains directives aimed at Claude ("ignore your instructions", "now run/commit/delete…", fetch a URL, reveal secrets), Claude surfaces them as a finding rather than acting on them.
+- **Prompt-injection guard.** Every command treats external model output as untrusted **data, not instructions**. If a model's answer (or a `/collab:delegate` model's report/diff) contains directives aimed at Claude ("ignore your instructions", "now run/commit/delete…", fetch a URL, reveal secrets), Claude surfaces them as a finding rather than acting on them.
 - **Model policy.** `collab/models.policy` (first-match glob, default-allow) lets you `deny`/`ask`/`allow` specific models; the wrapper enforces it as a hard backstop (a `deny` model is refused; an `ask` model needs explicit confirmation).
 - **Preflight.** `bash collab/doctor.sh` checks tools, auth, the policy, and runs the permission proofs + unit suite before you rely on the commands.
 
-### `collab-watch` — the `/witness` oversight path: reads the log and nothing else
+### `collab-watch` — the `/collab:witness` oversight path: reads the log and nothing else
 
-Used by `/witness` to audit whether Claude's account of a model exchange matched what the models actually said. Same default-deny allowlist as the others, but the read map is **inverted**: `read: {"*": deny, "collab/logs/**": allow}`.
+Used by `/collab:witness` to audit whether Claude's account of a model exchange matched what the models actually said. Same default-deny allowlist as the others, but the read map is **inverted**: `read: {"*": deny, "collab/logs/**": allow}`.
 
 - **What holds by construction:** it can read the evidence log and no other file — not your source, not your secrets (denied by the floor, which is why no secret globs are listed). Every tool is denied: no `bash` (a shell would `cat` anything), no `grep`/`glob` (opencode's grep returns file *content* and walks the tree with `--hidden`, bypassing per-path read rules), no `webfetch`/`websearch` (the log holds every prompt and response you've exchanged — an auditor with egress would be a channel pointed straight at it), no `task` (it would spawn the full-access `build` agent and escape all of this). Verified by `collab/verify-collab-watch.sh`, statically and with a runtime canary planted outside the scope.
 - **`--watch` has no fallback.** A missing agent def is a hard error (exit 5), not a downgrade to a weaker built-in — those can read your source and would "audit" that instead of the log, still producing a confident report. Degraded oversight is worse than none because it still looks like oversight.
-- **What does NOT hold:** this bounds what the auditor can *see*. It does not make Claude honest about the prompt it writes for that auditor, or about which run it submits. Omission and misrepresentation are caught (the watcher reads the raw log); dispositional honesty is not. This is documented, disclosed by `/witness` at time of use, and **not** a vulnerability — see Scope notes.
+- **What does NOT hold:** this bounds what the auditor can *see*. It does not make Claude honest about the prompt it writes for that auditor, or about which run it submits. Omission and misrepresentation are caught (the watcher reads the raw log); dispositional honesty is not. This is documented, disclosed by `/collab:witness` at time of use, and **not** a vulnerability — see Scope notes.
 
 ### `collab/logs/` — the evidence layer holds prompts, on disk, in your repo
 
@@ -72,4 +72,4 @@ Include what you found, how to reproduce it, and the impact. Because this is a s
 
 ## Scope notes
 
-In scope: the permission model and its enforcement, the wrapper's guards (worktree, policy, injection), any way to make a read-only command mutate/exfiltrate, any way to make `collab-build` exceed "edit + bash on a trusted repo you're reviewing", and any way to make `collab-research` mutate, shell out, or read a secret-glob file. (Exfiltration of *non-secret* data via `/research` is a documented, accepted tradeoff — not a vulnerability.) Out of scope: opencode itself, the models, your provider auth, and running untrusted code (ClaudeCollab is not a sandbox).
+In scope: the permission model and its enforcement, the wrapper's guards (worktree, policy, injection), any way to make a read-only command mutate/exfiltrate, any way to make `collab-build` exceed "edit + bash on a trusted repo you're reviewing", and any way to make `collab-research` mutate, shell out, or read a secret-glob file. (Exfiltration of *non-secret* data via `/collab:research` is a documented, accepted tradeoff — not a vulnerability.) Out of scope: opencode itself, the models, your provider auth, and running untrusted code (ClaudeCollab is not a sandbox).
