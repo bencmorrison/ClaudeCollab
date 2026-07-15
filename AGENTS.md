@@ -16,13 +16,14 @@ Claude Code ──(slash command)──▶ collab/ask.sh ──▶ opencode run 
      └──────────────── reads the other model's answer, then reasons over it ────┘
 ```
 
-- **`collab/ask.sh`** — the single entry point. Wraps `opencode run --agent <plan|build> --auto [-m provider/model] <prompt>`. Run `bash collab/ask.sh -h` for its interface.
+- **`collab/ask.sh`** — the single entry point. Wraps `opencode run --agent <plan|build> --auto [-m provider/model] <prompt>`. Also supports `-s/--session <id>` (continue an opencode session) and `--emit-session` (print `SESSION: <id>` + the extracted answer, for `/collaborate`'s multi-turn Option B). Run `bash collab/ask.sh -h` for its interface. **Note:** it redirects opencode's stdin from `/dev/null` — load-bearing, see Gotchas.
   - `plan` agent = read-only *by opencode's plan-mode enforcement + model compliance* — **not** a hard sandbox. It does not deny `bash`, so the guarantee is behavioral, not construction. Owning our own `collab-read` agent that denies shell/write is a [PLAN.md](PLAN.md) Phase 1 item. Treat "read-only" as "should not mutate," not "cannot."
   - `build` agent = **can edit files** in this repo (used by `--edit`).
-- **`.claude/commands/`** — the three slash commands, all thin wrappers over `ask.sh`:
+- **`.claude/commands/`** — the slash commands, all thin wrappers over `ask.sh`:
   - `/consult <q>` — one second opinion, read-only. Claude weighs it against its own view.
   - `/consensus <q>` — ask 2–3 models from different families, synthesize, break ties.
   - `/delegate <task>` — another model edits files (`--edit`), then Claude reviews the diff.
+  - `/collaborate <q>` — bounded multi-turn *peer* exchange (read-only). Uses session continuation so opencode carries the other model's turns and Claude never re-transmits its words; Claude must disposition each point (Adopt/Adapt/Reject/Defer), not just collect an opinion. See PLAN.md "Option B" decision.
 
 ## Dev container & auth
 
