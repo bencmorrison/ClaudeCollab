@@ -361,15 +361,25 @@ if [ "${log_setting:-on}" != "off" ] && [ -f "$log_sh" ] && command -v jq >/dev/
   # each `log.sh` invocation below would mint a *different* run id and scatter one
   # call across three directories.
   COLLAB_RUN_ID="${COLLAB_RUN_ID:-$(bash "$log_sh" new-run "${COLLAB_COMMAND:-ask}" 2>/dev/null || true)}"
+  # Every step here is guarded, including the mktemps. `set -e` is on, so an
+  # unguarded `prompt_file="$(mktemp)"` on a full or unwritable TMPDIR would abort
+  # ask.sh outright — the audit log killing the very call it exists to record. If any
+  # of this fails we silently run without logging; the call is what matters, and the
+  # missing entry surfaces in `log.sh verify`, not as a false success.
   if [ -n "$COLLAB_RUN_ID" ]; then
     export COLLAB_RUN_ID
-    log_enabled=1
-    call_id="c-$(od -An -tx1 -N4 /dev/urandom 2>/dev/null | tr -d ' \n' || printf '%04x%04x' "$RANDOM" "$$")"
-    prompt_file="$(mktemp)"; printf '%s' "$prompt" > "$prompt_file"
-    turn="$(bash "$log_sh" started \
-              --call-id "$call_id" --command "${COLLAB_COMMAND:-ask}" --model "$model" \
-              --agent "$agent" ${session:+--session "$session"} --prompt-file "$prompt_file" 2>/dev/null || true)"
-    echo "collab: log=$(bash "$log_sh" path 2>/dev/null || echo '?') call_id=${call_id}" >&2
+    prompt_file="$(mktemp 2>/dev/null || true)"
+    if [ -n "$prompt_file" ] && printf '%s' "$prompt" > "$prompt_file" 2>/dev/null; then
+      log_enabled=1
+      call_id="c-$(od -An -tx1 -N4 /dev/urandom 2>/dev/null | tr -d ' \n' || printf '%04x%04x' "$RANDOM" "$$")"
+      turn="$(bash "$log_sh" started \
+                --call-id "$call_id" --command "${COLLAB_COMMAND:-ask}" --model "$model" \
+                --agent "$agent" ${session:+--session "$session"} --prompt-file "$prompt_file" 2>/dev/null || true)"
+      echo "collab: log=$(bash "$log_sh" path 2>/dev/null || echo '?') call_id=${call_id}" >&2
+    else
+      echo "warning: could not open the evidence log (no writable temp dir?); continuing WITHOUT a record of this call." >&2
+      prompt_file=""
+    fi
   fi
 fi
 
@@ -427,18 +437,38 @@ if [ -n "$emit_session" ]; then
   fi
   # Log the EXTRACTED answer, not the JSON envelope: `text` is precisely what Claude
   # receives, so an audit of Claude's engagement must compare against the same bytes.
-  resp_file="$(mktemp)"; printf '%s' "$text" > "$resp_file"
-  log_complete "$status" "$resp_file" "$sid"
-  rm -f "$resp_file"
+  resp_file="$(mktemp 2>/dev/null || true)"
+  if [ -n "$resp_file" ] && printf '%s' "$text" > "$resp_file" 2>/dev/null; then
+    log_complete "$status" "$resp_file" "$sid"
+    rm -f "$resp_file"
+  else
+    log_complete "$status" "" "$sid"
+  fi
   printf 'SESSION: %s\n---\n%s\n' "$sid" "$text"
   exit "$status"
 else
   # tee, not a plain capture: the answer still reaches stdout as it arrives, and the
-  # evidence layer gets the full untruncated copy. pipefail (set at the top) means
-  # $status is opencode's, not tee's.
+  # evidence layer gets the full untruncated copy.
+  #
+  # Read the MODEL's status out of PIPESTATUS[0] rather than the pipeline's. Under
+  # `pipefail` the pipeline reports the rightmost non-zero status, so a tee that
+  # failed (TMPDIR full, unwritable) would make a perfectly good model call exit
+  # non-zero — logging breaking the very call it exists to record, which is the one
+  # thing this layer must never do. A failed tee costs us the log entry (and `verify`
+  # will show it as a gap), never the answer.
   if [ -n "$log_enabled" ]; then
-    resp_file="$(mktemp)"
-    run_opencode "${args[@]}" "$prompt" | tee "$resp_file" || status=$?
+    resp_file="$(mktemp 2>/dev/null || true)"
+  fi
+  if [ -n "$log_enabled" ] && [ -n "$resp_file" ]; then
+    set +e
+    run_opencode "${args[@]}" "$prompt" | tee "$resp_file"
+    pipe_status=("${PIPESTATUS[@]}")
+    set -e
+    status="${pipe_status[0]}"
+    if [ "${pipe_status[1]:-0}" -ne 0 ]; then
+      echo "warning: could not write the response to the evidence log (tee exited ${pipe_status[1]}); the answer is unaffected, but this call's record is incomplete." >&2
+      rm -f "$resp_file"; resp_file=""
+    fi
   else
     resp_file=""
     run_opencode "${args[@]}" "$prompt" || status=$?

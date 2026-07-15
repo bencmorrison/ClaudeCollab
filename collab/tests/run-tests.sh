@@ -545,6 +545,31 @@ line "quoted" \back\ answer' ] \
   && ok "log: raw_response is verbatim (newlines, quotes, backslashes survive)" \
   || no "log: raw_response mangled — got: $got"
 
+# Byte-exact, including trailing newlines. `$(cat f)` strips them, which would make
+# "verbatim, untruncated" false AND hash the already-truncated value — so verify would
+# cheerfully confirm a copy it had itself lost bytes from.
+r="$(newrun)"; FAKE_OPENCODE_TEXT='trailing newlines matter
+
+' run_logged "$r" -m m/x "q"
+# Compare the JSON-ENCODED value, not a $(...) capture — command substitution strips
+# trailing newlines, so capturing the field to compare it would silently destroy the
+# exact bytes under test and the assertion would pass no matter what.
+got="$(entries "$r" | jq -rs '[.[]|select(.status=="completed").raw_response][0]|@json')"
+[ "$got" = '"trailing newlines matter\n\n\n"' ] \
+  && ok "log: raw_response keeps trailing newlines (byte-exact, not \$(cat)-stripped)" \
+  || no "log: trailing bytes lost from raw_response — 'untruncated' is not true (got: $got)"
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && ok "log: verify agrees with the byte-exact writer (hashes the same bytes)" \
+  || no "log: verify disagrees with its own writer on trailing bytes"
+
+# Logging must NEVER fail the call it records: a broken log write costs the entry,
+# never the answer. Simulated by making the response temp file unwritable via TMPDIR.
+out="$(COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$(newrun)" COLLAB_COMMAND=/consult \
+        TMPDIR=/nonexistent-dir-for-tmp bash "$ask" -m m/x "q" 2>/dev/null)"; rc=$?
+{ [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'canned answer'; } \
+  && ok "log: a failing log write does not fail the model call (answer still returned, rc=0)" \
+  || no "log: broken logging broke the call it exists to record (rc=$rc)"
+
 # ask.sh must record the selection a watcher needs to judge the call.
 r="$(newrun)"; run_logged "$r" -m openai/gpt-5 --research "q"
 { [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].model')" = "openai/gpt-5" ] \
@@ -560,25 +585,40 @@ r="$(newrun)"; FAKE_OPENCODE_EXIT=3 run_logged "$r" -m m/x "boom"
   && ok "log: a non-zero exit still writes completed (exit_code recorded, integrity ok)" \
   || no "log: failed call left an unpaired started or lost its exit_code"
 
-# The integrity contract: an unpaired started must FAIL, loudly.
+# The integrity contract, BOTH directions. A started with no completed is the obvious
+# gap; a completed with no started is the same silent loss wearing a disguise (the
+# prompt and turn are gone) and a one-way check reports "all paired" over it.
 r="$(newrun)"
 bash "$logsh" started --call-id c-orphan --command /consult --model m/x --agent collab-read >/dev/null 2>&1
 bash "$logsh" verify "$r" >/dev/null 2>&1 \
   && no "log: verify PASSED a started with no completed (a silent gap would read as clean)" \
   || ok "log: verify fails an unpaired started (exit 7)"
 
+r="$(newrun)"; printf 'an answer' > "$fakedir/resp.txt"
+COLLAB_RUN_ID="$r" bash "$logsh" completed --call-id c-lonely --exit 0 --model m/x \
+  --agent collab-read --response-file "$fakedir/resp.txt" >/dev/null 2>&1
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED a completed with no started (the prompt vanished and it reported 'all paired')" \
+  || ok "log: verify fails an unpaired completed (the lost prompt is a gap too)"
+
 # A rewritten entry must fail (accidental corruption; not a tamper-proofing claim).
 # Two cases, because the chain and the self-check cover different lines: editing a
 # NON-final entry breaks the chain, while editing the LAST entry breaks nothing in the
 # chain (no successor holds its hash) and is caught only by response_hash.
+# NB: `sed -i` is GNU-only (BSD/macOS sed needs an argument), so rewrite via a temp
+# file — the suite has to pass on macOS too.
+rewrite_line() {  # rewrite_line <file> <line-no|$> <old> <new>
+  awk -v n="$2" -v o="$3" -v w="$4" '{ if (NR==n || (n=="$" && NR==c)) sub(o,w); print }' \
+      c="$(wc -l < "$1")" "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
 r="$(newrun)"; run_logged "$r" -m m/x "q"; run_logged "$r" -m m/x "q2"
-sed -i '2s/canned answer/SOMETHING ELSE/' "$COLLAB_LOG_DIR/$r/calls.jsonl" 2>/dev/null
+rewrite_line "$COLLAB_LOG_DIR/$r/calls.jsonl" 2 "canned answer" "SOMETHING ELSE"
 bash "$logsh" verify "$r" >/dev/null 2>&1 \
   && no "log: verify PASSED an edited middle entry (prev_hash chain not checked)" \
   || ok "log: verify fails an edited middle entry (prev_hash mismatch)"
 
 r="$(newrun)"; run_logged "$r" -m m/x "q"
-sed -i '$s/canned answer/SOMETHING ELSE/' "$COLLAB_LOG_DIR/$r/calls.jsonl" 2>/dev/null
+rewrite_line "$COLLAB_LOG_DIR/$r/calls.jsonl" '$' "canned answer" "SOMETHING ELSE"
 bash "$logsh" verify "$r" >/dev/null 2>&1 \
   && no "log: verify PASSED an edited LAST entry (the chain cannot cover the tail — response_hash must)" \
   || ok "log: verify fails an edited last entry (response_hash self-check covers the tail)"

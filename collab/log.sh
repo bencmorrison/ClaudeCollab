@@ -168,6 +168,9 @@ ensure_run() {  # ensure_run <run_id> — create the dir tree, refresh `latest`
 # appending a line that is far larger than the PIPE_BUF write the kernel would keep
 # atomic for us. So take a lock. mkdir is the portable atomic primitive (flock(1)
 # doesn't exist on macOS/BSD, which we intend to support).
+_lock_held=""
+_release_lock() { [ -n "$_lock_held" ] && rmdir "$_lock_held" 2>/dev/null; _lock_held=""; return 0; }
+
 _with_lock() {  # _with_lock <lockdir> <command...>
   local lock="$1"; shift
   local waited=0
@@ -178,15 +181,24 @@ _with_lock() {  # _with_lock <lockdir> <command...>
       rmdir "$lock" 2>/dev/null || true; continue
     fi
     sleep 0.05; waited=$((waited+1))
-    if [ "$waited" -gt 200 ]; then   # ~10s: log rather than block the actual work
-      echo "collab: log lock busy for 10s — appending unlocked (a line may interleave)." >&2
-      "$@"; return
+    if [ "$waited" -gt 200 ]; then
+      # ~10s. DROP the entry rather than append unlocked. An unlocked append of a
+      # line far larger than PIPE_BUF can interleave with another writer's and
+      # corrupt BOTH — taking out entries that were already safely recorded. A
+      # missing entry is bounded and `verify` reports it as a gap; a torn line
+      # silently poisons the record around it. Never trade the log's integrity for
+      # one entry.
+      echo "collab: log lock busy for 10s — DROPPING this entry rather than risk a torn append (verify will show the gap)." >&2
+      return 0
     fi
   done
-  # shellcheck disable=SC2064 # expand $lock now: it must be removed even on error
-  trap "rmdir '$lock' 2>/dev/null || true" EXIT
+  # The path is held in a variable, never interpolated into the trap's source: a
+  # single quote in $COLLAB_LOG_DIR would otherwise make the trap a syntax error and
+  # strand the lock, wedging every later writer behind it for a minute.
+  _lock_held="$lock"
+  trap _release_lock EXIT
   "$@"
-  rmdir "$lock" 2>/dev/null || true
+  _release_lock
   trap - EXIT
 }
 
@@ -313,20 +325,27 @@ cmd_completed() {
 
   # raw_response is recorded in FULL, always. It is the evidence — a truncated
   # response lets "the model only said X" survive contact with the log.
-  local resp="" rhash=""
-  if [ -n "$response_file" ] && [ -f "$response_file" ]; then
-    resp="$(cat "$response_file")"; rhash="$(printf '%s' "$resp" | _sha)"
+  # raw_response is recorded byte-for-byte via jq --rawfile. A `$(cat "$f")` capture
+  # strips trailing newlines, which would make "verbatim, untruncated" a false claim
+  # AND hash the truncated value — so `verify` would happily confirm the copy it
+  # already lost bytes from. An empty file stands in when there's no response.
+  local rfile="$response_file" rhash="" tmp_empty=""
+  if [ -z "$rfile" ] || [ ! -f "$rfile" ]; then
+    tmp_empty="$(mktemp)"; rfile="$tmp_empty"
+  else
+    rhash="$(_sha < "$rfile")"
   fi
   local entry; entry="$(mktemp)"
   _entry "$rid" call completed | jq -c \
     --arg call_id "$call_id" --arg command "$command" --arg model "$model" \
     --arg agent "$agent" --arg session "$session" --arg turn "$turn" \
-    --argjson exit_code "${exit_code:-0}" --arg resp "$resp" --arg rhash "$rhash" \
+    --argjson exit_code "${exit_code:-0}" --rawfile resp "$rfile" --arg rhash "$rhash" \
     '. + {call_id:$call_id, command:$command, model:(if $model=="" then null else $model end),
           agent:$agent, session_id:(if $session=="" then null else $session end),
           turn:(if $turn=="" then null else ($turn|tonumber) end),
           exit_code:$exit_code, raw_response:$resp,
           response_hash:(if $rhash=="" then null else $rhash end)}' > "$entry"
+  [ -n "$tmp_empty" ] && rm -f "$tmp_empty"
   _with_lock "$file.lock" _append_locked "$file" "$entry"
   rm -f "$entry"
 }
@@ -342,10 +361,11 @@ cmd_final() {
   disabled && return 0
   have_jq || { echo "log.sh: jq not found — cannot log." >&2; return 0; }
   local rid rd file; rid="$(resolve_run "$run")"; rd="$(ensure_run "$rid")"; file="$rd/calls.jsonl"
-  local txt; txt="$(cat)"
+  local txtf; txtf="$(mktemp)"; cat > "$txtf"
   local entry; entry="$(mktemp)"
-  _entry "$rid" claude-final "" | jq -c --arg t "$txt" --arg h "$(printf '%s' "$txt" | _sha)" \
+  _entry "$rid" claude-final "" | jq -c --rawfile t "$txtf" --arg h "$(_sha < "$txtf")" \
     '. + {text:$t, response_hash:(if $h=="" then null else $h end)}' > "$entry"
+  rm -f "$txtf"
   _with_lock "$file.lock" _append_locked "$file" "$entry"
   rm -f "$entry"
   printf '%s\n' "$file"
@@ -400,16 +420,34 @@ cmd_verify() {
     echo "INTEGRITY FAIL: $file is not clean JSONL ($n_lines lines, $n_json parsed)." >&2
     bad=1
   else
-    # 2. Unpaired started/completed, by call_id.
-    local unpaired
-    unpaired="$(jq -rs '
+    # 2. Unpaired entries, by call_id — checked in BOTH directions.
+    #
+    #    A `started` with no `completed` is the obvious gap: the call died mid-flight
+    #    and its response never reached the log. But the inverse is just as much a
+    #    silent loss and was missed at first: if the `started` write fails while the
+    #    call itself succeeds, the log keeps the answer and loses the PROMPT and the
+    #    turn — and a one-directional check prints "every started has a completed"
+    #    over it, which is precisely the reassuring-but-false verdict this contract
+    #    exists to prevent. Integrity is a *pairing* property, so verify the pair.
+    local orphan_started orphan_completed
+    orphan_started="$(jq -rs '
       [.[] | select(.type=="call")] as $c
       | ($c | map(select(.status=="started")   | .call_id)) as $s
       | ($c | map(select(.status=="completed") | .call_id)) as $d
       | $s - $d | .[]' "$file")"
-    if [ -n "$unpaired" ]; then
+    orphan_completed="$(jq -rs '
+      [.[] | select(.type=="call")] as $c
+      | ($c | map(select(.status=="started")   | .call_id)) as $s
+      | ($c | map(select(.status=="completed") | .call_id)) as $d
+      | $d - $s | .[]' "$file")"
+    if [ -n "$orphan_started" ]; then
       echo "INTEGRITY FAIL: started with no completed (the call died mid-flight; its response is NOT in this log):" >&2
-      printf '  call_id %s\n' $unpaired >&2
+      printf '  call_id %s\n' $orphan_started >&2
+      bad=1
+    fi
+    if [ -n "$orphan_completed" ]; then
+      echo "INTEGRITY FAIL: completed with no started (the pre-call entry was lost; this call's PROMPT and turn are NOT in this log):" >&2
+      printf '  call_id %s\n' $orphan_completed >&2
       bad=1
     fi
     # 3. Hash chain + per-entry self-check — accidental corruption only; this is not
@@ -421,7 +459,7 @@ cmd_verify() {
     #    half-flushed final write is the single most likely accidental corruption
     #    here. So each entry ALSO carries response_hash over its own payload, which
     #    is verifiable standalone and covers the tail.
-    local i=0 prev="" line got rh body
+    local i=0 prev="" line got rh
     while IFS= read -r line; do
       i=$((i+1))
       got="$(printf '%s' "$line" | jq -r '.prev_hash // ""')"
@@ -431,8 +469,7 @@ cmd_verify() {
       fi
       rh="$(printf '%s' "$line" | jq -r '.response_hash // ""')"
       if [ -n "$rh" ]; then
-        body="$(printf '%s' "$line" | jq -r 'if .type=="claude-final" then (.text // "") else (.raw_response // "") end')"
-        if [ "$(printf '%s' "$body" | _sha)" != "$rh" ]; then
+        if [ "$(printf '%s' "$line" | jq -j 'if .type=="claude-final" then (.text // "") else (.raw_response // "") end' | _sha)" != "$rh" ]; then
           echo "INTEGRITY FAIL: response_hash mismatch at line $i (the recorded answer does not match its digest)." >&2
           bad=1; break
         fi
@@ -441,7 +478,7 @@ cmd_verify() {
     done < "$file"
   fi
   [ "$bad" -eq 0 ] || exit 7
-  echo "ok: $file — $n_lines entries, every started has a completed, hash chain intact."
+  echo "ok: $file — $n_lines entries, every call paired (started↔completed), hashes intact."
 }
 
 cmd_prune() {
