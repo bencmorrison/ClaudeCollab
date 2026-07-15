@@ -33,6 +33,8 @@ ClaudeCollab is three drop-in directories you add to a project:
 - **`jq`** (used by `/collab:collaborate` and the verify scripts).
 - A **git repo** for the project you install into (so you can review `/collab:delegate` diffs). Not strictly required for read-only commands.
 
+**MCP servers:** opencode supports MCP, but ClaudeCollab's agents will **not** use your MCP tools, and installing the same servers you gave Claude Code changes nothing on its own. Every agent here is a default-deny allowlist (`"*": deny`), and that floor covers MCP tools too — verified: an agent under the floor cannot even see them, while opencode's unrestricted built-in agent calls them fine. If you want a delegated model to reach an MCP, you must **explicitly allow that tool** in the agent def, and that is a security decision rather than a convenience one: an MCP with network access would end `collab-read`'s no-egress guarantee, and an MCP that reads files is **not** covered by the secret-file globs (those protect the `read` tool, not someone else's). Default-deny means a new MCP can't quietly widen what a delegated model can do.
+
 ## Install
 
 ClaudeCollab installs *into* whatever project you want Claude Code to have these commands in. It only adds its own files — if you already have a file at one of its paths (a same-named slash command, agent, or something under `collab/`), the installer **skips it with a warning** rather than overwriting, and uninstall never deletes it.
