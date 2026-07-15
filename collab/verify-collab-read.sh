@@ -59,7 +59,7 @@ last_action() {
     [ .[] | select(.permission==$p) | select($pat=="" or .pattern==$pat) ] | last | .action // ""' 2>/dev/null
 }
 
-for cap in bash edit write task todowrite webfetch websearch; do
+for cap in bash edit write patch task todowrite webfetch websearch; do
   if [ "$(last_action "$cap")" = "deny" ]; then pass "$cap => deny"; else bad "$cap is NOT denied (last rule wins)"; fi
 done
 for secret in "*.env" ".env" "*.pem" "*.key"; do

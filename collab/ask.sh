@@ -14,9 +14,14 @@
 #   -a <agent>          opencode agent. Default `collab-read` (our hard-deny
 #                       read-only agent: no bash/write/edit — see
 #                       .opencode/agent/collab-read.md, proven by
-#                       collab/verify-collab-read.sh). `build` can edit files;
-#                       `plan` is opencode's compliance-only read-only agent.
-#   --edit              Shorthand for `-a build` — let the other model change files.
+#                       collab/verify-collab-read.sh). `collab-build` can edit files
+#                       but denies task/webfetch/websearch + secret reads;
+#                       `build` is opencode's unrestricted editor; `plan` is
+#                       opencode's compliance-only read-only agent.
+#   --edit              Shorthand for `-a collab-build` — let the other model change
+#                       files (edit/write/patch/bash), but with task + network egress
+#                       + secret reads denied at the tool layer. Falls back to the
+#                       unrestricted `build` agent if the collab-build def is missing.
 #   -s, --session <id>  Continue an existing opencode session (multi-turn dialogue).
 #   --emit-session      Print "SESSION: <id>\n---\n<answer>" so a caller can capture
 #                       the session id and continue with -s (used by /collaborate,
@@ -97,7 +102,7 @@ while [ $# -gt 0 ]; do
     -s|--session) need_arg "$1" "${2:-}"; session="$2"; shift 2 ;;
     --emit-session) emit_session=1; shift ;;
     --dry-run) dry_run=1; shift ;;
-    --edit) agent="build"; shift ;;
+    --edit) agent="collab-build"; shift ;;
     -h|--help) usage 0 ;;
     --) shift; break ;;
     -*) echo "unknown option: $1" >&2; usage ;;
@@ -112,8 +117,8 @@ prompt="$*"
 # reasons about. A custom agent is allowed (opencode may define others), but flag it
 # so a typo like '-a paln' doesn't silently run an unintended/again-fallback agent.
 case "$agent" in
-  collab-read|plan|build) ;;
-  *) echo "note: '-a $agent' is not one of collab-read|plan|build; using it as-is." >&2 ;;
+  collab-read|collab-build|plan|build) ;;
+  *) echo "note: '-a $agent' is not one of collab-read|collab-build|plan|build; using it as-is." >&2 ;;
 esac
 
 if ! command -v opencode >/dev/null 2>&1; then
@@ -141,6 +146,15 @@ fi
 if [ "$agent" = "collab-read" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-read.md" ]; then
   echo "warning: collab-read agent def not found; falling back to opencode's 'plan' — WEAKER (compliance-only; does not deny bash, secret reads, or network)." >&2
   agent="plan"
+fi
+
+# Same idea for the --edit path: if the collab-build def is missing, fall back to
+# opencode's built-in `build` — the only write-capable built-in — rather than fail.
+# `build` is UNRESTRICTED (no task/egress/secret-read denies), so warn loudly: the
+# delegated edit still works, but without collab-build's hardening.
+if [ "$agent" = "collab-build" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-build.md" ]; then
+  echo "warning: collab-build agent def not found; falling back to opencode's 'build' — UNRESTRICTED (no task/webfetch/websearch or secret-read denies)." >&2
+  agent="build"
 fi
 
 # Enforce the model policy as a hard backstop (independent of Claude's own check).

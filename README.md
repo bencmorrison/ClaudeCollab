@@ -15,7 +15,7 @@ Claude Code  ──(slash command)──▶  collab/ask.sh  ──▶  opencode 
 ```
 
 - `collab-read` agent → read-only **by construction** for opinions (`/consult`, `/consensus`): denies file mutation, secret reads (`.env`/keys/creds), and network egress at opencode's permission layer, verified by `collab/verify-collab-read.sh`. (Falls back to opencode's weaker compliance-only `plan` agent if the def is missing.)
-- `build` agent → can edit files in the repo (`/delegate`)
+- `collab-build` agent → can edit files in the repo for `/delegate`: allows edit/write/patch/bash, but denies sub-agent spawning and the network tools, and blocks secret reads via the read tool (defense-in-depth — `bash` is allowed, so review the diff; verified by `collab/verify-collab-build.sh`). Falls back to opencode's unrestricted `build` agent if the def is missing.
 
 ## Setup
 

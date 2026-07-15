@@ -11,6 +11,9 @@ permission:
   bash: deny
   edit: deny
   write: deny
+  patch: deny       # patch applies a diff to files — an independent mutation path;
+                    # without this it falls under the built-in `* allow` and the
+                    # agent could edit via patch despite edit/write being denied.
   task: deny        # no spawning sub-agents (a task could run a mutating agent)
   todowrite: deny
   # --- network egress: denied (a read-only consult needs no network, and egress

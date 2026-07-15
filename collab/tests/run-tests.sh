@@ -60,11 +60,11 @@ run_ask -m openai/gpt-5.5 "q"
   && ok "-m passes provider/model through" \
   || no "-m not forwarded (got: $(tr '\n' ' ' <"$argsfile"))"
 
-# 3. --edit switches to the build agent.
+# 3. --edit switches to the collab-build agent (hardened editor, not raw build).
 run_ask --edit "change a file"
-args_has 'build' && ! args_has 'collab-read' \
-  && ok "--edit -> --agent build" \
-  || no "--edit did not select build (got: $(tr '\n' ' ' <"$argsfile"))"
+args_has 'collab-build' && ! args_has 'collab-read' && ! args_has 'build' \
+  && ok "--edit -> --agent collab-build" \
+  || no "--edit did not select collab-build (got: $(tr '\n' ' ' <"$argsfile"))"
 
 # 4. -a plan honoured.
 run_ask -a plan "q"
@@ -148,6 +148,17 @@ OUT="$(COLLAB_POLICY="$allow_pol" bash "$tmp_repo/collab/ask.sh" "q" 2>/dev/null
   || no "fallback wrong (got: $(tr '\n' ' ' <"$argsfile"))"
 rm -rf "$tmp_repo"
 
+# 14b. collab-build fallback: --edit with no sibling .opencode falls back to the
+#      built-in `build` (the only write-capable built-in), never collab-read/plan.
+tmp_repo2="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$tmp_repo2/collab"
+cp "$ask" "$tmp_repo2/collab/ask.sh"; cp "$repo_root/collab/models.policy" "$tmp_repo2/collab/" 2>/dev/null || true
+: > "$argsfile"
+OUT="$(COLLAB_POLICY="$allow_pol" bash "$tmp_repo2/collab/ask.sh" --edit "q" 2>/dev/null)"; RC=$?
+{ args_has 'build' && ! args_has 'collab-build' && ! args_has 'collab-read' && ! args_has 'plan'; } \
+  && ok "missing collab-build def + --edit -> falls back to build" \
+  || no "collab-build fallback wrong (got: $(tr '\n' ' ' <"$argsfile"))"
+rm -rf "$tmp_repo2"
+
 # 15. COLLAB_MODEL supplies the default model when no -m is given.
 : > "$argsfile"
 COLLAB_MODEL=openai/gpt-5.5 COLLAB_POLICY="$allow_pol" bash "$ask" "q" >/dev/null 2>&1
@@ -166,7 +177,7 @@ fi
 
 # 17. Unknown -a value emits a soft note to stderr (but still runs).
 run_ask --dry-run -a paln "q"
-printf '%s' "$ERR" | grep -q "not one of collab-read|plan|build" \
+printf '%s' "$ERR" | grep -q "not one of collab-read|collab-build|plan|build" \
   && ok "-a <unknown> emits soft note" || no "-a unknown note missing (err: $ERR)"
 
 # 18. --emit-session + opencode timeout (124): reports timeout, exits 124.
