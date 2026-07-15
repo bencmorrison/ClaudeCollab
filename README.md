@@ -109,15 +109,19 @@ ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Us
 
 ## Optional: skip the permission prompts
 
-The first time Claude Code runs `collab/ask.sh` it will ask for permission. To pre-approve, add this to `.claude/settings.json` (or your user settings):
+The first time Claude Code runs `collab/ask.sh` it will ask for permission. To pre-approve, add this to `.claude/settings.json` (or your local `.claude/settings.local.json`, which is git-ignored):
 ```json
 {
   "permissions": {
     "allow": [
       "Bash(bash collab/ask.sh:*)",
+      "Bash(COLLAB_CONFIRMED=1 bash collab/ask.sh:*)",
+      "Bash(bash collab/panel-models.sh:*)",
+      "Bash(bash collab/doctor.sh:*)",
       "Bash(opencode models:*)",
       "Bash(git status:*)",
-      "Bash(git diff:*)"
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
     ]
   }
 }
