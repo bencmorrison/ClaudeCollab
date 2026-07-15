@@ -123,12 +123,37 @@ if [ -n "$eff_models" ]; then
   done
 fi
 
+# The install manifest lists exactly what ClaudeCollab put here. A file at one of our
+# paths that ISN'T listed is the user's own, shadowing ours. Absent in the source repo
+# (nothing was "installed"), in which case both checks below fall back to presence.
+manifest_agents="$repo_root/collab/.install-manifest"
+
 # --- 4. Agent definitions ----------------------------------------------------
 hdr "Agent definitions"
+# Presence is not the property that matters — OURS is. install.sh skips a file already
+# at one of our paths, so a user who happens to have their own .opencode/agent/
+# collab-read.md keeps it and never gets ours, and a presence-only check reports
+# "present" over it. That's the same silent-shadow bug the slash-command check above
+# exists to catch (the agent names are distinctive enough that a collision is
+# unlikely, but "unlikely" is not what a check is for).
+#
+# The saving grace, worth knowing: verify-collab-*.sh reads opencode's RESOLVED
+# permission map, so a shadowing def that is actually weaker FAILS there loudly. This
+# check exists so the failure names its cause instead of looking like our own agent
+# def mysteriously regressing.
+agents_shadowed=""
 for def in collab-read collab-build collab-research collab-watch; do
-  if [ -f ".opencode/agent/${def}.md" ]; then pass "${def} agent def present"
-  else bad "${def} agent def MISSING (.opencode/agent/${def}.md) — ask.sh falls back to a weaker/unrestricted built-in"; fi
+  f=".opencode/agent/${def}.md"
+  if [ ! -f "$f" ]; then
+    bad "${def} agent def MISSING ($f) — ask.sh falls back to a weaker/unrestricted built-in (or exits 5 for collab-watch)"
+  elif [ -f "$manifest_agents" ] && ! grep -qxF "$f" "$manifest_agents"; then
+    agents_shadowed="$agents_shadowed $def"
+    warn "${def}: a file is at $f but ClaudeCollab did NOT install it — yours was kept, ours is absent"
+  else
+    pass "${def} agent def present and ours"
+  fi
 done
+[ -n "$agents_shadowed" ] && warn "  a shadowing def that is weaker will also fail the resolved-config proof below — that's the real check"
 
 # --- 4b. Slash commands ------------------------------------------------------
 # The commands live in .claude/commands/collab/, which Claude Code exposes as the
@@ -144,12 +169,11 @@ done
 hdr "Slash commands"
 cmds="consult panel workshop review research delegate collaborate witness configure"
 missing=""; shadowed=""; present=0
-manifest="$repo_root/collab/.install-manifest"
 for c in $cmds; do
   f=".claude/commands/collab/${c}.md"
   if [ ! -f "$repo_root/$f" ]; then
     missing="$missing $c"
-  elif [ -f "$manifest" ] && ! grep -qxF "$f" "$manifest"; then
+  elif [ -f "$manifest_agents" ] && ! grep -qxF "$f" "$manifest_agents"; then
     # The file is there but this install didn't put it there — it's the user's.
     shadowed="$shadowed $c"
   else

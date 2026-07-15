@@ -83,7 +83,23 @@ check "install SUMMARISES the skip by name at the end (not just an inline warnin
   "grep -q 'were NOT installed' '$outf' && grep -q 'commands/collab/consult.md' '$outf'"
 ( cd "$T" && bash collab/doctor.sh > "$docf" 2>&1 )
 check "doctor reports the shadowed command afterwards"  "grep -q 'did NOT install' '$docf'"
-check "doctor does NOT claim all commands are ours"     "! grep -q 'present and ours' '$docf'"
+# Match the slash-command line specifically: the agent-def check now emits "present
+# and ours" too, so a bare grep for that phrase passes on the wrong line.
+check "doctor does NOT claim all commands are ours"     "! grep -q 'slash commands present and ours' '$docf'"
+rm -rf "$T"
+
+# --- a shadowed AGENT def must be reported, not silently blessed --------------
+# The agent names are distinctive so this is unlikely — but "unlikely" is not what a
+# check is for, and doctor used to report "present" for a def that wasn't ours.
+T="$(newrepo)"
+mkdir -p "$T/.opencode/agent"
+printf -- '---\ndescription: mine\nmode: all\npermission:\n  "*": allow\n---\nmine\n' > "$T/.opencode/agent/collab-read.md"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+adocf="$T/.doctor-agents.txt"
+( cd "$T" && bash collab/doctor.sh > "$adocf" 2>&1 )
+check "doctor flags an agent def it did not install"   "grep -q 'did NOT install it' '$adocf'"
+check "doctor does NOT call a shadowed agent def ours" "! grep -q 'collab-read agent def present and ours' '$adocf'"
+check "install kept the user's agent def"              "grep -q 'mine' '$T/.opencode/agent/collab-read.md'"
 rm -rf "$T"
 
 # --- pre-existing collab/ contents survive uninstall (no rm -rf) --------------
