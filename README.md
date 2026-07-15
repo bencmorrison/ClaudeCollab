@@ -64,12 +64,14 @@ Run these inside Claude Code in this repo:
 |---|---|
 | `/consult <question>` | Get a second opinion from another LLM on a plan or approach (read-only). Claude weighs it against its own view. |
 | `/panel <question>` | Ask 2–3 different models the same question and have Claude synthesize + break ties. Warns if the panel isn't cross-provider. |
+| `/review <target>` | Findings-first code review by another model, then Claude verifies each finding against the code before reporting. Target a path, the diff, or a branch. |
 | `/delegate <coding task>` | Hand a coding task to another model (it edits files), then Claude reviews the diff. |
 
 Examples:
 ```
 /consult Is an actor the right concurrency model here, or should I use a serial queue?
 /panel What's the best migration path off Core Data for this app?
+/review the uncommitted diff
 /delegate Add bounds checking to the ring buffer in src/buffer.c and a test
 ```
 
