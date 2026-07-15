@@ -299,6 +299,43 @@ POUT="$(COLLAB_MODELS='' bash "$panel" 2>/dev/null)"; PRC=$?
   || no "panel empty-input wrong (rc=$PRC, out=$POUT)"
 rm -f "$perrf"
 
+# --- check-agent-permissions.sh meta-tests -------------------------------------
+# The lint is itself a security control, so assert it (a) passes the real agents and
+# (b) CATCHES the order/bounding evasions that dogfooding /review found (2026-07-15):
+# a good-looking block in the markdown BODY, and last-match reorderings.
+lintdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$lintdir/collab/tests" "$lintdir/.opencode/agent"
+cp "$repo_root/collab/tests/check-agent-permissions.sh" "$lintdir/collab/tests/"
+# run_lint : 0 if the lint passes the files currently in $lintdir/.opencode/agent.
+run_lint() { ( cd "$lintdir" && bash collab/tests/check-agent-permissions.sh >/dev/null 2>&1 ); }
+reset_agents() { cp "$repo_root/.opencode/agent/collab-read.md" "$repo_root/.opencode/agent/collab-build.md" "$lintdir/.opencode/agent/"; }
+
+# L1. Real, valid agents pass.
+reset_agents
+run_lint && ok "lint: real agents pass" || no "lint rejects the real agents (false positive)"
+
+# L2. read map with '*': allow AFTER the secret denies (last-match reopens .env) -> FAIL.
+reset_agents
+printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  "*": deny' '  read:' \
+  '    ".env": deny' '    "*.env": deny' '    "*.key": deny' '    "*.pem": deny' '    "*credentials*": deny' \
+  '    "*": allow' '---' 'body' > "$lintdir/.opencode/agent/collab-read.md"
+run_lint && no "lint MISSED read-map reorder (secret reopened)" || ok "lint: catches read-map '*': allow after secret denies"
+
+# L3. Unprotected frontmatter (no floor) with a valid-looking block in the BODY -> FAIL.
+reset_agents
+printf '%s\n' '---' 'description: x' 'mode: all' '---' 'Example (not real frontmatter):' \
+  'permission:' '  "*": deny' '  read:' '    "*": allow' '    ".env": deny' '    "*.env": deny' \
+  '    "*.key": deny' '    "*.pem": deny' '    "*credentials*": deny' > "$lintdir/.opencode/agent/collab-read.md"
+run_lint && no "lint MISSED unprotected frontmatter (body block fooled it)" || ok "lint: ignores body block, catches missing floor"
+
+# L4. collab-build with '*': deny placed AFTER the allows (effective = all denied) -> FAIL.
+reset_agents
+printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  edit: allow' '  write: allow' \
+  '  patch: allow' '  bash: allow' '  "*": deny' '  read:' '    "*": allow' '    ".env": deny' \
+  '    "*.env": deny' '    "*.key": deny' '    "*.pem": deny' '    "*credentials*": deny' '---' 'body' \
+  > "$lintdir/.opencode/agent/collab-build.md"
+run_lint && no "lint MISSED collab-build floor-after-allows (edit path dead)" || ok "lint: catches '*': deny placed after the allows"
+rm -rf "$lintdir"
+
 echo
-printf 'wrapper + panel tests: %d passed, %d failed\n' "$pass" "$fail"
+printf 'wrapper + panel + lint tests: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

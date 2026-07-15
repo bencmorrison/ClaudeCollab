@@ -36,6 +36,12 @@ for m in $raw; do
   case "$seen" in
     *" $m "*) echo "warning: duplicate model '$m' dropped (a panel of the same model isn't diverse)." >&2; continue ;;
   esac
+  # opencode ids are provider/model; a bare token (or empty side) is almost certainly
+  # a typo that would only surface as an ask.sh failure later — flag it here.
+  case "$m" in
+    ?*/?*) ;;
+    *) echo "warning: '$m' doesn't look like a provider/model id — ask.sh/opencode will likely reject it." >&2 ;;
+  esac
   seen="$seen$m "
   models+=("$m")
 done
