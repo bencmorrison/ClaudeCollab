@@ -96,9 +96,11 @@ Because a `deny` rule can sit above `ask`/`allow`, a broad "ask before family X"
 - [ ] Capture a short sanitized transcript + exact tool versions.
 
 ### Phase 1 — Harden the primitive
-- [ ] **Own the agent permissions** — don't rely on opencode's mutable built-in `plan`/`build`. Define `collab-read` (deny shell/write/edit/external-dirs) and `collab-build` (deny secret files + external dirs). *The built-in `plan` agent does not hard-deny `bash`; today's safety is model compliance, not construction.*
-  - **Refined decision (2026-07-15, settled via `/collaborate` with `openai/gpt-5.5` — the first real dogfood of the command):** building `collab-read` is worth it **only if** opencode supports a *verifiable* hard-deny of shell/write/edit — and then only **paired with an adversarial deny-verification test** (in CI + ideally `doctor.sh`/startup), else it just manufactures false confidence via fail-open schema drift. If opencode *cannot* truly hard-deny (only soft plan-mode enforcement, as the built-in `plan` suggests), then `collab-read` is no more constructed than `plan` — the honest move is to **stop calling it "read-only" unqualified and document the boundary as behavioral**. This is an **OSS-readiness/honesty** item, not urgent for the current trusted-repo use.
-  - **Gating spike (do first):** can a *custom* opencode agent hard-deny `bash`/write, and can we *prove* the denial with an adversarial test? That empirical answer decides build-vs-document.
+- [x] **Own the read-only agent permissions — DONE (2026-07-15).** Built `collab-read` (`.opencode/agent/collab-read.md`) denying `bash`/`write`/`edit`/`patch`; ask.sh now defaults to it (was `plan`). *The built-in `plan` agent does not hard-deny `bash`; its safety was model compliance, not construction. `collab-read` is construction.*
+  - **Gating spike RESOLVED — hard-deny is real and verifiable.** opencode's per-agent permission map (`permission: {bash: deny, ...}`) removes the denied tools from the model's toolset entirely; under `--auto` + an explicit malicious write instruction the target file was **not** created (proven, not self-reported). Decision path: refined via `/collaborate` with `openai/gpt-5.5` (first dogfood), then the empirical spike settled build-vs-document → **build**.
+  - **Ships with the required adversarial test: `collab/verify-collab-read.sh`** (static perms check + runtime write-attempt asserting the file is absent + fail-open guard). Run after any opencode/agent-def bump. *Still TODO: wire it into CI + `doctor.sh` (Phase 3 / Phase 1 doctor).*
+  - **Fail-open trap found & guarded:** a `mode: subagent` agent invoked via `opencode run --agent` silently falls back to the full-access `build` agent. `collab-read` is `mode: all`; the verify script fails loudly if the fallback ever happens; ask.sh falls back to `plan` (never `build`) if the def is missing.
+  - **Still open:** `collab-build` (deny secret files + external dirs for the `--edit` path) — not yet built.
 - [ ] `--dry-run` on `ask.sh` (print the `opencode` command without running it) — also enables token-free testing.
 - [ ] Validate args (`-a` values, missing `-m`/`-a`); print selected model + mode; preserve and report non-zero opencode exit status.
 - [ ] `collab/doctor.sh` — tool versions, auth presence, available models, default model, permission-policy check.
@@ -129,7 +131,7 @@ Because a `deny` rule can sit above `ask`/`allow`, a broad "ask before family X"
 - [ ] Only if evidence demands: worktree isolation for delegation, structured JSON event parsing, smarter panel selection.
 
 ## Risks & mitigations (carry forward)
-- **False read-only safety** → own permissions, deny shell in read mode, re-test on opencode upgrades; stop calling it "safe" until construction-guaranteed.
+- **False read-only safety** → *addressed for reads:* `collab-read` hard-denies shell/write/edit by construction, verified by `collab/verify-collab-read.sh`; re-run it on opencode upgrades. *Still to do:* wire the verify into CI/doctor so a silent schema-drift regression is caught automatically, and give the `--edit` path the same treatment (`collab-build`).
 - **Destructive/secret-leaking delegation** → clean-worktree guard, deny secret/external-dir reads, trusted repos only, mandatory post-run diff. Not a security sandbox.
 - **Diversity theater** → show exact model ids; warn on duplicates; default must not silently resolve to Claude.
 - **Context starvation** → package objective, constraints, decisions, scope into the external prompt; ask the model what context it's missing; attach files rather than dumping.

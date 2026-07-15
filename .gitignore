@@ -12,5 +12,14 @@
 # Node (opencode/claude are installed globally; this is just in case deps land here)
 node_modules/
 
+# opencode project-local install cruft (created when opencode resolves an agent
+# def in .opencode/); we commit .opencode/agent/*.md, not the package manifests.
+.opencode/package.json
+.opencode/package-lock.json
+.opencode/bun.lock
+
+# Sentinel left by collab/verify-collab-read.sh if a run is interrupted mid-probe
+.collab-read-deny-probe.txt
+
 # Logs / temp
 *.log

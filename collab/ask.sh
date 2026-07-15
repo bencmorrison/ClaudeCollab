@@ -11,8 +11,11 @@
 #
 #   -m provider/model   Pick the model (run `opencode models` to list options).
 #                       Defaults to $COLLAB_MODEL, else opencode's own default.
-#   -a plan|build       opencode agent. `plan` is read-only (default); `build`
-#                       can edit files in this repo.
+#   -a <agent>          opencode agent. Default `collab-read` (our hard-deny
+#                       read-only agent: no bash/write/edit — see
+#                       .opencode/agent/collab-read.md, proven by
+#                       collab/verify-collab-read.sh). `build` can edit files;
+#                       `plan` is opencode's compliance-only read-only agent.
 #   --edit              Shorthand for `-a build` — let the other model change files.
 #   -s, --session <id>  Continue an existing opencode session (multi-turn dialogue).
 #   --emit-session      Print "SESSION: <id>\n---\n<answer>" so a caller can capture
@@ -62,8 +65,10 @@ policy_tier() {
 }
 
 model="${COLLAB_MODEL:-}"
-agent="plan"   # default to opencode's read-only plan agent (see PLAN.md: enforced by
-               # plan-mode + model compliance, not a hard sandbox)
+agent="collab-read"  # our read-only agent: denies bash/write/edit/patch at opencode's
+                     # permission layer (read-only by construction, not just model
+                     # compliance). Proven by collab/verify-collab-read.sh. Falls back
+                     # to opencode's `plan` if the def is missing — see below.
 session=""      # opencode session id to continue (Option B multi-turn), forwarded via -s
 emit_session="" # when set, emit "SESSION: <id>" + the extracted answer (for /collaborate)
 
@@ -89,6 +94,15 @@ if ! command -v opencode >/dev/null 2>&1; then
   exit 127
 fi
 
+# If we default to collab-read but its definition isn't present (e.g. wrapper run
+# from outside the repo), fall back to opencode's built-in `plan` rather than let
+# opencode silently drop to the full-access `build` agent. `plan` is weaker
+# (compliance-only) but never grants write/shell; a silent `build` fallback would.
+if [ "$agent" = "collab-read" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-read.md" ]; then
+  echo "warning: collab-read agent definition not found; falling back to read-only 'plan'." >&2
+  agent="plan"
+fi
+
 # Enforce the model policy as a hard backstop (independent of Claude's own check).
 case "$(policy_tier "$model")" in
   deny)
@@ -102,9 +116,10 @@ case "$(policy_tier "$model")" in
     fi ;;
 esac
 
-# --auto auto-approves permissions that aren't explicitly denied. With the plan
-# agent this relies on plan-mode staying read-only; with build it lets the model
-# apply edits without blocking on prompts (that's the point of delegating).
+# --auto auto-approves permissions that aren't explicitly denied. With collab-read
+# the mutating tools (bash/write/edit/patch) are DENIED, so --auto can't approve
+# them into existence; with build it lets the model apply edits without blocking on
+# prompts (that's the point of delegating). A denied tool stays denied under --auto.
 args=(run --agent "$agent" --auto)
 [ -n "$model" ] && args+=(-m "$model")
 [ -n "$session" ] && args+=(-s "$session")
