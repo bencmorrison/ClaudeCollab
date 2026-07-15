@@ -22,7 +22,7 @@ A **"bring other minds to bear"** tool where model *diversity is the point*, not
 | `/consult` | One independent opinion | read-only | exists — reframe |
 | `/panel` | Multiple independent perspectives, disagreement preserved | read-only | rename from `/consensus` |
 | `/review` | Findings-first code review; Claude verifies each finding | read-only | done (2026-07-15) |
-| `/research` | Source-backed investigation | read-only + web | **new, gated** on web-capability spike |
+| `/research` | Source-backed investigation | read-only + web | **feasible** (spike passed: webfetch works) — not yet built |
 | `/delegate` | Another model owns an implementation task | collab-build | exists — hardened (collab-build) |
 | `/collaborate` | Claude + one model as peers (read-only in v1) | read-only | **new** |
 
@@ -91,8 +91,12 @@ Because a `deny` rule can sit above `ask`/`allow`, a broad "ask before family X"
 - [x] Loop works end-to-end via `collab/ask.sh` (multi-model planning round).
 - [x] Adversarial read-only test — plan agent *refused* to write a file (safe by model compliance).
 - [x] **Session continuation verified** — `opencode run -c` (continue) recalled a fact from a prior turn with no restating. Proves genuine stateful multi-turn dialogue is possible (memory lives in opencode's session, not the model). Enables real back-and-forth `/collaborate` (see Phase 4).
-- [ ] Full acceptance matrix: `/consult` across 2 providers; `/delegate` in a disposable clean repo writes intended files; `/panel` shows independent answers; failure cases (missing auth, bad model id, rate limit) give actionable errors.
-- [ ] Web-capability spike — does a `plan`-agent model actually search the web via opencode? Decides `/research`.
+- [x] **Full acceptance matrix — RUN & PASSED (2026-07-15)** against the two authenticated providers (openai oauth + opencode free tier):
+  - `/consult` across both providers (`opencode/deepseek-v4-flash-free`, `openai/gpt-5.4-mini-fast`) → both answered correctly via the read-only `collab-read` path. ✓
+  - `/delegate` in a disposable clean git repo → clean tree proceeded, printed the pre-delegation HEAD, and `openai/gpt-5.4-mini-fast` (via `collab-build`) created exactly the requested file, nothing else. ✓
+  - `/panel` → `panel-models.sh` resolved the cross-provider set with no diversity warning; the two providers give genuinely independent answers (shown by /consult). ✓
+  - Failure cases: policy-deny → exit 3 with a clear message; dirty-worktree write → exit 6 with a clear message. ✓ **Rough edge:** a *bad model id* exits non-zero and ask.sh names the model/agent, but opencode's own message is a generic `UnknownError: Unexpected server error` (upstream) — a `-m` pre-check against `opencode models` would improve this (optional follow-up).
+- [x] **Web-capability spike — DONE (2026-07-15).** With a throwaway agent allowing `webfetch`/`websearch`: **`webfetch` works** (fetched `https://example.com`, returned the real title via `openai/gpt-5.4-mini-fast`); **`websearch` was unavailable** for this model/setup (the model fell back to `webfetch` on a search-engine URL). **Decision: `/research` is FEASIBLE** — build it on a read-only + `webfetch` agent (deny mutation, allow `webfetch`, allow `websearch` opportunistically); it can reach the web and even search-result pages via `webfetch`. Still net-new work, not yet built.
 - [ ] Capture a short sanitized transcript + exact tool versions.
 
 ### Phase 1 — Harden the primitive
@@ -130,7 +134,7 @@ Because a `deny` rule can sit above `ask`/`allow`, a broad "ask before family X"
 - [x] **CI** (2026-07-15) — `.github/workflows/ci.yml` runs on push/PR: `bash -n` syntax over all tracked shell scripts (+ the extension-less `fake-opencode`), ShellCheck at `--severity=warning` (real bugs, not style nits), command/agent **frontmatter validation** (`collab/tests/check-frontmatter.sh`), and the fake-`opencode` **wrapper unit tests** — all token-free, no opencode auth. *Not in CI (by decision — CI stays credential-free, see below):* anything needing a logged-in opencode — the resolved-config `verify-*.sh`, the runtime probes, and any container smoke test that logs in. Those run locally / via `doctor.sh`. Least-privilege `permissions: contents: read`.
 - [x] **Decision (2026-07-15): CI stays credential-free — no opencode session in CI, ever.** The maintainer does not want a persistent opencode auth/session living in CI. So: CI runs *only* the opencode-free checks (`bash -n`, ShellCheck, frontmatter, the source-level `check-agent-permissions.sh` lint, fake-`opencode` unit tests). The resolved-config proofs (`verify-collab-*.sh`) and any runtime probes need a logged-in opencode and therefore run **locally / via `doctor.sh`**, by a human who's already authenticated — never with a stored CI credential. A scheduled *container-build* smoke test could be added later if wanted, but **build-only (no login, no model call)**; it is explicitly NOT required and was dropped as an auth-requiring goal.
 - [x] **Catch agent-permission drift in CI — DONE (2026-07-15), opencode-free.** Installing opencode per-commit was judged too heavy, so instead of running the resolved-config `verify-*.sh` in CI, a **source-level lint** (`collab/tests/check-agent-permissions.sh`, bash/awk only) runs on every push/PR and in `doctor.sh`. It asserts the default-deny-allowlist invariants directly on the agent `.md`: `mode: all`, a `"*": deny` floor, **no** `"*": allow`, the allow-set equals the intended tools, and secret globs denied under `read`. Proven to catch each regression class (re-open, unintended allow, `mode` flip, dropped secret deny, missing floor). It does not prove opencode's *resolved* enforcement (last-match-wins ordering, new tool semantics) — that's the `verify-*.sh` resolved-config proof, which needs the binary and stays local / `doctor.sh` (never CI — credential-free, see the decision above). Two layers: source lint everywhere (cheap, catches human edits); resolved-config proof where opencode is available locally (authoritative).
-- [ ] Tag `v0.1.0` only after the live acceptance matrix passes.
+- [ ] Tag `v0.1.0` — **gate cleared (acceptance matrix passed 2026-07-15)**; awaiting the maintainer's go to tag.
 
 ### Phase 4 — Installability & post-release  *(evidence-driven)*
 - [ ] Simple installer that copies wrapper + commands + owned agents into a target repo; refuses to overwrite; never clobbers the target's `AGENTS.md`/`CLAUDE.md`. (v0.2 — document manual copy for v0.1.)
