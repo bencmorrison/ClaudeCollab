@@ -7,7 +7,7 @@
 # /consensus slash commands shell out to.
 #
 # Usage:
-#   collab/ask.sh [-m provider/model] [-a plan|build] [--edit] <prompt...>
+#   collab/ask.sh [-m provider/model] [-a plan|build] [--edit] [--allow-dirty] <prompt...>
 #
 #   -m provider/model   Pick the model (run `opencode models` to list options).
 #                       Defaults to $COLLAB_MODEL, else opencode's own default.
@@ -30,6 +30,12 @@
 #   --dry-run           Print the exact opencode command that WOULD run (safely
 #                       quoted) and exit 0 without calling any model. Token-free;
 #                       use it to inspect model/agent selection or in tests.
+#   --allow-dirty       Skip the clean-worktree guard on the write path. By default,
+#                       when a write-capable agent (collab-build/build) is used, the
+#                       wrapper refuses to run if `git status` shows uncommitted
+#                       changes (so the model's edits stay attributable and your work
+#                       isn't clobbered) and prints the pre-edit HEAD to diff against.
+#                       --allow-dirty overrides the refusal. Read-only calls skip it.
 #
 # Examples:
 #   collab/ask.sh "Critique this migration plan: ..."          # read-only opinion
@@ -87,6 +93,7 @@ agent="collab-read"  # our read-only agent: denies mutation (bash/edit/write), s
 session=""      # opencode session id to continue (Option B multi-turn), forwarded via -s
 emit_session="" # when set, emit "SESSION: <id>" + the extracted answer (for /collaborate)
 dry_run=""      # when set, print the opencode command and exit without running it
+allow_dirty=""  # when set, skip the clean-worktree guard on the write (--edit) path
 
 # need_arg <flag> <next-token> — reject a value-taking flag whose value is missing
 # or looks like another flag (a common "-m -a build" typo would otherwise swallow
@@ -104,6 +111,7 @@ while [ $# -gt 0 ]; do
     -s|--session) need_arg "$1" "${2:-}"; session="$2"; shift 2 ;;
     --emit-session) emit_session=1; shift ;;
     --dry-run) dry_run=1; shift ;;
+    --allow-dirty) allow_dirty=1; shift ;;
     --edit) agent="collab-build"; shift ;;
     -h|--help) usage 0 ;;
     --) shift; break ;;
@@ -203,6 +211,34 @@ if [ -n "$dry_run" ]; then
   printf '%q ' "${dry[@]}"; printf '</dev/null\n'
   exit 0
 fi
+
+# Clean-worktree guard for the WRITE path. When a write-capable agent (collab-build,
+# or the built-in build) is about to edit files, protect the caller's uncommitted
+# work and keep the delegated changes cleanly attributable: refuse a dirty tree
+# unless --allow-dirty, and record the pre-delegation HEAD so the caller can review
+# exactly what the model changed (`git diff <sha>`). Read-only agents skip this.
+case "$agent" in
+  collab-build|build)
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      dirty="$(git status --porcelain 2>/dev/null)"
+      head_sha="$(git rev-parse --short HEAD 2>/dev/null || echo '(no commits yet)')"
+      if [ -z "$allow_dirty" ] && [ -n "$dirty" ]; then
+        {
+          echo "error: refusing to delegate an edit on a DIRTY worktree — the model's changes would be"
+          echo "indistinguishable from your uncommitted work and could overwrite it. Commit or stash"
+          echo "first, or re-run with --allow-dirty to override."
+          echo "  (git status --short:)"
+          printf '%s\n' "$dirty"
+        } >&2
+        exit 6
+      fi
+      echo "collab: pre-delegation HEAD=${head_sha} — review the model's changes with: git diff ${head_sha}" >&2
+      [ -n "$allow_dirty" ] && [ -n "$dirty" ] \
+        && echo "collab: --allow-dirty — worktree already had uncommitted changes; the diff will mix them with the model's edits." >&2
+    else
+      echo "warning: not a git worktree — cannot protect uncommitted work or record a diff baseline for this delegated edit." >&2
+    fi ;;
+esac
 
 # Echo the resolved selection to stderr (stdout carries only the model's answer /
 # the SESSION payload). Cheap observability into what actually ran.

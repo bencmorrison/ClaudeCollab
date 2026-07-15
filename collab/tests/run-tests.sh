@@ -69,7 +69,9 @@ run_ask -m openai/gpt-5.5 "q"
   || no "-m not forwarded (got: $(tr '\n' ' ' <"$argsfile"))"
 
 # 3. --edit switches to the collab-build agent (hardened editor, not raw build).
-run_ask --edit "change a file"
+#    --allow-dirty so this agent-selection check is independent of the worktree
+#    guard (tested separately below) and of this repo's cleanliness during dev.
+run_ask --edit --allow-dirty "change a file"
 args_has 'collab-build' && ! args_has 'collab-read' && ! args_has 'build' \
   && ok "--edit -> --agent collab-build" \
   || no "--edit did not select collab-build (got: $(tr '\n' ' ' <"$argsfile"))"
@@ -161,7 +163,8 @@ rm -rf "$tmp_repo"
 tmp_repo2="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$tmp_repo2/collab"
 cp "$ask" "$tmp_repo2/collab/ask.sh"; cp "$repo_root/collab/models.policy" "$tmp_repo2/collab/" 2>/dev/null || true
 : > "$argsfile"; errf2="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"
-OUT="$(COLLAB_POLICY="$allow_pol" bash "$tmp_repo2/collab/ask.sh" --edit "q" 2>"$errf2")"; RC=$?
+# --allow-dirty so the worktree guard (tested separately) doesn't gate this fallback check.
+OUT="$(COLLAB_POLICY="$allow_pol" bash "$tmp_repo2/collab/ask.sh" --edit --allow-dirty "q" 2>"$errf2")"; RC=$?
 ERR2="$(cat "$errf2")"; rm -f "$errf2"
 # Must fall back to build AND warn loudly that hardening is gone — the warning is the
 # safety-relevant behavior of this fallback, so assert it, not just the agent choice.
@@ -184,6 +187,47 @@ COLLAB_REQUIRE_HARDENED=1 COLLAB_POLICY="$allow_pol" bash "$tmp_repo3/collab/ask
   && ok "COLLAB_REQUIRE_HARDENED=1 + missing def -> exit 5, no fallback, no call" \
   || no "REQUIRE_HARDENED not enforced (read rc=$rc_read, edit rc=$RC)"
 rm -rf "$tmp_repo3"
+
+# 14d-g. Clean-worktree guard on the write path. Run the REAL ask.sh with cwd set to
+# a temp git repo so the guard sees a controlled state (the collab-build def is still
+# found via ask.sh's own path, so agent=collab-build, no fallback). commit.gpgsign is
+# forced off so the test never triggers a signing prompt.
+guard_repo="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+( cd "$guard_repo" && git init -q && git config user.email t@t.co && git config user.name t \
+  && git config commit.gpgsign false && git commit -q --allow-empty -m init ) 2>/dev/null
+if [ -d "$guard_repo/.git" ]; then
+  # clean tree -> proceeds, opencode called, stderr notes the pre-delegation HEAD.
+  : > "$argsfile"
+  ERRG="$(cd "$guard_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" --edit "q" 2>&1 >/dev/null)"; RCG=$?
+  { [ "$RCG" -eq 0 ] && args_has 'collab-build' && printf '%s' "$ERRG" | grep -qi 'pre-delegation HEAD'; } \
+    && ok "guard: clean tree + --edit -> runs, prints pre-delegation HEAD" \
+    || no "guard clean-tree wrong (rc=$RCG, err: $ERRG)"
+
+  # dirty tree (untracked file) -> refuses (exit 6), opencode NOT called.
+  ( cd "$guard_repo" && : > untracked.txt )
+  : > "$argsfile"
+  ( cd "$guard_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" --edit "q" ) >/dev/null 2>&1; RCG=$?
+  { [ "$RCG" -eq 6 ] && ! [ -s "$argsfile" ]; } \
+    && ok "guard: dirty tree + --edit -> exit 6, opencode never called" \
+    || no "guard dirty-tree not enforced (rc=$RCG, argv present=$( [ -s "$argsfile" ] && echo yes || echo no))"
+
+  # dirty tree + --allow-dirty -> proceeds anyway.
+  : > "$argsfile"
+  ( cd "$guard_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" --edit --allow-dirty "q" ) >/dev/null 2>&1; RCG=$?
+  { [ "$RCG" -eq 0 ] && args_has 'collab-build'; } \
+    && ok "guard: dirty tree + --allow-dirty -> runs anyway" \
+    || no "guard --allow-dirty did not override (rc=$RCG)"
+
+  # dirty tree + READ-ONLY (default agent) -> guard is write-path only, so it runs.
+  : > "$argsfile"
+  ( cd "$guard_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" "q" ) >/dev/null 2>&1; RCG=$?
+  { [ "$RCG" -eq 0 ] && args_has 'collab-read'; } \
+    && ok "guard: dirty tree + read-only -> guard skipped, runs" \
+    || no "guard fired on the read-only path (rc=$RCG)"
+else
+  ok "worktree guard (skipped: git init unavailable in this sandbox)"
+fi
+rm -rf "$guard_repo"
 
 # 15. COLLAB_MODEL supplies the default model when no -m is given.
 : > "$argsfile"
