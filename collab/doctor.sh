@@ -160,6 +160,13 @@ else
   info "no policy file at $pol — default-allow (every model permitted). Add one to gate models."
 fi
 
+# --- 6z. Shebang conformance (needs the git checkout; skipped in installs) ----
+if [ -d .git ] && [ -f collab/tests/check-shebangs.sh ]; then
+  hdr "Shebang conformance"
+  if bash collab/tests/check-shebangs.sh >/dev/null 2>&1; then pass "every script uses #!/usr/bin/env bash"
+  else bad "non-conforming shebang(s) — run: bash collab/tests/check-shebangs.sh"; fi
+fi
+
 # --- 6a. Agent permission invariants (source-level lint; no opencode needed) --
 hdr "Agent permission invariants (source lint)"
 if bash collab/tests/check-agent-permissions.sh >/dev/null 2>&1; then

@@ -49,6 +49,9 @@ jobs:
           # without failing on info/style nits. Tighten later if desired.
           xargs -a /tmp/shfiles shellcheck --severity=warning --shell=bash
 
+      - name: Shebang conformance (#!/usr/bin/env bash everywhere)
+        run: bash collab/tests/check-shebangs.sh
+
       - name: Frontmatter validation
         run: bash collab/tests/check-frontmatter.sh
 

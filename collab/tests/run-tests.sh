@@ -459,6 +459,47 @@ printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  edit: allow' '
 run_lint && no "lint MISSED collab-build floor-after-allows (edit path dead)" || ok "lint: catches '*': deny placed after the allows"
 rm -rf "$lintdir"
 
+# --- check-shebangs.sh meta-tests ----------------------------------------------
+# A lint nobody proved can fail is decoration. Assert it accepts the conforming
+# form and rejects each way a script could drift off `#!/usr/bin/env bash`.
+shb="$repo_root/collab/tests/check-shebangs.sh"
+shbdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+
+printf '#!/usr/bin/env bash\necho hi\n' > "$shbdir/good.sh"
+bash "$shb" "$shbdir/good.sh" >/dev/null 2>&1 \
+  && ok "shebang lint: accepts #!/usr/bin/env bash" \
+  || no "shebang lint rejects the correct form (false positive)"
+
+printf '#!/bin/bash\necho hi\n' > "$shbdir/bad.sh"
+bash "$shb" "$shbdir/bad.sh" >/dev/null 2>&1 \
+  && no "shebang lint MISSED #!/bin/bash" \
+  || ok "shebang lint: catches #!/bin/bash"
+
+printf '#!/bin/sh\necho hi\n' > "$shbdir/sh.sh"
+bash "$shb" "$shbdir/sh.sh" >/dev/null 2>&1 \
+  && no "shebang lint MISSED #!/bin/sh" \
+  || ok "shebang lint: catches #!/bin/sh"
+
+# A trailing flag still isn't the agreed form (and `env bash -e` is unportable anyway).
+printf '#!/usr/bin/env bash -e\necho hi\n' > "$shbdir/flag.sh"
+bash "$shb" "$shbdir/flag.sh" >/dev/null 2>&1 \
+  && no "shebang lint MISSED '#!/usr/bin/env bash -e'" \
+  || ok "shebang lint: catches a trailing-flag variant"
+
+# Extension-less scripts must be covered too — that's how fake-opencode is shaped.
+printf '#!/bin/bash\necho hi\n' > "$shbdir/noext"
+bash "$shb" "$shbdir/noext" >/dev/null 2>&1 \
+  && no "shebang lint MISSED an extension-less script" \
+  || ok "shebang lint: covers extension-less scripts"
+
+# A file with no shebang at all is not a script — must be ignored, not failed.
+printf 'just data\n' > "$shbdir/data.txt"
+bash "$shb" "$shbdir/data.txt" >/dev/null 2>&1 \
+  && ok "shebang lint: ignores files without a shebang" \
+  || no "shebang lint wrongly failed a non-script file"
+
+rm -rf "$shbdir"
+
 echo
 printf 'wrapper + panel + lint tests: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -135,7 +135,7 @@ if [ "$action" = "uninstall" ]; then
     for k in ask.sh panel-models.sh doctor.sh verify-collab-read.sh verify-collab-build.sh \
              verify-collab-research.sh models.policy collab.conf.example .install-manifest \
              tests/run-tests.sh tests/check-agent-permissions.sh tests/check-frontmatter.sh \
-             tests/test-install.sh tests/fake-opencode; do
+             tests/check-shebangs.sh tests/test-install.sh tests/fake-opencode; do
       rm -f "$dest/collab/$k"
     done
     removed=1
