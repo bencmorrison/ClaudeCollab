@@ -18,8 +18,9 @@ node_modules/
 .opencode/package-lock.json
 .opencode/bun.lock
 
-# Sentinel left by collab/verify-collab-read.sh if a run is interrupted mid-probe
-.collab-read-deny-probe.txt
+# Probe sentinels the verify scripts create (and normally clean up); ignore any that
+# linger if a run is interrupted mid-probe.
+.collab-*-probe.*
 
 # Logs / temp
 *.log

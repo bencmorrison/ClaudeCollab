@@ -2,7 +2,7 @@
 
 Let **Claude Code** collaborate with **other LLMs** (OpenAI, GitHub Copilot's model stack, Google Gemini, or anything else) for a second opinion, a multi-model panel, or delegated coding — using **[opencode](https://opencode.ai)** as the gateway.
 
-Claude Code stays the driver. It calls out to opencode via a few repo-local slash commands. opencode handles model access and auth, so this works off your existing **subscriptions — no API keys stored here**. Anyone who clones this repo and has opencode authenticated can use it.
+Claude Code stays the driver. It calls out to opencode via a few repo-local slash commands. opencode handles model access and auth, so this works off **whatever providers your opencode auth gives you — paid subscriptions or free tiers — with no API keys stored or managed by this repo**. Anyone who clones this repo and has opencode authenticated can use it.
 
 ## How it works
 
@@ -23,7 +23,7 @@ Claude Code  ──(slash command)──▶  collab/ask.sh  ──▶  opencode 
    ```bash
    npm install -g opencode-ai        # or: brew install anomalyco/tap/opencode
    ```
-2. **Authenticate opencode to your providers** (interactive, opens a browser for OAuth — this is the subscription login, no API keys):
+2. **Authenticate opencode to your providers** (interactive, opens a browser for OAuth — your provider login, subscription or free tier, no API keys):
    ```bash
    opencode auth login
    ```
@@ -94,9 +94,18 @@ Prefer a **non-Claude** model for consults so the second opinion is genuinely in
 
 The slash commands are thin wrappers over one script you can also call yourself:
 ```bash
-collab/ask.sh [-m provider/model] [-a plan|build] [--edit] <prompt...>
+collab/ask.sh [-m provider/model] [-a collab-read|collab-build|plan|build] [--edit] [--allow-dirty] <prompt...>
 ```
-See the header of [`collab/ask.sh`](collab/ask.sh) for details.
+See the header of [`collab/ask.sh`](collab/ask.sh) (or `bash collab/ask.sh -h`) for the full interface.
+
+## Safety
+
+ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Use it on trusted repositories. See **[SECURITY.md](SECURITY.md)** for the full threat model; the essentials:
+
+- **Read-only commands (`/consult`, `/panel`, `/review`, `/collaborate`)** run under a default-deny allowlist agent that can *only* read non-secret files — no mutation, no content search, no network — enforced at opencode's permission layer, not by asking the model nicely. Proven by `collab/verify-collab-read.sh`.
+- **`/delegate` can edit files and run shell.** Its non-mutation restrictions are defense-in-depth, not a guarantee (a coding task needs `bash`, and `bash` can reach around them), so **the trust boundary is you reviewing the diff.** The wrapper refuses to delegate on a dirty worktree and prints the pre-edit `HEAD` so the diff is exactly the model's work.
+- **External model output is treated as data, not instructions** — a consulted model can't smuggle commands into Claude's control flow.
+- Run `bash collab/doctor.sh` to check your setup before relying on any of this.
 
 ## Optional: skip the permission prompts
 
@@ -116,7 +125,7 @@ The first time Claude Code runs `collab/ask.sh` it will ask for permission. To p
 
 ## Notes & limits
 
-- **Cost**: calls run against your opencode-authenticated subscriptions; usage counts against those plans. `opencode stats` shows token usage/cost.
+- **Cost**: calls run against your opencode-authenticated providers; usage counts against those plans (free tiers included). `opencode stats` shows token usage/cost.
 - **`--auto`**: `/delegate` auto-approves opencode's tool use so it doesn't block on prompts. Always review the diff — that's step 2 of the command.
 - **Not just for coding**: `/consult` and `/panel` are great for planning and design reviews, which is often where a second model helps most.
 - **Extending**: to add the richer multi-model debate/consensus tooling later, `consult-llm` (an MCP server) can use opencode as a no-API-key backend. Not required for the above.
