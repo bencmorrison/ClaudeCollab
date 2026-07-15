@@ -262,6 +262,43 @@ FAKE_OPENCODE_TEXT="" run_ask --emit-session -m openai/gpt-5.5 "q"
   && ok "--emit-session empty answer warns, exit 0" \
   || no "emit-session empty-answer handling wrong (rc=$RC, err: $ERR)"
 
+# --- panel-models.sh (the /panel model-set resolver; opencode-free) --------------
+panel="$repo_root/collab/panel-models.sh"
+perrf="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"
+# P1. Two distinct cross-provider models -> both listed in order, no warning.
+POUT="$(bash "$panel" openai/gpt-5 google/gemini-2.5-pro 2>"$perrf")"; PERR="$(cat "$perrf")"
+{ [ "$(printf '%s' "$POUT" | sed -n 1p)" = "openai/gpt-5" ] \
+  && [ "$(printf '%s' "$POUT" | sed -n 2p)" = "google/gemini-2.5-pro" ] \
+  && [ -z "$PERR" ]; } \
+  && ok "panel: distinct cross-provider set -> listed in order, no warning" \
+  || no "panel distinct-set wrong (out=$(printf '%s' "$POUT"|tr '\n' ,) err=$PERR)"
+
+# P2. Duplicate id -> dropped with a warning, list de-duplicated.
+POUT="$(bash "$panel" openai/gpt-5 openai/gpt-5 google/gemini 2>"$perrf")"; PERR="$(cat "$perrf")"
+{ [ "$(printf '%s\n' "$POUT" | grep -c .)" -eq 2 ] && printf '%s' "$PERR" | grep -qi 'duplicate'; } \
+  && ok "panel: duplicate id dropped + warned" \
+  || no "panel dedupe wrong (out=$(printf '%s' "$POUT"|tr '\n' ,) err=$PERR)"
+
+# P3. Single-provider set -> diversity-theater warning (but still lists them).
+POUT="$(bash "$panel" openai/gpt-5 openai/gpt-4 2>"$perrf")"; PERR="$(cat "$perrf")"
+{ [ "$(printf '%s\n' "$POUT" | grep -c .)" -eq 2 ] && printf '%s' "$PERR" | grep -qi 'single-family\|diversity'; } \
+  && ok "panel: single-provider set warns (diversity theater)" \
+  || no "panel single-provider warn missing (err=$PERR)"
+
+# P4. No args -> reads $COLLAB_MODELS (comma-separated), splits it.
+POUT="$(COLLAB_MODELS='anthropic/claude-sonnet-5, openai/gpt-5' bash "$panel" 2>/dev/null)"
+{ [ "$(printf '%s' "$POUT" | sed -n 1p)" = "anthropic/claude-sonnet-5" ] \
+  && [ "$(printf '%s' "$POUT" | sed -n 2p)" = "openai/gpt-5" ]; } \
+  && ok "panel: COLLAB_MODELS (comma-separated) parsed in order" \
+  || no "panel COLLAB_MODELS parse wrong (out=$(printf '%s' "$POUT"|tr '\n' ,))"
+
+# P5. No models at all -> exit 2, nothing on stdout.
+POUT="$(COLLAB_MODELS='' bash "$panel" 2>/dev/null)"; PRC=$?
+{ [ "$PRC" -eq 2 ] && [ -z "$POUT" ]; } \
+  && ok "panel: no models -> exit 2, empty stdout" \
+  || no "panel empty-input wrong (rc=$PRC, out=$POUT)"
+rm -f "$perrf"
+
 echo
-printf 'ask.sh tests: %d passed, %d failed\n' "$pass" "$fail"
+printf 'wrapper + panel tests: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

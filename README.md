@@ -1,6 +1,6 @@
 # ClaudeCollab
 
-Let **Claude Code** collaborate with **other LLMs** (OpenAI, GitHub Copilot's model stack, Google Gemini, or anything else) for a second opinion, multi-model consensus, or delegated coding — using **[opencode](https://opencode.ai)** as the gateway.
+Let **Claude Code** collaborate with **other LLMs** (OpenAI, GitHub Copilot's model stack, Google Gemini, or anything else) for a second opinion, a multi-model panel, or delegated coding — using **[opencode](https://opencode.ai)** as the gateway.
 
 Claude Code stays the driver. It calls out to opencode via a few repo-local slash commands. opencode handles model access and auth, so this works off your existing **subscriptions — no API keys stored here**. Anyone who clones this repo and has opencode authenticated can use it.
 
@@ -14,7 +14,7 @@ Claude Code  ──(slash command)──▶  collab/ask.sh  ──▶  opencode 
      └───────────────────  reads the other model's answer, then reasons over it  ──┘
 ```
 
-- `collab-read` agent → read-only **by construction** for opinions (`/consult`, `/consensus`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`. (Falls back to opencode's weaker compliance-only `plan` agent if the def is missing.)
+- `collab-read` agent → read-only **by construction** for opinions (`/consult`, `/panel`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`. (Falls back to opencode's weaker compliance-only `plan` agent if the def is missing.)
 - `collab-build` agent → can edit files in the repo for `/delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else (sub-agents, grep/glob, network, secret reads) is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`. Falls back to opencode's unrestricted `build` agent if the def is missing.
 
 ## Setup
@@ -63,15 +63,17 @@ Run these inside Claude Code in this repo:
 | Command | What it does |
 |---|---|
 | `/consult <question>` | Get a second opinion from another LLM on a plan or approach (read-only). Claude weighs it against its own view. |
-| `/consensus <question>` | Ask 2–3 different models the same question and have Claude synthesize + break ties. |
+| `/panel <question>` | Ask 2–3 different models the same question and have Claude synthesize + break ties. Warns if the panel isn't cross-provider. |
 | `/delegate <coding task>` | Hand a coding task to another model (it edits files), then Claude reviews the diff. |
 
 Examples:
 ```
 /consult Is an actor the right concurrency model here, or should I use a serial queue?
-/consensus What's the best migration path off Core Data for this app?
+/panel What's the best migration path off Core Data for this app?
 /delegate Add bounds checking to the ring buffer in src/buffer.c and a test
 ```
+
+For `/panel`, set a default ordered model set once with `export COLLAB_MODELS="openai/gpt-5 google/gemini-2.5-pro"` (space- or comma-separated).
 
 ### Picking the model
 
@@ -114,5 +116,5 @@ The first time Claude Code runs `collab/ask.sh` it will ask for permission. To p
 
 - **Cost**: calls run against your opencode-authenticated subscriptions; usage counts against those plans. `opencode stats` shows token usage/cost.
 - **`--auto`**: `/delegate` auto-approves opencode's tool use so it doesn't block on prompts. Always review the diff — that's step 2 of the command.
-- **Not just for coding**: `/consult` and `/consensus` are great for planning and design reviews, which is often where a second model helps most.
+- **Not just for coding**: `/consult` and `/panel` are great for planning and design reviews, which is often where a second model helps most.
 - **Extending**: to add the richer multi-model debate/consensus tooling later, `consult-llm` (an MCP server) can use opencode as a no-API-key backend. Not required for the above.

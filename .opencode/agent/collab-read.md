@@ -5,7 +5,7 @@ description: >-
   search/glob, sub-agent spawning, and network egress are denied at opencode's
   permission layer, and secret files are carved out of reads. A delegated model can
   advise on repo contents but cannot change the repo, read credentials, search/enumerate
-  them, or exfiltrate over the network. Used by /consult, /consensus (panel), and
+  them, or exfiltrate over the network. Used by /consult, /panel, and
   /collaborate. Read-only + non-exfiltrating by construction, not by model compliance.
 mode: all
 permission:

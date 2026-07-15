@@ -1,13 +1,13 @@
 ---
-description: Ask two or more different LLMs the same question and synthesize their answers
+description: Convene a panel — ask two or more different LLMs the same question and synthesize their answers
 argument-hint: [question]
-allowed-tools: Bash(bash collab/ask.sh:*), Bash(COLLAB_CONFIRMED=1 bash collab/ask.sh:*), Bash(opencode models:*)
+allowed-tools: Bash(bash collab/ask.sh:*), Bash(COLLAB_CONFIRMED=1 bash collab/ask.sh:*), Bash(bash collab/panel-models.sh:*), Bash(opencode models:*)
 ---
-Get multiple independent perspectives on:
+Convene a panel of models for multiple independent perspectives on:
 
 $ARGUMENTS
 
-1. Choose 2-3 models from different providers/families for genuine diversity (run `opencode models` if unsure what's available). Avoid picking the same underlying model twice.
+1. **Resolve the panel's models.** Run `bash collab/panel-models.sh [provider/model ...]` — pass explicit ids, or pass none to use `$COLLAB_MODELS` (ordered, space- or comma-separated). It de-duplicates and **warns about single-model or single-provider sets ("diversity theater")**. Read its stdout (the resolved list) and heed any stderr warnings; if it warns the panel isn't diverse, pick models from different providers/families before continuing (run `opencode models` to see what's available). Aim for 2-3 models from different families.
    - Your role decides whether Anthropic is on the panel: if you're purely **coordinating** (the user asked you to hand the work out and synthesize, not weigh in yourself), an **Anthropic model may be one of the 2-3** so that perspective is represented. If you're also **authoring** your own view as the tie-breaker, lean toward **non-Anthropic** models — you already supply the Anthropic perspective.
 2. Ask each the SAME question, one call per model:
    `bash collab/ask.sh -m <provider/model> "<the question with full context>"`

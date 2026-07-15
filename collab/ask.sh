@@ -3,8 +3,8 @@
 # ask.sh — let Claude Code consult or delegate to another LLM via opencode.
 #
 # opencode handles model access and auth (subscription/OAuth — no API keys needed
-# here). This script is the single entry point the /consult, /delegate and
-# /consensus slash commands shell out to.
+# here). This script is the single entry point the /consult, /delegate, /panel and
+# /collaborate slash commands shell out to.
 #
 # Usage:
 #   collab/ask.sh [-m provider/model] [-a plan|build] [--edit] [--allow-dirty] <prompt...>
