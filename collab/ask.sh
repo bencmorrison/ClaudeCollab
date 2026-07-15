@@ -58,7 +58,10 @@ policy_tier() {
   local model="$1" tier pat
   [ -n "$model" ] || { echo allow; return; }        # unknown default model: can't police
   [ -f "$policy_file" ] || { echo allow; return; }
-  while read -r tier pat _; do
+  # `|| [ -n "$tier" ]` so a final line with no trailing newline is still read —
+  # otherwise a policy file ending in `deny <model>` (no newline) drops that rule
+  # and fails OPEN (the deny is silently ignored).
+  while read -r tier pat _ || [ -n "$tier" ]; do
     case "$tier" in ''|'#'*) continue ;; esac        # skip blanks / comments
     case "$tier" in allow|ask|deny) ;; *) continue ;; esac
     # shellcheck disable=SC2254 # $pat is intentionally a glob pattern
@@ -68,10 +71,12 @@ policy_tier() {
 }
 
 model="${COLLAB_MODEL:-}"
-agent="collab-read"  # our read-only agent: denies bash/write/edit/patch at opencode's
-                     # permission layer (read-only by construction, not just model
-                     # compliance). Proven by collab/verify-collab-read.sh. Falls back
-                     # to opencode's `plan` if the def is missing — see below.
+agent="collab-read"  # our read-only agent: denies mutation (bash/edit/write), secret
+                     # reads (.env/keys/creds) and network egress (webfetch/websearch)
+                     # at opencode's permission layer — read-only + no-egress by
+                     # construction, not model compliance. Proven by
+                     # collab/verify-collab-read.sh. Falls back to `plan` (weaker) if
+                     # the def is missing — see below.
 session=""      # opencode session id to continue (Option B multi-turn), forwarded via -s
 emit_session="" # when set, emit "SESSION: <id>" + the extracted answer (for /collaborate)
 dry_run=""      # when set, print the opencode command and exit without running it
@@ -116,12 +121,25 @@ if ! command -v opencode >/dev/null 2>&1; then
   exit 127
 fi
 
+# Resolve a timeout binary for $COLLAB_TIMEOUT: GNU coreutils `timeout`, or
+# `gtimeout` on macOS (brew coreutils). If a timeout was requested but neither
+# exists, warn and run UNCAPPED rather than crashing (macOS ships neither).
+timeout_bin=""
+if command -v timeout >/dev/null 2>&1; then timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then timeout_bin="gtimeout"; fi
+if [ -n "${COLLAB_TIMEOUT:-}" ] && [ -z "$timeout_bin" ]; then
+  echo "warning: \$COLLAB_TIMEOUT set but no 'timeout'/'gtimeout' on PATH; running without a cap." >&2
+fi
+
 # If we default to collab-read but its definition isn't present (e.g. wrapper run
 # from outside the repo), fall back to opencode's built-in `plan` rather than let
-# opencode silently drop to the full-access `build` agent. `plan` is weaker
-# (compliance-only) but never grants write/shell; a silent `build` fallback would.
+# opencode silently drop to the full-access `build` agent. `plan` is a WEAKER
+# read-only: it denies `edit` but NOT `bash`, and does not deny secret reads or
+# network — so its read-only-ness is compliance, not construction. It's still a
+# safer fallback than `build` (which grants everything), but it is not equivalent
+# to collab-read; warn loudly so the weaker guarantee is visible.
 if [ "$agent" = "collab-read" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-read.md" ]; then
-  echo "warning: collab-read agent definition not found; falling back to read-only 'plan'." >&2
+  echo "warning: collab-read agent def not found; falling back to opencode's 'plan' — WEAKER (compliance-only; does not deny bash, secret reads, or network)." >&2
   agent="plan"
 fi
 
@@ -150,7 +168,7 @@ args=(run --agent "$agent" --auto)
 # what's printed is exactly what would execute) and stop. No model is called.
 if [ -n "$dry_run" ]; then
   dry=()
-  [ -n "${COLLAB_TIMEOUT:-}" ] && dry+=(timeout "$COLLAB_TIMEOUT")
+  [ -n "${COLLAB_TIMEOUT:-}" ] && [ -n "$timeout_bin" ] && dry+=("$timeout_bin" "$COLLAB_TIMEOUT")
   dry+=(opencode "${args[@]}")
   [ -n "$emit_session" ] && dry+=(--format json)
   dry+=("$prompt")
@@ -172,8 +190,8 @@ echo "collab: model=${model:-<opencode default>} agent=${agent}${session:+ sessi
 # task running many tool iterations — can take a long time, and a hard cap would kill
 # it. Set $COLLAB_TIMEOUT (seconds) only if you want a backstop against a stuck call.
 run_opencode() {
-  if [ -n "${COLLAB_TIMEOUT:-}" ]; then
-    timeout "$COLLAB_TIMEOUT" opencode "$@" </dev/null
+  if [ -n "${COLLAB_TIMEOUT:-}" ] && [ -n "$timeout_bin" ]; then
+    "$timeout_bin" "$COLLAB_TIMEOUT" opencode "$@" </dev/null
   else
     opencode "$@" </dev/null
   fi
@@ -189,7 +207,7 @@ if [ -n "$emit_session" ]; then
   command -v jq >/dev/null 2>&1 || { echo "error: --emit-session needs 'jq' (not found)." >&2; exit 127; }
   raw="$(run_opencode "${args[@]}" --format json "$prompt")" || status=$?
   if [ "$status" -eq 124 ]; then
-    echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT}s with no response." >&2
+    echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT:-}s with no response." >&2
     exit "$status"
   elif [ "$status" -ne 0 ]; then
     echo "error: opencode exited $status (model '${model:-opencode default}', agent '${agent}')." >&2
@@ -205,7 +223,7 @@ if [ -n "$emit_session" ]; then
 else
   run_opencode "${args[@]}" "$prompt" || status=$?
   if [ "$status" -eq 124 ]; then
-    echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT}s with no response (model '${model:-opencode default}', agent '${agent}'). Raise \$COLLAB_TIMEOUT or re-run." >&2
+    echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT:-}s with no response (model '${model:-opencode default}', agent '${agent}'). Raise \$COLLAB_TIMEOUT or re-run." >&2
   elif [ "$status" -ne 0 ]; then
     echo "error: opencode exited $status (model '${model:-opencode default}', agent '${agent}')." >&2
   fi

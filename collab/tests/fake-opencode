@@ -19,7 +19,7 @@ set -euo pipefail
 # Drain stdin so we can prove ask.sh redirected it from /dev/null (empty capture).
 if [ -n "${FAKE_OPENCODE_STDIN:-}" ]; then cat > "$FAKE_OPENCODE_STDIN"; else cat >/dev/null; fi
 
-text="${FAKE_OPENCODE_TEXT:-canned answer}"
+text="${FAKE_OPENCODE_TEXT-canned answer}"
 sid="${FAKE_OPENCODE_SID:-ses_fake}"
 
 json=0

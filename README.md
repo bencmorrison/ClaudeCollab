@@ -14,7 +14,7 @@ Claude Code  ──(slash command)──▶  collab/ask.sh  ──▶  opencode 
      └───────────────────  reads the other model's answer, then reasons over it  ──┘
 ```
 
-- `plan` agent → read-only, safe for opinions (`/consult`, `/consensus`)
+- `collab-read` agent → read-only **by construction** for opinions (`/consult`, `/consensus`): denies file mutation, secret reads (`.env`/keys/creds), and network egress at opencode's permission layer, verified by `collab/verify-collab-read.sh`. (Falls back to opencode's weaker compliance-only `plan` agent if the def is missing.)
 - `build` agent → can edit files in the repo (`/delegate`)
 
 ## Setup
