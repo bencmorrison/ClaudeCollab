@@ -14,6 +14,7 @@ set -uo pipefail
 # that need these vars set them inline as command-prefixes, so clearing the ambient
 # values here is safe and correct.
 unset COLLAB_MODEL COLLAB_CONFIRMED COLLAB_TIMEOUT COLLAB_POLICY
+unset COLLAB_LOG COLLAB_LOG_PROMPTS COLLAB_RUN_ID COLLAB_COMMAND COLLAB_LOG_RETENTION_DAYS
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
@@ -24,6 +25,12 @@ fakedir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
 cp "$here/fake-opencode" "$fakedir/opencode"
 chmod +x "$fakedir/opencode"
 export PATH="$fakedir:$PATH"
+
+# Send the evidence layer somewhere disposable. Without this the suite would append a
+# run to the developer's real collab/logs/ on every invocation — polluting the audit
+# trail with fake-opencode's "canned answer" is exactly the kind of noise a watcher
+# should never have to reason about.
+export COLLAB_LOG_DIR="$fakedir/logs"
 
 # Neutral permissive policy so policy logic doesn't interfere unless a test opts in.
 allow_pol="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"; printf 'allow *\n' > "$allow_pol"
@@ -500,6 +507,168 @@ bash "$shb" "$shbdir/data.txt" >/dev/null 2>&1 \
 
 rm -rf "$shbdir"
 
+# ---------------------------------------------------------------------------
+# Evidence layer (collab/log.sh + ask.sh's hooks) — Phase W0.
+# This is the data a watcher agent audits INSTEAD of Claude's own summary, so the
+# properties below are the whole point: the pair must be complete, the response must
+# be verbatim, and a gap must be loud rather than look clean.
+# ---------------------------------------------------------------------------
 echo
-printf 'wrapper + panel + lint tests: %d passed, %d failed\n' "$pass" "$fail"
+echo "== evidence layer (log.sh) =="
+logsh="$repo_root/collab/log.sh"
+# run_logged <run_id> -- <ask args...> : ask.sh with logging pinned to one run.
+run_logged() {
+  local rid="$1"; shift
+  : > "$argsfile"
+  COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$rid" COLLAB_COMMAND=/consult \
+    bash "$ask" "$@" >/dev/null 2>&1 || true
+}
+newrun() { bash "$logsh" new-run /consult; }
+entries() { cat "$COLLAB_LOG_DIR/$1/calls.jsonl" 2>/dev/null; }
+
+# A call writes BOTH halves of the pair, keyed by one call_id.
+r="$(newrun)"; run_logged "$r" -m openai/gpt-5 "hello"
+n_start="$(entries "$r" | jq -rs '[.[]|select(.status=="started")]|length')"
+n_done="$(entries "$r"  | jq -rs '[.[]|select(.status=="completed")]|length')"
+same_id="$(entries "$r" | jq -rs '[.[]|select(.type=="call").call_id]|unique|length')"
+{ [ "$n_start" = 1 ] && [ "$n_done" = 1 ] && [ "$same_id" = 1 ]; } \
+  && ok "log: one call = started+completed sharing one call_id" \
+  || no "log: expected 1 started + 1 completed with a shared call_id (got $n_start/$n_done/$same_id ids)"
+
+# The response is recorded VERBATIM — a truncated/paraphrased log would let "the
+# model only said X" survive contact with the evidence.
+r="$(newrun)"; FAKE_OPENCODE_TEXT='multi
+line "quoted" \back\ answer' run_logged "$r" -m m/x "q"
+got="$(entries "$r" | jq -rs '[.[]|select(.status=="completed").raw_response][0]')"
+[ "$got" = 'multi
+line "quoted" \back\ answer' ] \
+  && ok "log: raw_response is verbatim (newlines, quotes, backslashes survive)" \
+  || no "log: raw_response mangled — got: $got"
+
+# ask.sh must record the selection a watcher needs to judge the call.
+r="$(newrun)"; run_logged "$r" -m openai/gpt-5 --research "q"
+{ [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].model')" = "openai/gpt-5" ] \
+  && [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].agent')" = "collab-research" ] \
+  && [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].command')" = "/consult" ]; } \
+  && ok "log: records model, agent and command" \
+  || no "log: model/agent/command not recorded correctly"
+
+# A failed call must still close its pair — otherwise a crash reads as a clean log.
+r="$(newrun)"; FAKE_OPENCODE_EXIT=3 run_logged "$r" -m m/x "boom"
+{ [ "$(entries "$r" | jq -rs '[.[]|select(.status=="completed")][0].exit_code')" = 3 ] \
+  && bash "$logsh" verify "$r" >/dev/null 2>&1; } \
+  && ok "log: a non-zero exit still writes completed (exit_code recorded, integrity ok)" \
+  || no "log: failed call left an unpaired started or lost its exit_code"
+
+# The integrity contract: an unpaired started must FAIL, loudly.
+r="$(newrun)"
+bash "$logsh" started --call-id c-orphan --command /consult --model m/x --agent collab-read >/dev/null 2>&1
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED a started with no completed (a silent gap would read as clean)" \
+  || ok "log: verify fails an unpaired started (exit 7)"
+
+# A rewritten entry must fail (accidental corruption; not a tamper-proofing claim).
+# Two cases, because the chain and the self-check cover different lines: editing a
+# NON-final entry breaks the chain, while editing the LAST entry breaks nothing in the
+# chain (no successor holds its hash) and is caught only by response_hash.
+r="$(newrun)"; run_logged "$r" -m m/x "q"; run_logged "$r" -m m/x "q2"
+sed -i '2s/canned answer/SOMETHING ELSE/' "$COLLAB_LOG_DIR/$r/calls.jsonl" 2>/dev/null
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED an edited middle entry (prev_hash chain not checked)" \
+  || ok "log: verify fails an edited middle entry (prev_hash mismatch)"
+
+r="$(newrun)"; run_logged "$r" -m m/x "q"
+sed -i '$s/canned answer/SOMETHING ELSE/' "$COLLAB_LOG_DIR/$r/calls.jsonl" 2>/dev/null
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED an edited LAST entry (the chain cannot cover the tail — response_hash must)" \
+  || ok "log: verify fails an edited last entry (response_hash self-check covers the tail)"
+
+# Concurrency is real: /panel fires 2-3 calls at once. Every line must stay valid JSON
+# (no torn appends) and turns must be distinct — computing `turn` outside the lock made
+# all three claim turn 1.
+r="$(newrun)"
+for m in a/1 b/2 c/3; do run_logged "$r" -m "$m" "concurrent q" & done; wait
+n="$(entries "$r" | wc -l | tr -d ' ')"; valid="$(entries "$r" | jq -s 'length' 2>/dev/null || echo -1)"
+turns="$(entries "$r" | jq -rs '[.[]|select(.status=="started").turn]|unique|length')"
+{ [ "$n" = 6 ] && [ "$valid" = 6 ] && [ "$turns" = 3 ]; } \
+  && ok "log: 3 concurrent calls -> 6 intact JSONL lines with distinct turns" \
+  || no "log: concurrent append corrupted (lines=$n valid=$valid distinct turns=$turns)"
+
+# Prompt privacy (W0.6). `full` is the default (the brief Claude wrote is itself audit
+# material); `hash` proves the prompt didn't change without revealing it; `off` means
+# off — no text AND no digest.
+r="$(newrun)"; COLLAB_LOG_PROMPTS=full run_logged "$r" -m m/x "SENTINEL-abc123"
+entries "$r" | grep -qF 'SENTINEL-abc123' \
+  && ok "log: COLLAB_LOG_PROMPTS=full records the prompt" \
+  || no "log: full mode did not record the prompt"
+r="$(newrun)"
+# shellcheck disable=SC2209 # env-var prefix on a function call, not an assignment
+COLLAB_LOG_PROMPTS=hash run_logged "$r" -m m/x "SENTINEL-abc123"
+{ ! entries "$r" | grep -qF 'SENTINEL-abc123'; } \
+  && [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].prompt_hash')" != "null" ] \
+  && ok "log: COLLAB_LOG_PROMPTS=hash keeps the digest, not the text" \
+  || no "log: hash mode leaked the prompt or dropped the digest"
+r="$(newrun)"; COLLAB_LOG_PROMPTS=off run_logged "$r" -m m/x "SENTINEL-abc123"
+{ ! entries "$r" | grep -qF 'SENTINEL-abc123'; } \
+  && [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].prompt_hash')" = "null" ] \
+  && ok "log: COLLAB_LOG_PROMPTS=off records neither text nor digest" \
+  || no "log: off mode still recorded prompt text or a digest"
+
+# The knobs must work from the CONFIG FILE, not just env — that's the project's
+# convention, and env-only would be a trap: a Claude-driven session runs each command
+# in a subshell, so `export COLLAB_LOG_PROMPTS=hash` cannot durably hold.
+conf="$fakedir/conf.local"; printf 'COLLAB_LOG_PROMPTS=off\n' > "$conf"
+r="$(COLLAB_CONF="$conf" bash "$logsh" new-run /consult)"
+COLLAB_POLICY="$allow_pol" COLLAB_CONF="$conf" COLLAB_RUN_ID="$r" COLLAB_COMMAND=/consult \
+  bash "$ask" -m m/x "SENTINEL-abc123" >/dev/null 2>&1 || true
+{ ! entries "$r" | grep -qF 'SENTINEL-abc123'; } \
+  && ok "log: COLLAB_LOG_PROMPTS honoured from collab.conf.local (not env-only)" \
+  || no "log: config-file COLLAB_LOG_PROMPTS ignored — the documented knob is a lie"
+
+# The off switch, and the token-free paths must stay evidence-free.
+before="$(ls "$COLLAB_LOG_DIR" | wc -l | tr -d ' ')"
+COLLAB_POLICY="$allow_pol" COLLAB_LOG=off bash "$ask" -m m/x "quiet" >/dev/null 2>&1
+[ "$(ls "$COLLAB_LOG_DIR" | wc -l | tr -d ' ')" = "$before" ] \
+  && ok "log: COLLAB_LOG=off writes nothing" \
+  || no "log: COLLAB_LOG=off still created a run"
+COLLAB_POLICY="$allow_pol" bash "$ask" --dry-run -m m/x "dry" >/dev/null 2>&1
+[ "$(ls "$COLLAB_LOG_DIR" | wc -l | tr -d ' ')" = "$before" ] \
+  && ok "log: --dry-run calls no model and logs nothing" \
+  || no "log: --dry-run created a log entry despite calling no model"
+
+# claude-final (W0.5) — without it a watcher can audit dispositions but not the
+# summary the developer actually read.
+r="$(newrun)"
+printf 'the summary the user saw' | COLLAB_RUN_ID="$r" bash "$logsh" final >/dev/null 2>&1
+[ "$(entries "$r" | jq -rs '[.[]|select(.type=="claude-final")][0].text')" = "the summary the user saw" ] \
+  && ok "log: claude-final records Claude's user-facing answer" \
+  || no "log: claude-final entry missing or wrong"
+
+# claude-disposition (W0.8) — must be marked as a CLAIM, and the verdict vocabulary
+# is fixed so a report can't invent a flattering one.
+r="$(newrun)"
+COLLAB_RUN_ID="$r" bash "$logsh" disposition --model m/x --point "p" --verdict Adopt >/dev/null 2>&1
+[ "$(entries "$r" | jq -rs '[.[]|select(.type=="claude-disposition")][0].claim')" = "true" ] \
+  && ok "log: claude-disposition is flagged claim:true (a claim to audit, not a fact)" \
+  || no "log: claude-disposition not flagged as a claim"
+COLLAB_RUN_ID="$r" bash "$logsh" disposition --model m/x --point "p" --verdict Maybe >/dev/null 2>&1 \
+  && no "log: disposition accepted a bogus verdict 'Maybe'" \
+  || ok "log: disposition rejects a verdict outside Adopt|Adapt|Reject|Defer"
+
+# new-run must MINT a run, never hand back an ambient one — that would silently merge
+# two workflows into a single audit unit.
+r1="$(newrun)"; r2="$(COLLAB_RUN_ID="$r1" bash "$logsh" new-run /panel)"
+[ -n "$r2" ] && [ "$r1" != "$r2" ] \
+  && ok "log: new-run mints a fresh id even when \$COLLAB_RUN_ID is set" \
+  || no "log: new-run returned the ambient run id ($r1 == $r2)"
+
+# Retention (W0.6): an unbounded log dir is an indefinite sensitive-data surface.
+oldrun="$COLLAB_LOG_DIR/20200101T000000Z-deadbeef"; mkdir -p "$oldrun"
+touch -d "60 days ago" "$oldrun" 2>/dev/null || touch -t 202001010000 "$oldrun" 2>/dev/null
+bash "$logsh" prune --days 14 >/dev/null 2>&1
+[ ! -d "$oldrun" ] && ok "log: prune removes runs past the retention window" \
+                   || no "log: prune left a 60-day-old run in place"
+
+echo
+printf 'wrapper + panel + lint + log tests: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

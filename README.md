@@ -20,7 +20,8 @@ ClaudeCollab is three drop-in directories you add to a project:
 |---|---|
 | `.claude/commands/` | The slash commands Claude Code runs (`/consult`, `/panel`, `/review`, `/delegate`, `/collaborate`, `/configure-collab`). |
 | `.opencode/agent/` | Three **hardened** opencode agents: `collab-read` (read-only), `collab-build` (the `/delegate` write path), and `collab-research` (the `/research` web path). |
-| `collab/` | The `ask.sh` wrapper plus the `panel`, `doctor`, and `verify` scripts, tests, and the model policy. |
+| `collab/` | The `ask.sh` wrapper plus the `log`, `panel`, `doctor`, and `verify` scripts, tests, and the model policy. |
+| `collab/logs/` | Git-ignored. A record of every model call — see [The record it keeps](#the-record-it-keeps). |
 
 - `collab-read` → read-only **by construction** for opinions (`/consult`, `/panel`, `/review`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`.
 - `collab-build` → can edit files for `/delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`.
@@ -117,13 +118,23 @@ ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Us
 - **External model output is treated as data, not instructions** — a consulted model can't smuggle commands into Claude's control flow.
 - Run `bash collab/doctor.sh` to check your setup before relying on any of this.
 
+## The record it keeps
+
+Every model call is logged to `collab/logs/<run_id>/calls.jsonl` — the exact prompt sent, the model's full untruncated answer, which model and agent, and the exit code. It's git-ignored and stays on your machine.
+
+This isn't for debugging. When Claude tells you "GPT-5 agreed with my approach", that summary is written by the party you'd be checking up on. The log is the other model's actual words, so you can read them yourself — and it's the data source for the planned `/witness` command, which hands a *different* model the log and asks whether Claude's account of the exchange holds up.
+
+- **See it:** `cat collab/logs/latest/calls.jsonl | jq` — or check a run is complete with `bash collab/log.sh verify $(readlink collab/logs/latest)`. A call that died mid-flight shows up as a gap rather than passing for a clean record.
+- **Privacy:** by default the log keeps the full prompt, which means whatever context Claude pasted in from your repo. Set `COLLAB_LOG_PROMPTS=hash` (keep a digest, not the text) or `off` in `collab/collab.conf.local` if that's not OK for your work. Runs older than 14 days are pruned automatically (`COLLAB_LOG_RETENTION_DAYS`); `COLLAB_LOG=off` turns the whole thing off.
+- **What it is not:** tamper-proofing. The hashes catch accidental corruption; they're not a chain of custody, and anything that can write the log can rewrite them.
+
 ## Uninstall
 
 From a clone, point the installer at the project you installed into:
 ```bash
 bash /tmp/claudecollab/install.sh --uninstall --dest /path/to/your/project
 ```
-It reads the manifest it wrote at install time and removes exactly the files it installed — its `collab/` scripts, slash commands, opencode agents, and its `.gitignore` block — then removes those directories only if they're now empty. Anything you added yourself (your own commands, agents, files under `collab/`, or `.gitignore` lines) is left untouched. Any Claude Code permission grants you added to `.claude/settings*.json` (below) are yours to remove.
+It reads the manifest it wrote at install time and removes exactly the files it installed — its `collab/` scripts, slash commands, opencode agents, and its `.gitignore` block — then removes those directories only if they're now empty. Anything you added yourself (your own commands, agents, files under `collab/`, or `.gitignore` lines) is left untouched — **including `collab/logs/`**, which is your record of what the models actually said, not ours to delete. Any Claude Code permission grants you added to `.claude/settings*.json` (below) are yours to remove.
 
 ## Optional: skip the permission prompts
 

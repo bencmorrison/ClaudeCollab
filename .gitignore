@@ -28,5 +28,10 @@ node_modules/
 # linger if a run is interrupted mid-probe.
 .collab-*-probe.*
 
+# The evidence layer (collab/log.sh): raw model calls, prompts and responses from
+# every /consult, /panel, /delegate … Local audit data for the watcher — it holds
+# whatever repo context was pasted into a prompt, so it is never committed.
+collab/logs/
+
 # Logs / temp
 *.log

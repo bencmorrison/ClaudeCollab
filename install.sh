@@ -32,7 +32,9 @@ PAYLOAD_DIRS=(".claude/commands" ".opencode/agent" "collab")
 
 # Empty dirs we may create, deepest-first, pruned on uninstall (only if empty, so
 # any file of yours keeps its parent dir alive).
-PRUNE_DIRS=(".claude/commands" ".claude" ".opencode/agent" ".opencode" "collab/tests" "collab")
+# `collab/logs` is listed so an empty log dir is tidied up, but it is rmdir-only like
+# the rest: if you have audit logs, they survive an uninstall. They are yours.
+PRUNE_DIRS=(".claude/commands" ".claude" ".opencode/agent" ".opencode" "collab/tests" "collab/logs" "collab")
 
 # git-ignore block we manage in the target's .gitignore (idempotent, fenced).
 GITIGNORE_BEGIN="# >>> ClaudeCollab >>>"
@@ -44,6 +46,8 @@ collab/models.policy.local
 collab/collab.conf.local
 # Probe sentinels the verify scripts create (normally auto-cleaned).
 .collab-*-probe.*
+# The evidence layer: raw prompts/responses of every model call (collab/log.sh).
+collab/logs/
 # <<< ClaudeCollab <<<
 EOF
 
@@ -132,7 +136,7 @@ if [ "$action" = "uninstall" ]; then
     warn "no manifest and no source payload — removing only the known ClaudeCollab files (any others must be removed by hand)"
     rm -f "$dest/.claude/commands/"{consult,panel,workshop,review,research,delegate,collaborate,configure-collab}.md
     rm -f "$dest/.opencode/agent/"{collab-read,collab-build,collab-research}.md
-    for k in ask.sh panel-models.sh doctor.sh verify-collab-read.sh verify-collab-build.sh \
+    for k in ask.sh log.sh panel-models.sh doctor.sh verify-collab-read.sh verify-collab-build.sh \
              verify-collab-research.sh models.policy collab.conf.example .install-manifest \
              tests/run-tests.sh tests/check-agent-permissions.sh tests/check-frontmatter.sh \
              tests/check-shebangs.sh tests/test-install.sh tests/fake-opencode; do

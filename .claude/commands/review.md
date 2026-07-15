@@ -1,7 +1,7 @@
 ---
 description: Findings-first code review by another LLM, with Claude verifying each finding against the code before reporting
 argument-hint: [what to review — a path, "the diff", "this branch", or a description]
-allowed-tools: Bash(bash collab/ask.sh:*), Bash(COLLAB_CONFIRMED=1 bash collab/ask.sh:*), Bash(git diff:*), Bash(git status:*), Bash(git log:*), Bash(opencode models:*), Read, Grep, Glob
+allowed-tools: Bash(bash collab/ask.sh:*), Bash(COLLAB_CONFIRMED=1 bash collab/ask.sh:*), Bash(git diff:*), Bash(git status:*), Bash(git log:*), Bash(opencode models:*), Read, Grep, Glob, Bash(COLLAB_COMMAND=/review bash collab/ask.sh:*), Bash(COLLAB_COMMAND=/review COLLAB_CONFIRMED=1 bash collab/ask.sh:*)
 ---
 Get a findings-first code review from another LLM, then verify every finding yourself before reporting. You are the **verifier, not a relay** — a finding reaches the user only if it holds up against the actual code.
 
@@ -16,7 +16,7 @@ $ARGUMENTS
    Gather the actual code/diff — you'll both send it to the reviewer and verify against it. Note the file paths and line numbers so findings can cite them.
 
 2. **Get findings from a read-only model.** Run:
-   `bash collab/ask.sh -m <provider/model> "Review the following code as a senior engineer. Return FINDINGS ONLY, most severe first — one per line as: [severity: crit|high|med|low] file:line — the issue in one line — the concrete failure scenario (inputs/state → wrong result) — suggested fix. Be specific and independently verifiable; no style nits unless they cause bugs. If you find nothing real at a level, say so, don't pad. Here is the code:\n\n<the code/diff, with file names + line numbers>"`
+   `COLLAB_COMMAND=/review bash collab/ask.sh -m <provider/model> "Review the following code as a senior engineer. Return FINDINGS ONLY, most severe first — one per line as: [severity: crit|high|med|low] file:line — the issue in one line — the concrete failure scenario (inputs/state → wrong result) — suggested fix. Be specific and independently verifiable; no style nits unless they cause bugs. If you find nothing real at a level, say so, don't pad. Here is the code:\n\n<the code/diff, with file names + line numbers>"`
    - Prefer a **non-Claude** model for a genuinely independent eye (see AGENTS.md role rule). This uses the read-only `collab-read` agent — no mutation, no egress. Check `collab/models.policy`; for an `ask`-tier model confirm with the user first, then prefix `COLLAB_CONFIRMED=1`. State the exact `provider/model` id.
    - For a high-stakes review, optionally ask 2 models from different families (like `/panel`) and merge their findings, de-duplicating by file:line.
 

@@ -61,10 +61,20 @@
 #      overrides the file path. The env var $COLLAB_MODEL still works as a one-off
 #      override for a single shell/call (precedence: -m flag > $COLLAB_MODEL > file).
 #
+# Logging: every call is recorded to a git-ignored collab/logs/<run_id>/calls.jsonl —
+#      raw, untruncated, two entries per call (started → completed). This is the
+#      evidence layer a watcher agent audits INSTEAD of Claude's own summary; see
+#      collab/log.sh for the format, the knobs ($COLLAB_LOG, $COLLAB_LOG_PROMPTS,
+#      $COLLAB_LOG_RETENTION_DAYS) and what it deliberately does not claim.
+#      $COLLAB_RUN_ID groups several calls into one run (a /panel or /workshop sets it
+#      once); $COLLAB_COMMAND records which slash command drove the call.
+#
 # Env: $COLLAB_MODEL (one-off default-model override), $COLLAB_TIMEOUT (seconds; unset = no timeout,
 #      so long-running model/coding work is never cut off), $COLLAB_REQUIRE_HARDENED
 #      (=1: hard-fail with exit 5 instead of falling back to a weaker/unrestricted
-#      agent when the collab-read/collab-build def is missing — for automated/CI use).
+#      agent when the collab-read/collab-build def is missing — for automated/CI use),
+#      $COLLAB_LOG / $COLLAB_LOG_DIR / $COLLAB_LOG_PROMPTS / $COLLAB_RUN_ID /
+#      $COLLAB_COMMAND (see Logging above).
 #
 set -euo pipefail
 
@@ -329,6 +339,53 @@ esac
 # the SESSION payload). Cheap observability into what actually ran.
 echo "collab: model=${model:-<opencode default>} agent=${agent}${session:+ session=$session}" >&2
 
+# ---- evidence layer (W0) -----------------------------------------------------
+# Record this call to collab/logs/ so a watcher agent can later audit what the other
+# model ACTUALLY said, independently of Claude's summary of it. Two writes with a
+# status flip (started → completed) paired by call_id: without the pair, a call that
+# dies mid-flight leaves a log that reads as clean. See collab/log.sh.
+#
+# Logging is best-effort and must NEVER fail the call it is recording: every hook is
+# `|| true`. A missing entry is not silently benign — `log.sh verify` catches the
+# unpaired `started`, and /witness refuses to audit a failed-integrity log.
+log_sh="$(dirname "$0")/log.sh"
+log_enabled=""
+call_id=""
+turn=""
+prompt_file=""
+log_setting="${COLLAB_LOG:-$(conf_get COLLAB_LOG)}"
+if [ "${log_setting:-on}" != "off" ] && [ -f "$log_sh" ] && command -v jq >/dev/null 2>&1; then
+  # Resolve the run ONCE and export it. A slash command that groups several calls
+  # (/panel, /workshop) sets $COLLAB_RUN_ID itself so the whole workflow is one
+  # auditable unit; a standalone call mints its own run here. Without pinning it,
+  # each `log.sh` invocation below would mint a *different* run id and scatter one
+  # call across three directories.
+  COLLAB_RUN_ID="${COLLAB_RUN_ID:-$(bash "$log_sh" new-run "${COLLAB_COMMAND:-ask}" 2>/dev/null || true)}"
+  if [ -n "$COLLAB_RUN_ID" ]; then
+    export COLLAB_RUN_ID
+    log_enabled=1
+    call_id="c-$(od -An -tx1 -N4 /dev/urandom 2>/dev/null | tr -d ' \n' || printf '%04x%04x' "$RANDOM" "$$")"
+    prompt_file="$(mktemp)"; printf '%s' "$prompt" > "$prompt_file"
+    turn="$(bash "$log_sh" started \
+              --call-id "$call_id" --command "${COLLAB_COMMAND:-ask}" --model "$model" \
+              --agent "$agent" ${session:+--session "$session"} --prompt-file "$prompt_file" 2>/dev/null || true)"
+    echo "collab: log=$(bash "$log_sh" path 2>/dev/null || echo '?') call_id=${call_id}" >&2
+  fi
+fi
+
+# log_complete <exit-status> <response-file> [session-id] — the second half of the
+# pair. The session id is passed in because on a NEW session opencode only reveals it
+# in the response, so the `started` entry couldn't know it.
+log_complete() {
+  [ -n "$log_enabled" ] || return 0
+  local sid="${3:-$session}"
+  bash "$log_sh" completed --call-id "$call_id" --exit "$1" \
+    ${turn:+--turn "$turn"} ${sid:+--session "$sid"} \
+    --command "${COLLAB_COMMAND:-ask}" --model "$model" --agent "$agent" \
+    ${2:+--response-file "$2"} >/dev/null 2>&1 || true
+  rm -f "$prompt_file" 2>/dev/null || true
+}
+
 # run_opencode: invoke opencode with stdin redirected from /dev/null and an optional
 # timeout. stdin MUST be /dev/null: `opencode run` blocks waiting on stdin when stdin
 # is a non-TTY pipe (exactly what Claude Code's Bash tool provides), so without this
@@ -357,6 +414,7 @@ if [ -n "$emit_session" ]; then
   raw="$(run_opencode "${args[@]}" --format json "$prompt")" || status=$?
   if [ "$status" -eq 124 ]; then
     echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT:-}s with no response." >&2
+    log_complete "$status" ""
     exit "$status"
   elif [ "$status" -ne 0 ]; then
     echo "error: opencode exited $status (model '${model:-opencode default}', agent '${agent}')." >&2
@@ -367,14 +425,30 @@ if [ -n "$emit_session" ]; then
   if [ -z "$text" ] && [ "$status" -eq 0 ]; then
     echo "warning: opencode returned no answer text (session '${sid:-?}', model '${model:-opencode default}')." >&2
   fi
+  # Log the EXTRACTED answer, not the JSON envelope: `text` is precisely what Claude
+  # receives, so an audit of Claude's engagement must compare against the same bytes.
+  resp_file="$(mktemp)"; printf '%s' "$text" > "$resp_file"
+  log_complete "$status" "$resp_file" "$sid"
+  rm -f "$resp_file"
   printf 'SESSION: %s\n---\n%s\n' "$sid" "$text"
   exit "$status"
 else
-  run_opencode "${args[@]}" "$prompt" || status=$?
+  # tee, not a plain capture: the answer still reaches stdout as it arrives, and the
+  # evidence layer gets the full untruncated copy. pipefail (set at the top) means
+  # $status is opencode's, not tee's.
+  if [ -n "$log_enabled" ]; then
+    resp_file="$(mktemp)"
+    run_opencode "${args[@]}" "$prompt" | tee "$resp_file" || status=$?
+  else
+    resp_file=""
+    run_opencode "${args[@]}" "$prompt" || status=$?
+  fi
   if [ "$status" -eq 124 ]; then
     echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT:-}s with no response (model '${model:-opencode default}', agent '${agent}'). Raise \$COLLAB_TIMEOUT or re-run." >&2
   elif [ "$status" -ne 0 ]; then
     echo "error: opencode exited $status (model '${model:-opencode default}', agent '${agent}')." >&2
   fi
+  log_complete "$status" "$resp_file"
+  [ -n "$resp_file" ] && rm -f "$resp_file" || true
   exit "$status"
 fi

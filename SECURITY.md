@@ -46,6 +46,14 @@ So: **run `/research` on repos whose non-secret contents you'd accept leaking.**
 - **Model policy.** `collab/models.policy` (first-match glob, default-allow) lets you `deny`/`ask`/`allow` specific models; the wrapper enforces it as a hard backstop (a `deny` model is refused; an `ask` model needs explicit confirmation).
 - **Preflight.** `bash collab/doctor.sh` checks tools, auth, the policy, and runs the permission proofs + unit suite before you rely on the commands.
 
+### `collab/logs/` — the evidence layer holds prompts, on disk, in your repo
+
+`collab/log.sh` records every model call to a git-ignored `collab/logs/<run_id>/calls.jsonl`. By default (`COLLAB_LOG_PROMPTS=full`) that includes **the full prompt Claude sent**, which in practice means whatever context it pasted in from your repo. Responses are always recorded in full.
+
+- **It is git-ignored, never transmitted, and pruned after 14 days** (`COLLAB_LOG_RETENTION_DAYS`). It is a *local file*, not a network surface — but it is a plaintext copy of repo context living outside the files it came from, and it will be caught by anything that archives or backs up your working tree.
+- **Set `COLLAB_LOG_PROMPTS=hash`** (digest only — proves the prompt didn't change, reveals none of it) **or `off`**, in `collab/collab.conf.local`, if that copy isn't acceptable for your work. `COLLAB_LOG=off` disables the log entirely, at the cost of having nothing for a watcher to audit.
+- **The hashes are not tamper-proofing.** `prev_hash` chains the entries and `response_hash` self-checks each one, to catch accidental corruption and to avoid retrofitting the format later. There is no chain of custody: anything that can write the log can rewrite the hashes. This is deliberate — the trusted-repo threat model does not assume an adversarial Claude, and a tamper-proofing *claim* we can't back would be worse than none.
+
 ## Reporting a vulnerability
 
 Please report security issues **privately**, not in a public issue:

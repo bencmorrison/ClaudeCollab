@@ -18,3 +18,18 @@
 # Default panel for /panel: 2-3 ordered ids from DIFFERENT providers (space- or
 # comma-separated). panel-models.sh warns if the set isn't cross-provider.
 # COLLAB_MODELS=openai/gpt-5 google/gemini-2.5-pro
+
+# --- Evidence layer (collab/log.sh) ---------------------------------------------
+# Every model call is recorded to the git-ignored collab/logs/<run_id>/calls.jsonl:
+# raw prompts and responses, two entries per call. This is what a watcher agent
+# audits INSTEAD of Claude's own summary of the exchange — so it is on by default.
+# COLLAB_LOG=off                  # stop recording entirely (nothing to audit)
+# COLLAB_LOG_PROMPTS=full         # full | hash | off — what to keep of the prompt
+#                                 # Claude SENT. Default `full`: the brief Claude
+#                                 # wrote is itself prime audit material. But it
+#                                 # means the log holds whatever repo context was
+#                                 # pasted in — use `hash` (digest only, proves the
+#                                 # prompt didn't change) or `off` on sensitive work.
+#                                 # Responses are ALWAYS kept in full: they are the
+#                                 # evidence, and they're the other model's words.
+# COLLAB_LOG_RETENTION_DAYS=14    # prune runs older than this; 0 disables pruning

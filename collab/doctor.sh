@@ -188,6 +188,31 @@ else
   warn "resolved-config proof skipped (needs opencode + jq) — the source lint above still ran"
 fi
 
+# --- 6c. Evidence layer (the watcher's data source) --------------------------
+# Report the state of collab/logs/ and, crucially, the INTEGRITY of the most recent
+# run. An unpaired `started` means a call died with its response unrecorded — the
+# exact silent gap that would otherwise read as a clean log.
+hdr "Evidence layer (collab/log.sh)"
+if [ "${COLLAB_LOG:-on}" = "off" ]; then
+  warn "logging is OFF (\$COLLAB_LOG=off) — no evidence is being recorded, so /witness has nothing to audit"
+elif [ ! -f collab/log.sh ]; then
+  warn "collab/log.sh not present — model calls are not being recorded"
+elif ! command -v jq >/dev/null 2>&1; then
+  bad "jq missing — ask.sh cannot write the evidence log (see the jq check above)"
+else
+  logdir="${COLLAB_LOG_DIR:-collab/logs}"
+  pass "logging ON (prompts=${COLLAB_LOG_PROMPTS:-full}, retention=${COLLAB_LOG_RETENTION_DAYS:-14}d, dir=$logdir)"
+  if [ -d "$logdir" ] && [ -e "$logdir/latest" ]; then
+    if bash collab/log.sh verify "$(basename "$(readlink "$logdir/latest" 2>/dev/null || echo latest)")" >/dev/null 2>&1; then
+      pass "latest run's log is intact (every started has a completed; hashes match)"
+    else
+      bad "latest run FAILS integrity — run: bash collab/log.sh verify \$(readlink $logdir/latest)"
+    fi
+  else
+    info "no runs logged yet — the log appears on the first /consult, /panel, …"
+  fi
+fi
+
 # --- 7. Wrapper unit tests (token-free) --------------------------------------
 hdr "Wrapper unit tests"
 if bash collab/tests/run-tests.sh >/dev/null 2>&1; then pass "ask.sh unit suite (collab/tests/run-tests.sh) all green"
