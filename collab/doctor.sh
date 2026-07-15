@@ -31,6 +31,22 @@ bad()  { printf '\033[31mFAIL\033[0m %s\n'  "$*"; fail=1; }
 info() { printf '     %s\n' "$*"; }
 hdr()  { printf '\n== %s ==\n' "$*"; }
 
+# Config file (same resolution ask.sh uses): $COLLAB_CONF, else collab.conf.local.
+if [ -n "${COLLAB_CONF:-}" ]; then conf_file="$COLLAB_CONF"
+elif [ -f "$repo_root/collab/collab.conf.local" ]; then conf_file="$repo_root/collab/collab.conf.local"
+else conf_file=""; fi
+conf_get() {
+  [ -n "$conf_file" ] && [ -f "$conf_file" ] || return 0
+  awk -v k="$1" '
+    { line=$0; sub(/^[[:space:]]+/,"",line) }
+    line ~ /^#/ || line !~ /=/ { next }
+    { eq=index(line,"="); lk=substr(line,1,eq-1); gsub(/[[:space:]]/,"",lk)
+      if(lk!=k) next
+      lv=substr(line,eq+1); sub(/^[[:space:]]+/,"",lv); sub(/[[:space:]]+$/,"",lv)
+      gsub(/^"|"$/,"",lv); gsub(/^\047|\047$/,"",lv); val=lv }
+    END{ if(val!="") print val }' "$conf_file"
+}
+
 # --- 1. Required tools -------------------------------------------------------
 hdr "Tools"
 if command -v opencode >/dev/null 2>&1; then
@@ -72,24 +88,30 @@ fi
 
 # --- 3. Model selection ------------------------------------------------------
 hdr "Model selection"
-if [ -n "${COLLAB_MODEL:-}" ]; then
-  info "default model: \$COLLAB_MODEL=${COLLAB_MODEL}"
+# Effective default: $COLLAB_MODEL (one-off override) else the config file.
+eff_model="${COLLAB_MODEL:-}"; msrc="\$COLLAB_MODEL"
+if [ -z "$eff_model" ]; then eff_model="$(conf_get COLLAB_MODEL)"; msrc="collab.conf.local"; fi
+if [ -n "$eff_model" ]; then
+  info "default model: ${eff_model} (from ${msrc})"
   # Cross-check it against the policy via ask.sh --dry-run (token-free, authoritative:
   # same policy backstop the real call uses), so a denied default is caught here.
-  if bash collab/ask.sh --dry-run -m "${COLLAB_MODEL}" "x" >/dev/null 2>&1; then
-    pass "default model passes the model policy (collab/models.policy)"
+  if bash collab/ask.sh --dry-run -m "${eff_model}" "x" >/dev/null 2>&1; then
+    pass "default model passes the model policy"
   else
     rc=$?
     case "$rc" in
-      3) bad "default \$COLLAB_MODEL=${COLLAB_MODEL} is DENIED by collab/models.policy — the commands will refuse it" ;;
-      4) warn "default \$COLLAB_MODEL=${COLLAB_MODEL} is gated 'ask' by collab/models.policy — commands need COLLAB_CONFIRMED=1" ;;
-      *) warn "could not evaluate the policy for \$COLLAB_MODEL (ask.sh --dry-run exit $rc)" ;;
+      3) bad "default model ${eff_model} is DENIED by the model policy — the commands will refuse it" ;;
+      4) warn "default model ${eff_model} is gated 'ask' by the model policy — commands need COLLAB_CONFIRMED=1" ;;
+      *) warn "could not evaluate the policy for ${eff_model} (ask.sh --dry-run exit $rc)" ;;
     esac
   fi
 else
-  info "default model: <opencode's own default> (\$COLLAB_MODEL unset). Set COLLAB_MODEL to pin one; prefer a non-Claude model for consults."
-  info "note: the policy backstop can't police opencode's built-in default (no -m passed) — pin COLLAB_MODEL if you rely on it."
+  info "default model: <opencode's own default> (no COLLAB_MODEL in env or collab.conf.local)."
+  info "note: set one via /configure-collab (writes collab.conf.local); prefer a non-Claude model for consults. The policy backstop can't police opencode's built-in default (no -m passed)."
 fi
+# Panel default, if configured.
+eff_models="${COLLAB_MODELS:-}"; [ -n "$eff_models" ] || eff_models="$(conf_get COLLAB_MODELS)"
+[ -n "$eff_models" ] && info "default /panel set: ${eff_models}"
 
 # --- 4. Agent definitions ----------------------------------------------------
 hdr "Agent definitions"

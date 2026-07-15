@@ -11,7 +11,7 @@ $ARGUMENTS
 
 2. **Explain the model briefly** (one or two lines each):
    - The **policy** has three tiers over glob patterns, **first-match-wins, default-allow**: `deny` (ask.sh hard-refuses it), `ask` (usable only after you confirm — the command sets `COLLAB_CONFIRMED=1`), `allow` (free to use; the default for anything unmatched).
-   - **"Preferred" is not a policy tier** — it's your default single model (`COLLAB_MODEL`, used by `/consult`) and your default panel set (`COLLAB_MODELS`, used by `/panel`). Those are environment variables.
+   - **"Preferred" is not a policy tier** — it's your default single model (used by `/consult`) and your default panel set (used by `/panel`). These live in a git-ignored config file `collab/collab.conf.local` (as `COLLAB_MODEL=` / `COLLAB_MODELS=`), which you'll write here so they persist. (The matching env vars still work as one-off overrides.)
 
 3. **Interview** (use AskUserQuestion or plain questions; the user may skip any):
    - Models/providers to **deny** — e.g. one they distrust or that's too expensive. Accept exact ids or globs (`openai/*-terra*`, `*-fast`).
@@ -25,15 +25,16 @@ $ARGUMENTS
 5. **Write it.**
    - Personal → write `collab/models.policy.local` (git-ignored; `ask.sh` auto-prefers it over the committed default, and `$COLLAB_POLICY` still overrides both).
    - Shared → edit `collab/models.policy` (and remind them it's committed — everyone gets it).
-   - **Preferred models can't be persisted from here** (they're env vars). Print the exact lines for the user to add to their shell profile (e.g. `~/.zshrc`), and mention they take effect after reloading the shell:
+   - **Preferred models** → write them to `collab/collab.conf.local` (git-ignored; `ask.sh`/`panel-models.sh` read it). Use `collab/collab.conf.example` as the template. Two lines (omit either if the user didn't pick one):
      ```
-     export COLLAB_MODEL=<their pick>
-     export COLLAB_MODELS="<id1> <id2> <id3>"
+     COLLAB_MODEL=<their pick>
+     COLLAB_MODELS=<id1> <id2> <id3>
      ```
+     These take effect immediately (no shell reload needed) — that's the point of using a file. Do NOT print `export` lines; the file is the durable home now.
 
 6. **Validate.** Run `bash collab/doctor.sh` (confirms the active policy parses and reports the default-model tier), then spot-check the intent with dry-runs (token-free):
    - a **denied** id must refuse: `bash collab/ask.sh --dry-run -m <denied-id> "x"` → exits non-zero, "denied by …";
    - an **allowed** id prints the command and exits 0.
    Report what you verified.
 
-7. **Summarize** what you wrote, where, and when it takes effect (policy file: immediately; exports: after the shell is reloaded). Keep it short.
+7. **Summarize** what you wrote and where (`collab/models.policy.local` for the policy, `collab/collab.conf.local` for preferred models — both git-ignored, both effective immediately). Keep it short.

@@ -280,6 +280,23 @@ COLLAB_POLICY="$allow_pol" bash "$presol/collab/ask.sh" -m openai/gpt-5.5 "q" >/
   || no "\$COLLAB_POLICY did not override .local (rc=$RC)"
 rm -rf "$presol"
 
+# 21. Config file: collab.conf.local supplies the default model when both -m and
+#     $COLLAB_MODEL are absent; $COLLAB_MODEL still overrides the file.
+confrepo="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$confrepo/collab"
+cp "$ask" "$confrepo/collab/ask.sh"; cp "$repo_root/collab/models.policy" "$confrepo/collab/" 2>/dev/null || true
+printf 'COLLAB_MODEL=openai/from-conf\n' > "$confrepo/collab/collab.conf.local"
+: > "$argsfile"
+COLLAB_POLICY="$allow_pol" bash "$confrepo/collab/ask.sh" "q" >/dev/null 2>&1   # no -m, no env
+{ args_has '-m' && args_has 'openai/from-conf'; } \
+  && ok "config: collab.conf.local supplies the default model" \
+  || no "config file default not used (got: $(tr '\n' ' ' <"$argsfile"))"
+: > "$argsfile"
+COLLAB_MODEL=openai/from-env COLLAB_POLICY="$allow_pol" bash "$confrepo/collab/ask.sh" "q" >/dev/null 2>&1
+{ args_has 'openai/from-env' && ! args_has 'openai/from-conf'; } \
+  && ok "config: \$COLLAB_MODEL overrides collab.conf.local" \
+  || no "env did not override config file (got: $(tr '\n' ' ' <"$argsfile"))"
+rm -rf "$confrepo"
+
 # --- panel-models.sh (the /panel model-set resolver; opencode-free) --------------
 panel="$repo_root/collab/panel-models.sh"
 perrf="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"
@@ -316,6 +333,16 @@ POUT="$(COLLAB_MODELS='' bash "$panel" 2>/dev/null)"; PRC=$?
   && ok "panel: no models -> exit 2, empty stdout" \
   || no "panel empty-input wrong (rc=$PRC, out=$POUT)"
 rm -f "$perrf"
+
+# P6. panel-models reads COLLAB_MODELS from collab.conf.local when args + env absent.
+pconf="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+cp "$panel" "$pconf/panel-models.sh"
+printf 'COLLAB_MODELS=openai/a google/b\n' > "$pconf/collab.conf.local"
+POUT="$(bash "$pconf/panel-models.sh" 2>/dev/null)"    # no args, no env
+{ [ "$(printf '%s' "$POUT" | sed -n 1p)" = "openai/a" ] && [ "$(printf '%s' "$POUT" | sed -n 2p)" = "google/b" ]; } \
+  && ok "panel: reads COLLAB_MODELS from collab.conf.local" \
+  || no "panel config-file set wrong (out=$(printf '%s' "$POUT" | tr '\n' ,))"
+rm -rf "$pconf"
 
 # --- check-agent-permissions.sh meta-tests -------------------------------------
 # The lint is itself a security control, so assert it (a) passes the real agents and

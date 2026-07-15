@@ -24,9 +24,28 @@
 # (deny/ask tiers). This is only about the shape/diversity of the set.
 set -uo pipefail
 
-# Source the list: explicit args win, else $COLLAB_MODELS. Commas -> spaces so both
-# "a,b" and "a b" work.
-if [ "$#" -gt 0 ]; then raw="$*"; else raw="${COLLAB_MODELS:-}"; fi
+# Config file — persistent panel set (see ask.sh for why a file, not just env):
+# $COLLAB_CONF if set, else git-ignored collab/collab.conf.local. KEY=value, not sourced.
+if [ -n "${COLLAB_CONF:-}" ]; then conf_file="$COLLAB_CONF"
+elif [ -f "$(dirname "$0")/collab.conf.local" ]; then conf_file="$(dirname "$0")/collab.conf.local"
+else conf_file=""; fi
+conf_get() {
+  [ -n "$conf_file" ] && [ -f "$conf_file" ] || return 0
+  awk -v k="$1" '
+    { line=$0; sub(/^[[:space:]]+/,"",line) }
+    line ~ /^#/ || line !~ /=/ { next }
+    { eq=index(line,"="); lk=substr(line,1,eq-1); gsub(/[[:space:]]/,"",lk)
+      if(lk!=k) next
+      lv=substr(line,eq+1); sub(/^[[:space:]]+/,"",lv); sub(/[[:space:]]+$/,"",lv)
+      gsub(/^"|"$/,"",lv); gsub(/^\047|\047$/,"",lv); val=lv }
+    END{ if(val!="") print val }' "$conf_file"
+}
+
+# Source the list, in precedence order: explicit args > $COLLAB_MODELS (one-off env
+# override) > the config file's COLLAB_MODELS. Commas -> spaces so both "a,b" and
+# "a b" work.
+if [ "$#" -gt 0 ]; then raw="$*"
+else raw="${COLLAB_MODELS:-}"; [ -n "$raw" ] || raw="$(conf_get COLLAB_MODELS)"; fi
 raw="${raw//,/ }"
 
 seen=" "
@@ -47,7 +66,8 @@ for m in $raw; do
 done
 
 if [ "${#models[@]}" -eq 0 ]; then
-  echo "error: no models. Pass provider/model ids, or set COLLAB_MODELS (space- or comma-separated)." >&2
+  echo "error: no models. Pass provider/model ids, set COLLAB_MODELS, or add a" >&2
+  echo "       COLLAB_MODELS= line to collab/collab.conf.local (run /configure-collab)." >&2
   echo "       e.g. COLLAB_MODELS=\"openai/gpt-5 google/gemini-2.5-pro\"" >&2
   exit 2
 fi

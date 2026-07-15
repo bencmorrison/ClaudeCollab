@@ -48,7 +48,12 @@
 # shipped collab/models.policy. A `deny` model is refused; an `ask` model requires
 # $COLLAB_CONFIRMED=1 (Claude sets it only after confirming with the user).
 #
-# Env: $COLLAB_MODEL (default model), $COLLAB_TIMEOUT (seconds; unset = no timeout,
+# Config: your persistent default model lives in collab/collab.conf.local (git-ignored,
+#      written by /configure-collab) as `COLLAB_MODEL=provider/model`. $COLLAB_CONF
+#      overrides the file path. The env var $COLLAB_MODEL still works as a one-off
+#      override for a single shell/call (precedence: -m flag > $COLLAB_MODEL > file).
+#
+# Env: $COLLAB_MODEL (one-off default-model override), $COLLAB_TIMEOUT (seconds; unset = no timeout,
 #      so long-running model/coding work is never cut off), $COLLAB_REQUIRE_HARDENED
 #      (=1: hard-fail with exit 5 instead of falling back to a weaker/unrestricted
 #      agent when the collab-read/collab-build def is missing — for automated/CI use).
@@ -93,7 +98,34 @@ policy_tier() {
   echo allow
 }
 
+# Config file — persistent per-user preferences. Env vars can't hold these durably
+# for this tool (Claude's setup command runs in a subshell and can't export into your
+# interactive shell), so the default model lives in a file instead. Resolution:
+# $COLLAB_CONF if set, else a git-ignored collab/collab.conf.local. Simple KEY=value
+# lines (`#` comments); it is NOT sourced (no code execution).
+if [ -n "${COLLAB_CONF:-}" ]; then conf_file="$COLLAB_CONF"
+elif [ -f "$(dirname "$0")/collab.conf.local" ]; then conf_file="$(dirname "$0")/collab.conf.local"
+else conf_file=""; fi
+
+# conf_get <KEY> — value of KEY from $conf_file (last assignment wins), or empty.
+# Accepts only `KEY=value` lines; comments/blanks ignored; one layer of surrounding
+# quotes stripped. Portable awk (octal \047 = single quote, for mawk/BSD).
+conf_get() {
+  [ -n "$conf_file" ] && [ -f "$conf_file" ] || return 0
+  awk -v k="$1" '
+    { line=$0; sub(/^[[:space:]]+/,"",line) }
+    line ~ /^#/ || line !~ /=/ { next }
+    { eq=index(line,"="); lk=substr(line,1,eq-1); gsub(/[[:space:]]/,"",lk)
+      if(lk!=k) next
+      lv=substr(line,eq+1); sub(/^[[:space:]]+/,"",lv); sub(/[[:space:]]+$/,"",lv)
+      gsub(/^"|"$/,"",lv); gsub(/^\047|\047$/,"",lv); val=lv }
+    END{ if(val!="") print val }' "$conf_file"
+}
+
+# Default model precedence: -m flag (parsed below) > $COLLAB_MODEL (one-off override)
+# > config file > opencode's own default (empty here).
 model="${COLLAB_MODEL:-}"
+[ -n "$model" ] || model="$(conf_get COLLAB_MODEL)"
 agent="collab-read"  # our read-only agent: denies mutation (bash/edit/write), secret
                      # reads (.env/keys/creds) and network egress (webfetch/websearch)
                      # at opencode's permission layer — read-only + no-egress by

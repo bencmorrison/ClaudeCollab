@@ -1,0 +1,20 @@
+# collab.conf.example — copy to collab/collab.conf.local (git-ignored) to set your
+# persistent ClaudeCollab preferences, or just run /configure-collab which writes it
+# for you. Simple KEY=value lines; `#` starts a comment; this file is NOT executed.
+#
+# Why a file and not environment variables: this tool is driven by Claude Code, whose
+# shell runs each command in a subshell — so a setup command can't `export` a value
+# into your interactive shell and have it persist. A git-ignored file can. The env
+# vars still work as one-off overrides (precedence: -m flag / args > env > this file).
+#
+# Values here are read by collab/ask.sh (COLLAB_MODEL) and collab/panel-models.sh
+# (COLLAB_MODELS). Model policy (deny/ask/allow) lives separately in
+# collab/models.policy(.local) — see /configure-collab.
+
+# Default model for /consult (and any single-model call). Prefer a NON-Claude model
+# so a second opinion is genuinely independent.
+# COLLAB_MODEL=openai/gpt-5
+
+# Default panel for /panel: 2-3 ordered ids from DIFFERENT providers (space- or
+# comma-separated). panel-models.sh warns if the set isn't cross-provider.
+# COLLAB_MODELS=openai/gpt-5 google/gemini-2.5-pro

@@ -75,8 +75,6 @@ Examples:
 /delegate Add bounds checking to the ring buffer in src/buffer.c and a test
 ```
 
-For `/panel`, set a default ordered model set once with `export COLLAB_MODELS="openai/gpt-5 google/gemini-2.5-pro"` (space- or comma-separated).
-
 ### Picking the model
 
 By default `collab/ask.sh` uses opencode's configured default model. To choose per call:
@@ -84,11 +82,14 @@ By default `collab/ask.sh` uses opencode's configured default model. To choose p
 collab/ask.sh -m openai/gpt-5 "..."
 collab/ask.sh -m google/gemini-2.5-pro "..."
 ```
-Run `opencode models` to see exact provider/model ids available with your auth. To set a repo-wide default for consults, export `COLLAB_MODEL` (e.g. in your shell profile):
-```bash
-export COLLAB_MODEL=openai/gpt-5
+Run `opencode models` to see the exact provider/model ids available with your auth.
+
+To set **persistent defaults** — a default single model for `/consult` and a default panel set for `/panel` — run **`/configure-collab`** (it walks you through it), or copy `collab/collab.conf.example` to `collab/collab.conf.local` (git-ignored) and set:
 ```
-Prefer a **non-Claude** model for consults so the second opinion is genuinely independent.
+COLLAB_MODEL=openai/gpt-5
+COLLAB_MODELS=openai/gpt-5 google/gemini-2.5-pro
+```
+These take effect immediately — no shell reload. (Env vars `COLLAB_MODEL`/`COLLAB_MODELS` still work as one-off overrides; precedence is `-m` flag / args → env → config file → opencode's default.) Prefer a **non-Claude** model for consults so the second opinion is genuinely independent.
 
 ## Direct use of the wrapper
 
