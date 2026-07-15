@@ -8,8 +8,13 @@ RUN npm install -g opencode-ai @anthropic-ai/claude-code \
     && npm cache clean --force
 
 # CLI tools the slash commands and general dev work lean on.
+#   jq       — /collaborate (--emit-session) and the verify scripts
+#   ripgrep  — fast search
+#   less     — pager
+#   shellcheck — the lint CI enforces over all *.sh; installed here so the same
+#               check runs locally before a push (CI installs its own copy).
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get install -y --no-install-recommends jq ripgrep less \
+    && apt-get install -y --no-install-recommends jq ripgrep less shellcheck \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Pre-create the home dirs the agents write their state into, owned by `node`.
