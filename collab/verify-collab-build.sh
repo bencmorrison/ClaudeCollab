@@ -20,13 +20,18 @@
 # corroboration (the agent actually writes a probe file => the edit path works;
 # reports INCONCLUSIVE, not PASS, if opencode can't run).
 #
-# Usage:  bash collab/verify-collab-build.sh
-# Exit 0 = static shape holds AND (if it ran) the edit path works. Non-zero otherwise.
+# Usage:  bash collab/verify-collab-build.sh [--static]
+#   --static  run only the token-free static checks (steps 1-2); skip the runtime
+#             edit probe (step 3) that calls a model. Used by doctor.sh / CI.
+# Exit 0 = static shape holds AND (unless --static) the edit path works. Non-zero otherwise.
 # COLLAB_VERIFY_MODEL overrides the (free by default) runtime model.
 set -uo pipefail
 
+static_only=""
+case "${1:-}" in --static|-s) static_only=1 ;; esac
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$repo_root"
+cd "$repo_root" || exit 1
 
 model="${COLLAB_VERIFY_MODEL:-opencode/deepseek-v4-flash-free}"
 agent="collab-build"
@@ -75,6 +80,9 @@ done < <(awk '/^permission:/{p=1;next} p&&/^[^ ]/{p=0} p&&/^  [a-z_]+:/{line=$0;
 if [ -z "$badkeys" ]; then pass "all permission keys are known opencode tools"
 else bad "unknown permission key(s):$badkeys — a typo'd deny silently fails open"; fi
 
+if [ -n "$static_only" ]; then
+  echo "(runtime probe skipped: --static)"
+else
 echo "== 3. RUNTIME (corroborating): the edit path actually writes a file =="
 probe="$repo_root/.collab-build-edit-probe.txt"; rm -f "$probe"
 mout="$($TIMEOUT opencode run --agent "$agent" --auto -m "$model" \
@@ -90,10 +98,15 @@ else
   inc "no file created and opencode exited 0 — model may have declined; static allow above is authoritative"
 fi
 rm -f "$probe"
+fi  # end runtime probe (skipped under --static)
 
 echo
 if [ "$fail" -eq 0 ]; then
-  printf '\033[32mcollab-build VERIFIED\033[0m — edit path works; task/webfetch/websearch and secret READS are denied at the tool layer. NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /delegate diff review is the trust boundary.\n'
+  if [ -n "$static_only" ]; then
+    printf '\033[32mcollab-build VERIFIED (static)\033[0m — edit/write/patch/bash=allow; task/webfetch/websearch + secret READS=deny (resolved config). Runtime edit probe not run (--static). NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /delegate diff review is the trust boundary.\n'
+  else
+    printf '\033[32mcollab-build VERIFIED\033[0m — edit path works; task/webfetch/websearch and secret READS are denied at the tool layer. NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /delegate diff review is the trust boundary.\n'
+  fi
 else
   printf '\033[31mcollab-build NOT verified\033[0m — permission shape is wrong; check the agent def against verify-collab-read.sh conventions.\n'
 fi

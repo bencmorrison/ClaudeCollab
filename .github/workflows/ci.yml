@@ -1,0 +1,56 @@
+name: CI
+
+# Fast, token-free checks that need no opencode auth and call no model: shell
+# syntax, ShellCheck, the fake-opencode wrapper unit tests, and command/agent
+# frontmatter validation. The agent permission *runtime* proofs and the container
+# build are intentionally NOT here — they need a real authenticated opencode; the
+# container build runs on a schedule (see PLAN.md Phase 3), not per-commit.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: shell checks + wrapper tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Enumerate shell scripts
+        id: scripts
+        run: |
+          # All tracked *.sh plus the extension-less fake-opencode stub.
+          files="$(git ls-files '*.sh' 'collab/tests/fake-opencode')"
+          echo "Files to check:"; echo "$files"
+          # shellcheck disable=SC2086
+          printf '%s\n' $files > /tmp/shfiles
+          echo "list=/tmp/shfiles" >> "$GITHUB_OUTPUT"
+
+      - name: Syntax check (bash -n)
+        run: |
+          rc=0
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            bash -n "$f" && echo "syntax ok: $f" || { echo "SYNTAX FAIL: $f"; rc=1; }
+          done < /tmp/shfiles
+          exit "$rc"
+
+      - name: ShellCheck (severity=warning)
+        run: |
+          # warning severity: catch real bugs (unset vars, bad quoting, dead code)
+          # without failing on info/style nits. Tighten later if desired.
+          xargs -a /tmp/shfiles shellcheck --severity=warning --shell=bash
+
+      - name: Frontmatter validation
+        run: bash collab/tests/check-frontmatter.sh
+
+      - name: Wrapper unit tests (fake opencode, no model calls)
+        run: bash collab/tests/run-tests.sh

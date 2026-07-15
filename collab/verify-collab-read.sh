@@ -20,13 +20,19 @@
 #      `timeout`, auth, crash) the runtime step is reported INCONCLUSIVE — it does
 #      NOT silently pass (the old bug this script was rewritten to kill).
 #
-# Usage:  bash collab/verify-collab-read.sh
-# Exit 0 = static proof holds AND no runtime contradiction. Non-zero otherwise.
+# Usage:  bash collab/verify-collab-read.sh [--static]
+#   --static  run only the token-free static checks (steps 1-2); skip the runtime
+#             probes (steps 3-4) that call a model. Used by doctor.sh / CI, where
+#             the authoritative static proof is what matters and no model is desired.
+# Exit 0 = static proof holds AND (unless --static) no runtime contradiction.
 # COLLAB_VERIFY_MODEL overrides the (free by default) runtime model.
 set -uo pipefail
 
+static_only=""
+case "${1:-}" in --static|-s) static_only=1 ;; esac
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$repo_root"
+cd "$repo_root" || exit 1
 
 model="${COLLAB_VERIFY_MODEL:-opencode/deepseek-v4-flash-free}"
 agent="collab-read"
@@ -86,6 +92,9 @@ done < <(awk '/^permission:/{p=1;next} p&&/^[^ ]/{p=0} p&&/^  [a-z_]+:/{line=$0;
 if [ -z "$badkeys" ]; then pass "all permission keys are known opencode tools"
 else bad "unknown permission key(s):$badkeys — a typo'd deny silently fails open"; fi
 
+if [ -n "$static_only" ]; then
+  echo "(runtime probes skipped: --static)"
+else
 echo "== 3. RUNTIME (corroborating): mutation attempt must not create a file =="
 probe="$repo_root/.collab-read-deny-probe.txt"; rm -f "$probe"
 mout="$($TIMEOUT opencode run --agent "$agent" --auto -m "$model" \
@@ -118,10 +127,15 @@ else
   pass "canary not leaked and opencode exited 0 (consistent with secret-read deny)"
 fi
 rm -f "$secret_file"
+fi  # end runtime probes (skipped under --static)
 
 echo
 if [ "$fail" -eq 0 ]; then
-  printf '\033[32mcollab-read VERIFIED\033[0m — mutation, secret-read and egress are denied by construction (static config), with no runtime contradiction.\n'
+  if [ -n "$static_only" ]; then
+    printf '\033[32mcollab-read VERIFIED (static)\033[0m — mutation, secret-read and egress are denied by construction (resolved config). Runtime probes not run (--static).\n'
+  else
+    printf '\033[32mcollab-read VERIFIED\033[0m — mutation, secret-read and egress are denied by construction (static config), with no runtime contradiction.\n'
+  fi
 else
   printf '\033[31mcollab-read NOT verified\033[0m — do not claim read-only/no-egress by construction.\n'
 fi
