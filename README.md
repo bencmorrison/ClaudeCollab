@@ -1,8 +1,8 @@
 # ClaudeCollab
 
-Let **Claude Code** collaborate with **other LLMs** (OpenAI, GitHub Copilot's model stack, Google Gemini, or anything else) for a second opinion, a multi-model panel, or delegated coding — using **[opencode](https://opencode.ai)** as the gateway.
+Let **Claude Code** collaborate with **other LLMs** (OpenAI, GitHub Copilot's model stack, Google Gemini, or anything else) for a second opinion, a multi-model panel, code review, or delegated coding — using **[opencode](https://opencode.ai)** as the gateway.
 
-Claude Code stays the driver. It calls out to opencode via a few repo-local slash commands. opencode handles model access and auth, so this works off **whatever providers your opencode auth gives you — paid subscriptions or free tiers — with no API keys stored or managed by this repo**. Anyone who clones this repo and has opencode authenticated can use it.
+Claude Code stays the driver. You drop ClaudeCollab into **your own project**, and Claude gains a few slash commands that shell out to opencode. opencode handles model access and auth, so this works off **whatever providers your opencode auth gives you — paid subscriptions or free tiers — with no API keys stored or managed by this tool**.
 
 ## How it works
 
@@ -14,53 +14,54 @@ Claude Code  ──(slash command)──▶  collab/ask.sh  ──▶  opencode 
      └───────────────────  reads the other model's answer, then reasons over it  ──┘
 ```
 
-- `collab-read` agent → read-only **by construction** for opinions (`/consult`, `/panel`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`. (Falls back to opencode's weaker compliance-only `plan` agent if the def is missing.)
-- `collab-build` agent → can edit files in the repo for `/delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else (sub-agents, grep/glob, network, secret reads) is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`. Falls back to opencode's unrestricted `build` agent if the def is missing.
+ClaudeCollab is three drop-in directories you add to a project:
 
-## Setup
+| Directory | What it is |
+|---|---|
+| `.claude/commands/` | The slash commands Claude Code runs (`/consult`, `/panel`, `/review`, `/delegate`, `/collaborate`, `/configure-collab`). |
+| `.opencode/agent/` | Two **hardened** opencode agents: `collab-read` (read-only) and `collab-build` (the `/delegate` write path). |
+| `collab/` | The `ask.sh` wrapper plus the `panel`, `doctor`, and `verify` scripts, tests, and the model policy. |
 
-1. **Install opencode** (once per machine):
-   ```bash
-   npm install -g opencode-ai        # or: brew install anomalyco/tap/opencode
-   ```
-2. **Authenticate opencode to your providers** (interactive, opens a browser for OAuth — your provider login, subscription or free tier, no API keys):
-   ```bash
-   opencode auth login
-   ```
-   Repeat for each provider you want (OpenAI / ChatGPT, GitHub Copilot, Google Gemini, …).
-3. **Verify** you can see models:
-   ```bash
-   opencode models
-   ```
+- `collab-read` → read-only **by construction** for opinions (`/consult`, `/panel`, `/review`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`.
+- `collab-build` → can edit files for `/delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`.
 
-That's it. The slash commands below are already in `.claude/commands/`.
+## Requirements
 
-## Dev container (for working *on* ClaudeCollab)
+- **[opencode](https://opencode.ai)** on your PATH, authenticated to at least one provider (below).
+- **`jq`** (used by `/collaborate` and the verify scripts).
+- A **git repo** for the project you install into (so you can review `/delegate` diffs). Not strictly required for read-only commands.
 
-**To *use* ClaudeCollab you don't need this** — the Setup above (opencode authenticated in your own environment) is all it takes. The dev container is for **developing ClaudeCollab itself**: it brings the whole development environment — Claude Code, opencode, and the test tooling — into one reproducible box so contributors get an identical setup. If you're just running the slash commands in your own repo, skip this section.
+## Install
 
-The container (`.devcontainer/`) has **Claude Code and opencode both preinstalled**. You log in **once inside the container**; login state persists across rebuilds in named volumes (`claudecollab-claude`, `claudecollab-opencode`). No API keys or host credentials are baked into the image.
+ClaudeCollab installs *into* whatever project you want Claude Code to have these commands in. It only adds its own files — if you already have a file at one of its paths (a same-named slash command, agent, or something under `collab/`), the installer **skips it with a warning** rather than overwriting, and uninstall never deletes it.
 
-> Why in-container login and not host-credential mounts? On macOS, the host credential files are mode `600` and appear `root`-owned through Docker's mount layer, so the non-root `node` user the agents run as can't read them. In-container login sidesteps that and lets the agents refresh their own tokens.
+**One-liner** (clones ClaudeCollab and installs into the current directory):
+```bash
+curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash
+```
 
-1. Open the folder in the container:
-   - **VS Code**: "Dev Containers: Reopen in Container", or
-   - **CLI**: `devcontainer up --workspace-folder .` (from `@devcontainers/cli`)
-2. Inside the container, log in once:
-   ```bash
-   claude               # then type: /login   (device-code OAuth in your browser)
-   opencode auth login  # pick OpenAI / Copilot / Gemini
-   ```
-3. Verify:
-   ```bash
-   opencode models
-   ```
+**Or from a clone** (lets you inspect first — recommended):
+```bash
+git clone https://github.com/bencmorrison/ClaudeCollab.git /tmp/claudecollab
+cd /path/to/your/project
+bash /tmp/claudecollab/install.sh          # installs into the current dir
+# or target another dir explicitly:
+bash /tmp/claudecollab/install.sh --dest /path/to/your/project
+```
 
-The `postCreate` step reports login status each time. Because state lives in the named volumes, you only log in again if you delete those volumes.
+The installer copies the three directories in, sets the scripts executable, and adds the per-user config files to your project's `.gitignore`. Run `bash /tmp/claudecollab/install.sh --help` for options.
+
+Then authenticate opencode and verify:
+```bash
+opencode auth login     # interactive OAuth — your provider login (subscription or free tier), no API keys
+opencode models         # confirm you can see models
+bash collab/doctor.sh   # preflight check of the whole setup (token-free)
+```
+Repeat `opencode auth login` for each provider you want (OpenAI / ChatGPT, GitHub Copilot, Google Gemini, …).
 
 ## Usage
 
-Run these inside Claude Code in this repo:
+Run these inside Claude Code in a project you've installed into:
 
 | Command | What it does |
 |---|---|
@@ -68,6 +69,8 @@ Run these inside Claude Code in this repo:
 | `/panel <question>` | Ask 2–3 different models the same question and have Claude synthesize + break ties. Warns if the panel isn't cross-provider. |
 | `/review <target>` | Findings-first code review by another model, then Claude verifies each finding against the code before reporting. Target a path, the diff, or a branch. |
 | `/delegate <coding task>` | Hand a coding task to another model (it edits files), then Claude reviews the diff. |
+| `/collaborate <question>` | Bounded multi-turn peer exchange with another model; Claude dispositions each point (read-only). |
+| `/configure-collab` | Interactive setup: writes your model policy and preferred-model defaults to git-ignored config files. |
 
 Examples:
 ```
@@ -110,6 +113,14 @@ ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Us
 - **External model output is treated as data, not instructions** — a consulted model can't smuggle commands into Claude's control flow.
 - Run `bash collab/doctor.sh` to check your setup before relying on any of this.
 
+## Uninstall
+
+From a clone, point the installer at the project you installed into:
+```bash
+bash /tmp/claudecollab/install.sh --uninstall --dest /path/to/your/project
+```
+It reads the manifest it wrote at install time and removes exactly the files it installed — its `collab/` scripts, slash commands, opencode agents, and its `.gitignore` block — then removes those directories only if they're now empty. Anything you added yourself (your own commands, agents, files under `collab/`, or `.gitignore` lines) is left untouched. Any Claude Code permission grants you added to `.claude/settings*.json` (below) are yours to remove.
+
 ## Optional: skip the permission prompts
 
 The first time Claude Code runs `collab/ask.sh` it will ask for permission. To pre-approve, add this to `.claude/settings.json` (or your local `.claude/settings.local.json`, which is git-ignored):
@@ -135,4 +146,7 @@ The first time Claude Code runs `collab/ask.sh` it will ask for permission. To p
 - **Cost**: calls run against your opencode-authenticated providers; usage counts against those plans (free tiers included). `opencode stats` shows token usage/cost.
 - **`--auto`**: `/delegate` auto-approves opencode's tool use so it doesn't block on prompts. Always review the diff — that's step 2 of the command.
 - **Not just for coding**: `/consult` and `/panel` are great for planning and design reviews, which is often where a second model helps most.
-- **Extending**: to add the richer multi-model debate/consensus tooling later, `consult-llm` (an MCP server) can use opencode as a no-API-key backend. Not required for the above.
+
+## Working on ClaudeCollab itself
+
+Contributing to ClaudeCollab (not just using it)? The repo ships a dev container that runs Claude Code and opencode in-container with persistent auth, plus the full test/verify suite. See **[CONTRIBUTING.md](CONTRIBUTING.md)** and **[AGENTS.md](AGENTS.md)**.

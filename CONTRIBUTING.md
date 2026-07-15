@@ -12,6 +12,29 @@ Thanks for helping out. This is a small, security-sensitive tool — a wrapper t
 
 Use the dev container (`.devcontainer/`) — it has Claude Code and opencode preinstalled. Log in once inside it (`claude` → `/login`, and `opencode auth login`); state persists in named volumes. See the README for details. No API keys are stored anywhere in this repo.
 
+## Dev container (for working *on* ClaudeCollab)
+
+**To *use* ClaudeCollab you don't need this** — the Setup above (opencode authenticated in your own environment) is all it takes. The dev container is for **developing ClaudeCollab itself**: it brings the whole development environment — Claude Code, opencode, and the test tooling — into one reproducible box so contributors get an identical setup. If you're just running the slash commands in your own repo, skip this section.
+
+The container (`.devcontainer/`) has **Claude Code and opencode both preinstalled**. You log in **once inside the container**; login state persists across rebuilds in named volumes (`claudecollab-claude`, `claudecollab-opencode`). No API keys or host credentials are baked into the image.
+
+> Why in-container login and not host-credential mounts? On macOS, the host credential files are mode `600` and appear `root`-owned through Docker's mount layer, so the non-root `node` user the agents run as can't read them. In-container login sidesteps that and lets the agents refresh their own tokens.
+
+1. Open the folder in the container:
+   - **VS Code**: "Dev Containers: Reopen in Container", or
+   - **CLI**: `devcontainer up --workspace-folder .` (from `@devcontainers/cli`)
+2. Inside the container, log in once:
+   ```bash
+   claude               # then type: /login   (device-code OAuth in your browser)
+   opencode auth login  # pick OpenAI / Copilot / Gemini
+   ```
+3. Verify:
+   ```bash
+   opencode models
+   ```
+
+The `postCreate` step reports login status each time. Because state lives in the named volumes, you only log in again if you delete those volumes.
+
 ## Before you open a PR
 
 Run the checks (all are fast; the first four need no model and no opencode auth):

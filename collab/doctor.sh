@@ -183,6 +183,12 @@ fi
 hdr "Wrapper unit tests"
 if bash collab/tests/run-tests.sh >/dev/null 2>&1; then pass "ask.sh unit suite (collab/tests/run-tests.sh) all green"
 else bad "ask.sh unit suite FAILED — run: bash collab/tests/run-tests.sh"; fi
+# Only meaningful in the ClaudeCollab source tree (install.sh isn't shipped into
+# installed projects), so gate on its presence rather than the test file's.
+if [ -f install.sh ] && [ -f collab/tests/test-install.sh ]; then
+  if bash collab/tests/test-install.sh >/dev/null 2>&1; then pass "installer smoke tests (collab/tests/test-install.sh) all green"
+  else bad "installer smoke tests FAILED — run: bash collab/tests/test-install.sh"; fi
+fi
 
 # --- 8. Optional: runtime probes (--full, calls a free model) ----------------
 if [ -n "$full" ]; then

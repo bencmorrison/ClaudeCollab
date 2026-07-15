@@ -61,3 +61,6 @@ jobs:
 
       - name: Wrapper unit tests (fake opencode, no model calls)
         run: bash collab/tests/run-tests.sh
+
+      - name: Installer smoke tests (install/uninstall into temp dirs)
+        run: bash collab/tests/test-install.sh
