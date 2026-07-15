@@ -7,7 +7,7 @@
 # /collab:collaborate slash commands shell out to.
 #
 # Usage:
-#   collab/ask.sh [-m provider/model] [-a plan|build] [--edit|--research|--watch] [--allow-dirty] <prompt...>
+#   collab/ask.sh [-m provider/model] [-a plan|build] [--edit|--research|--watch] <prompt...>
 #
 #   -m provider/model   Pick the model (run `opencode models` to list options).
 #                       Defaults to $COLLAB_MODEL, else opencode's own default.
@@ -45,12 +45,6 @@
 #   --dry-run           Print the exact opencode command that WOULD run (safely
 #                       quoted) and exit 0 without calling any model. Token-free;
 #                       use it to inspect model/agent selection or in tests.
-#   --allow-dirty       Skip the clean-worktree guard on the write path. By default,
-#                       when a write-capable agent (collab-build/build) is used, the
-#                       wrapper refuses to run if `git status` shows uncommitted
-#                       changes (so the model's edits stay attributable and your work
-#                       isn't clobbered) and prints the pre-edit HEAD to diff against.
-#                       --allow-dirty overrides the refusal. Read-only calls skip it.
 #
 # Examples:
 #   collab/ask.sh "Critique this migration plan: ..."          # read-only opinion
@@ -86,8 +80,10 @@
 #      prefers; env or collab.conf.local).
 #
 # Exit codes: 3 = model denied by policy, 4 = model gated `ask` unconfirmed,
-#      5 = required-hardened def missing (always, for --watch), 6 = dirty worktree on
-#      the write path, 8 = --watch would run a Claude model (Claude auditing Claude).
+#      5 = required-hardened def missing (always, for --watch), 8 = --watch would run a
+#      Claude model (Claude auditing Claude). (6 was a dirty-worktree refusal on the
+#      write path; removed — delegating onto live uncommitted work is the point, and a
+#      snapshot serves it better than a refusal. See the write-path block below.)
 #
 set -euo pipefail
 
@@ -179,7 +175,6 @@ session=""      # opencode session id to continue (Option B multi-turn), forward
 emit_session="" # when set, emit "SESSION: <id>" + the extracted answer (for /collab:collaborate)
 dry_run=""      # when set, print the opencode command and exit without running it
 model_explicit="" # set when -m was passed, so --watch won't override a deliberate choice
-allow_dirty=""  # when set, skip the clean-worktree guard on the write (--edit) path
 
 # need_arg <flag> <next-token> — reject a value-taking flag whose value is missing
 # or looks like another flag (a common "-m -a build" typo would otherwise swallow
@@ -197,7 +192,6 @@ while [ $# -gt 0 ]; do
     -s|--session) need_arg "$1" "${2:-}"; session="$2"; shift 2 ;;
     --emit-session) emit_session=1; shift ;;
     --dry-run) dry_run=1; shift ;;
-    --allow-dirty) allow_dirty=1; shift ;;
     --edit) agent="collab-build"; shift ;;
     --research) agent="collab-research"; shift ;;
     --watch) agent="collab-watch"; shift ;;
@@ -383,31 +377,54 @@ if [ -n "$dry_run" ]; then
   exit 0
 fi
 
-# Clean-worktree guard for the WRITE path. When a write-capable agent (collab-build,
-# or the built-in build) is about to edit files, protect the caller's uncommitted
-# work and keep the delegated changes cleanly attributable: refuse a dirty tree
-# unless --allow-dirty, and record the pre-delegation HEAD so the caller can review
-# exactly what the model changed (`git diff <sha>`). Read-only agents skip this.
+# Baseline snapshot for the WRITE path — NOT a guard.
+#
+# There used to be a clean-worktree refusal here (exit 6). It has been removed: it was
+# unjustified asymmetry. Spinning up an Anthropic subagent to edit these same files
+# gets no worktree guard, no snapshot, no quarantine — and a delegated model is the
+# same class of actor: an LLM editing files a human then reviews. Demanding a commit
+# first blocked the actual use case (collaborating on live, uncommitted work) for a
+# reason that a subagent doesn't equally trigger. (The one real asymmetry is `--auto`,
+# which auto-approves tool calls with no human in the loop — that's a harness
+# difference, and it's answered by the agent permission maps, not by this.)
+#
+# What replaces it costs the caller nothing and never blocks: snapshot the worktree as
+# a git tree BEFORE the model runs. `git write-tree` against a throwaway index records
+# tracked edits AND untracked files without touching the worktree or the caller's real
+# index. That buys two things a HEAD baseline can't:
+#   * exact attribution on a dirty tree — the diff afterwards is the model's changes
+#     only, with the caller's in-progress work excluded rather than blended in;
+#   * recovery — the tree is in the object database, so work the model overwrites can
+#     be restored (`git checkout <tree> -- <path>`). The old guard didn't offer that;
+#     it just refused.
+# `git add -A` honours .gitignore, so .env / collab/logs stay out of the snapshot.
+_snapshot_tree() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  local idx tree; idx="$(mktemp -u)" || return 1
+  GIT_INDEX_FILE="$idx" git read-tree HEAD 2>/dev/null || GIT_INDEX_FILE="$idx" git read-tree --empty 2>/dev/null || true
+  GIT_INDEX_FILE="$idx" git add -A 2>/dev/null || true
+  tree="$(GIT_INDEX_FILE="$idx" git write-tree 2>/dev/null || true)"
+  rm -f "$idx"
+  [ -n "$tree" ] || return 1
+  printf '%s\n' "$tree"
+}
+
+write_base_tree=""
 case "$agent" in
   collab-build|build)
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      dirty="$(git status --porcelain 2>/dev/null)"
-      head_sha="$(git rev-parse --short HEAD 2>/dev/null || echo '(no commits yet)')"
-      if [ -z "$allow_dirty" ] && [ -n "$dirty" ]; then
-        {
-          echo "error: refusing to delegate an edit on a DIRTY worktree — the model's changes would be"
-          echo "indistinguishable from your uncommitted work and could overwrite it. Commit or stash"
-          echo "first, or re-run with --allow-dirty to override."
-          echo "  (git status --short:)"
-          printf '%s\n' "$dirty"
-        } >&2
-        exit 6
+      write_base_tree="$(_snapshot_tree || true)"
+      if [ -n "$write_base_tree" ]; then
+        if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+          echo "collab: worktree has uncommitted changes — proceeding. The model may edit the same files;" >&2
+          echo "collab: your current state is snapshotted as tree ${write_base_tree}. Restore a clobbered file with:" >&2
+          echo "collab:   git checkout ${write_base_tree} -- <path>" >&2
+        fi
+      else
+        echo "warning: could not snapshot the worktree — the recorded diff may mix your changes with the model's." >&2
       fi
-      echo "collab: pre-delegation HEAD=${head_sha} — review the model's changes with: git diff ${head_sha}" >&2
-      [ -n "$allow_dirty" ] && [ -n "$dirty" ] \
-        && echo "collab: --allow-dirty — worktree already had uncommitted changes; the diff will mix them with the model's edits." >&2
     else
-      echo "warning: not a git worktree — cannot protect uncommitted work or record a diff baseline for this delegated edit." >&2
+      echo "warning: not a git worktree — no baseline snapshot, and no diff will be recorded for this delegated edit." >&2
     fi ;;
 esac
 
@@ -458,6 +475,37 @@ if [ "${log_setting:-on}" != "off" ] && [ -f "$log_sh" ] && command -v jq >/dev/
     fi
   fi
 fi
+
+# record_delegate_diff — capture what the model ACTUALLY changed, into the evidence log.
+#
+# This is not containment; it is the record. `/collab:witness` can only read
+# collab/logs/**, so without this a delegation is auditable only through the model's own
+# report of what it did — the watcher could check whether Claude relayed the model's
+# CLAIMS faithfully, while the thing worth auditing (does the diff match the report?)
+# stayed invisible. PLAN W0.4 promised these snapshots a home; this fills it.
+#
+# It also fixes a real blind spot in the review itself: `git diff <sha>` does NOT show
+# files the model CREATED, so a delegation that adds a file produced an empty diff.
+# `git add -A` into a throwaway index makes created files part of the tree, so the
+# recorded patch is complete regardless of what the model did.
+record_delegate_diff() {
+  [ -n "$log_enabled" ] || return 0
+  [ -n "$write_base_tree" ] || return 0
+  local after patch rd
+  after="$(_snapshot_tree || true)"; [ -n "$after" ] || return 0
+  rd="$(bash "$log_sh" dir 2>/dev/null || true)"; [ -n "$rd" ] || return 0
+  patch="$rd/diff-${call_id}.patch"
+  git diff-tree -p "$write_base_tree" "$after" > "$patch" 2>/dev/null || { rm -f "$patch"; return 0; }
+  if [ ! -s "$patch" ]; then
+    rm -f "$patch"
+    echo "collab: the model changed no tracked files (nothing to review)." >&2
+    return 0
+  fi
+  bash "$log_sh" diff --call-id "$call_id" --patch-file "$patch" \
+    --base "$write_base_tree" --after "$after" >/dev/null 2>&1 || true
+  echo "collab: the model's changes (complete, incl. created files) => $patch" >&2
+  echo "collab: review them with:  git apply --stat '$patch'  /  cat '$patch'" >&2
+}
 
 # log_complete <exit-status> <response-file> [session-id] — the second half of the
 # pair. The session id is passed in because on a NEW session opencode only reveals it
@@ -513,6 +561,7 @@ if [ -n "$emit_session" ]; then
   fi
   # Log the EXTRACTED answer, not the JSON envelope: `text` is precisely what Claude
   # receives, so an audit of Claude's engagement must compare against the same bytes.
+  record_delegate_diff
   resp_file="$(mktemp 2>/dev/null || true)"
   if [ -n "$resp_file" ] && printf '%s' "$text" > "$resp_file" 2>/dev/null; then
     log_complete "$status" "$resp_file" "$sid"
@@ -554,6 +603,7 @@ else
   elif [ "$status" -ne 0 ]; then
     echo "error: opencode exited $status (model '${model:-opencode default}', agent '${agent}')." >&2
   fi
+  record_delegate_diff
   log_complete "$status" "$resp_file"
   [ -n "$resp_file" ] && rm -f "$resp_file" || true
   exit "$status"

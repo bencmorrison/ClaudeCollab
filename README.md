@@ -104,7 +104,7 @@ These take effect immediately — no shell reload. (Env vars `COLLAB_MODEL`/`COL
 
 The slash commands are thin wrappers over one script you can also call yourself:
 ```bash
-collab/ask.sh [-m provider/model] [-a collab-read|collab-build|plan|build] [--edit] [--allow-dirty] <prompt...>
+collab/ask.sh [-m provider/model] [-a collab-read|collab-build|collab-research|collab-watch|plan|build] [--edit|--research|--watch] <prompt...>
 ```
 See the header of [`collab/ask.sh`](collab/ask.sh) (or `bash collab/ask.sh -h`) for the full interface.
 

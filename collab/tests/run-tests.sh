@@ -76,9 +76,9 @@ run_ask -m openai/gpt-5.5 "q"
   || no "-m not forwarded (got: $(tr '\n' ' ' <"$argsfile"))"
 
 # 3. --edit switches to the collab-build agent (hardened editor, not raw build).
-#    --allow-dirty so this agent-selection check is independent of the worktree
-#    guard (tested separately below) and of this repo's cleanliness during dev.
-run_ask --edit --allow-dirty "change a file"
+#    No --allow-dirty any more: the write path no longer refuses a dirty tree, so this
+#    runs regardless of what state the dev's worktree happens to be in.
+run_ask --edit "change a file"
 args_has 'collab-build' && ! args_has 'collab-read' && ! args_has 'build' \
   && ok "--edit -> --agent collab-build" \
   || no "--edit did not select collab-build (got: $(tr '\n' ' ' <"$argsfile"))"
@@ -90,15 +90,15 @@ args_has 'collab-research' && ! args_has 'collab-read' && ! args_has 'collab-bui
   && ok "--research -> --agent collab-research" \
   || no "--research did not select collab-research (got: $(tr '\n' ' ' <"$argsfile"))"
 
-# 3c. --research is NOT write-capable, so the clean-worktree guard must not gate it
-#     (the guard is write-path only). Run it with a deliberately dirty tree.
+# 3c. --research is read-only, so the write path's baseline snapshot must not touch it.
+#     Run it with a deliberately dirty tree.
 dirty_repo="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
 ( cd "$dirty_repo" && git init -q && echo dirty > uncommitted.txt ) 2>/dev/null
 : > "$argsfile"
 ( cd "$dirty_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" --research "q" >/dev/null 2>&1 ); RC=$?
 { [ "$RC" -ne 6 ] && args_has 'collab-research'; } \
-  && ok "--research skips the write-path worktree guard (dirty tree still runs)" \
-  || no "--research was gated by the worktree guard (rc=$RC)"
+  && ok "--research is unaffected by the write path (dirty tree still runs)" \
+  || no "--research was gated on the write path (rc=$RC)"
 rm -rf "$dirty_repo"
 
 # 3d. --watch selects the collab-watch oversight agent. (-m is required on this path
@@ -257,8 +257,7 @@ rm -rf "$tmp_repo"
 tmp_repo2="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$tmp_repo2/collab"
 cp "$ask" "$tmp_repo2/collab/ask.sh"; cp "$repo_root/collab/models.policy" "$tmp_repo2/collab/" 2>/dev/null || true
 : > "$argsfile"; errf2="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"
-# --allow-dirty so the worktree guard (tested separately) doesn't gate this fallback check.
-OUT="$(COLLAB_POLICY="$allow_pol" bash "$tmp_repo2/collab/ask.sh" --edit --allow-dirty "q" 2>"$errf2")"; RC=$?
+OUT="$(COLLAB_POLICY="$allow_pol" bash "$tmp_repo2/collab/ask.sh" --edit "q" 2>"$errf2")"; RC=$?
 ERR2="$(cat "$errf2")"; rm -f "$errf2"
 # Must fall back to build AND warn loudly that hardening is gone — the warning is the
 # safety-relevant behavior of this fallback, so assert it, not just the agent choice.
@@ -296,42 +295,40 @@ COLLAB_REQUIRE_HARDENED=1 COLLAB_POLICY="$allow_pol" bash "$tmp_repo3/collab/ask
   || no "REQUIRE_HARDENED not enforced (read rc=$rc_read, edit rc=$RC)"
 rm -rf "$tmp_repo3"
 
-# 14d-g. Clean-worktree guard on the write path. Run the REAL ask.sh with cwd set to
-# a temp git repo so the guard sees a controlled state (the collab-build def is still
-# found via ask.sh's own path, so agent=collab-build, no fallback). commit.gpgsign is
-# forced off so the test never triggers a signing prompt.
+# 14d-f. The write path's BASELINE SNAPSHOT (there is no clean-worktree guard any
+# more — it was unjustified asymmetry: an Anthropic subagent editing these same files
+# gets no such gate, and a delegated model is the same class of actor. Delegating onto
+# live uncommitted work is the actual use case). Run the REAL ask.sh with cwd in a temp
+# git repo. commit.gpgsign is forced off so no signing prompt fires.
 guard_repo="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
 ( cd "$guard_repo" && git init -q && git config user.email t@t.co && git config user.name t \
   && git config commit.gpgsign false && git commit -q --allow-empty -m init ) 2>/dev/null
 if [ -d "$guard_repo/.git" ]; then
-  # clean tree -> proceeds, opencode called, stderr notes the pre-delegation HEAD.
+  # A DIRTY tree must simply run — this is the case the old guard refused outright.
+  ( cd "$guard_repo" && : > untracked.txt && printf 'x\n' > tracked.txt && git add tracked.txt )
   : > "$argsfile"
-  ERRG="$(cd "$guard_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" --edit "q" 2>&1 >/dev/null)"; RCG=$?
-  { [ "$RCG" -eq 0 ] && args_has 'collab-build' && printf '%s' "$ERRG" | grep -qi 'pre-delegation HEAD'; } \
-    && ok "guard: clean tree + --edit -> runs, prints pre-delegation HEAD" \
-    || no "guard clean-tree wrong (rc=$RCG, err: $ERRG)"
-
-  # dirty tree (untracked file) -> refuses (exit 6), opencode NOT called.
-  ( cd "$guard_repo" && : > untracked.txt )
-  : > "$argsfile"
-  ( cd "$guard_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" --edit "q" ) >/dev/null 2>&1; RCG=$?
-  { [ "$RCG" -eq 6 ] && ! [ -s "$argsfile" ]; } \
-    && ok "guard: dirty tree + --edit -> exit 6, opencode never called" \
-    || no "guard dirty-tree not enforced (rc=$RCG, argv present=$( [ -s "$argsfile" ] && echo yes || echo no))"
-
-  # dirty tree + --allow-dirty -> proceeds anyway.
-  : > "$argsfile"
-  ( cd "$guard_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" --edit --allow-dirty "q" ) >/dev/null 2>&1; RCG=$?
+  ERRG="$(cd "$guard_repo" && COLLAB_POLICY="$allow_pol" COLLAB_LOG=off bash "$ask" --edit -m m/x "q" 2>&1 >/dev/null)"; RCG=$?
   { [ "$RCG" -eq 0 ] && args_has 'collab-build'; } \
-    && ok "guard: dirty tree + --allow-dirty -> runs anyway" \
-    || no "guard --allow-dirty did not override (rc=$RCG)"
+    && ok "write path: a DIRTY worktree runs (no clean-tree refusal)" \
+    || no "write path refused a dirty tree (rc=$RCG) — the guard is back (err: $ERRG)"
 
-  # dirty tree + READ-ONLY (default agent) -> guard is write-path only, so it runs.
+  # ...and it tells you how to get your work back if the model overwrites it.
+  printf '%s' "$ERRG" | grep -q 'git checkout' \
+    && ok "write path: prints how to restore clobbered work from the snapshot" \
+    || no "write path did not print a recovery instruction on a dirty tree"
+
+  # --allow-dirty is GONE: it only ever existed to override the refusal.
+  ( cd "$guard_repo" && COLLAB_POLICY="$allow_pol" COLLAB_LOG=off bash "$ask" --edit --allow-dirty -m m/x "q" ) >/dev/null 2>&1; RCG=$?
+  [ "$RCG" -ne 0 ] \
+    && ok "--allow-dirty removed (it only overrode a guard that no longer exists)" \
+    || no "--allow-dirty still accepted — dead flag"
+
+  # The read-only path never touched any of this and still must not.
   : > "$argsfile"
-  ( cd "$guard_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" "q" ) >/dev/null 2>&1; RCG=$?
+  ( cd "$guard_repo" && COLLAB_POLICY="$allow_pol" COLLAB_LOG=off bash "$ask" -m m/x "q" ) >/dev/null 2>&1; RCG=$?
   { [ "$RCG" -eq 0 ] && args_has 'collab-read'; } \
-    && ok "guard: dirty tree + read-only -> guard skipped, runs" \
-    || no "guard fired on the read-only path (rc=$RCG)"
+    && ok "read-only path unaffected by the write-path snapshot" \
+    || no "read-only path broke (rc=$RCG)"
 else
   ok "worktree guard (skipped: git init unavailable in this sandbox)"
 fi
@@ -662,6 +659,20 @@ out="$(COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$(newrun)" COLLAB_COMMAND=/coll
   && ok "log: a failing log write does not fail the model call (answer still returned, rc=0)" \
   || no "log: broken logging broke the call it exists to record (rc=$rc)"
 
+# THE call with no model pinned must still log. log.sh parsed args with ${2:?}, which
+# aborts on an EMPTY value — and ask.sh legitimately passes `--model ''` when nothing is
+# pinned (opencode then uses its own default). ask.sh swallows log.sh's stderr, so the
+# entire evidence layer silently recorded NOTHING for any user without a configured
+# default model. Every other case here passes -m, which is exactly why nothing caught it.
+r="$(newrun)"
+( unset COLLAB_MODEL
+  COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$r" COLLAB_COMMAND=/collab:consult \
+    bash "$ask" "no model pinned" >/dev/null 2>&1 || true )
+n="$(entries "$r" | jq -rs 'length' 2>/dev/null || echo 0)"
+[ "${n:-0}" -ge 2 ] \
+  && ok "log: a call with NO -m still logs (empty model must not abort the logger)" \
+  || no "log: a call without -m logged NOTHING ($n entries) — the evidence layer is silently off by default"
+
 # ask.sh must record the selection a watcher needs to judge the call.
 r="$(newrun)"; run_logged "$r" -m openai/gpt-5 --research "q"
 { [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].model')" = "openai/gpt-5" ] \
@@ -767,6 +778,76 @@ COLLAB_POLICY="$allow_pol" bash "$ask" --dry-run -m m/x "dry" >/dev/null 2>&1
 [ "$(ls "$COLLAB_LOG_DIR" | wc -l | tr -d ' ')" = "$before" ] \
   && ok "log: --dry-run calls no model and logs nothing" \
   || no "log: --dry-run created a log entry despite calling no model"
+
+# --- the delegate diff: what the model ACTUALLY changed ------------------------
+# Without this in the log, /collab:witness can only audit the model's REPORT of its work,
+# never the work — on the command PLAN calls the highest-value watcher target.
+dele="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+( cd "$dele" && git init -q . && git config user.email t@t && git config user.name t
+  # gpgsign OFF: this repo signs commits via the 1Password agent, and a test that
+  # fires a host approval prompt (or fails waiting for one) is not a test.
+  git config commit.gpgsign false
+  # This sandbox must keep its OWN log next to its own repo — the suite exports a
+  # shared $COLLAB_LOG_DIR at the top, which would send this run's entries somewhere
+  # else entirely and leave the assertions below looking at an empty directory.
+  unset COLLAB_LOG_DIR
+  mkdir -p collab .opencode/agent
+  cp "$ask" "$logsh" collab/
+  cp "$repo_root/.opencode/agent/collab-build.md" .opencode/agent/
+  printf 'allow *\n' > collab/models.policy
+  printf 'orig\n' > a.txt && git add -A && git commit -qm init
+  # A fake opencode that behaves like a model doing real work: edits a tracked file
+  # AND creates a new one (the case a plain `git diff <sha>` cannot see).
+  cat > oc <<'EOF'
+#!/usr/bin/env bash
+printf 'orig\nCLAUDE-WIP\nMODEL-EDIT\n' > a.txt
+printf 'new file from the model\n' > model-added.txt
+echo "did the work"
+EOF
+  chmod +x oc && mkdir -p bin && mv oc bin/opencode && export PATH="$PWD/bin:$PATH"
+  # Claude is MID-WORK: dirty tree + an untracked scratch file of its own.
+  printf 'orig\nCLAUDE-WIP\n' > a.txt && printf 'claude notes\n' > claude-scratch.txt
+  export COLLAB_RUN_ID="$(bash collab/log.sh new-run /collab:delegate)"
+  COLLAB_COMMAND=/collab:delegate bash collab/ask.sh --edit "work" >/dev/null 2>&1
+  printf '%s' "$COLLAB_RUN_ID" > .runid ) 2>/dev/null
+drun="$(cat "$dele/.runid" 2>/dev/null || true)"
+dlog="$dele/collab/logs/$drun/calls.jsonl"
+
+[ -n "$drun" ] && [ -f "$dlog" ] \
+  && ok "delegate: runs on a DIRTY worktree (no clean-tree refusal)" \
+  || no "delegate: did not run on a dirty tree — the guard is back, or logging broke"
+
+dpatch="$(ls "$dele/collab/logs/$drun"/diff-*.patch 2>/dev/null | head -1)"
+[ -n "$dpatch" ] && ok "delegate: the diff is recorded in the run dir (witness can read it)" \
+                 || no "delegate: NO diff patch recorded — /collab:witness cannot audit a delegation"
+if [ -n "$dpatch" ]; then
+  grep -q 'MODEL-EDIT' "$dpatch" \
+    && ok "delegate: patch captures the model's edit" || no "delegate: patch missing the model's edit"
+  grep -q 'model-added.txt' "$dpatch" \
+    && ok "delegate: patch captures a CREATED file (git diff <sha> is blind to these)" \
+    || no "delegate: patch missing the model's NEW file — the review would not show it"
+  { ! grep -q 'claude notes' "$dpatch"; } \
+    && ok "delegate: Claude's own uncommitted work is NOT attributed to the model" \
+    || no "delegate: the patch blames the model for Claude's in-progress work"
+fi
+# The base tree must be recoverable — that's what replaces the old refusal.
+btree="$(jq -rs '[.[]|select(.type=="delegate-diff").base_tree][0] // ""' "$dlog" 2>/dev/null)"
+if [ -n "$btree" ]; then
+  ( cd "$dele" && printf 'CLOBBERED\n' > a.txt && git checkout "$btree" -- a.txt 2>/dev/null )
+  grep -q 'CLAUDE-WIP' "$dele/a.txt" 2>/dev/null \
+    && ok "delegate: clobbered uncommitted work is recoverable from the base tree" \
+    || no "delegate: could not restore work from the recorded base tree"
+else
+  no "delegate: no base_tree recorded — clobbered work would be unrecoverable"
+fi
+# The patch is part of the record's integrity, not a loose file beside it.
+( cd "$dele" && unset COLLAB_LOG_DIR && bash collab/log.sh verify "$drun" >/dev/null 2>&1 ) \
+  && ok "delegate: log verifies with the diff entry present" || no "delegate: verify fails on a delegate run"
+printf 'tampered\n' >> "$dpatch" 2>/dev/null
+( cd "$dele" && unset COLLAB_LOG_DIR && bash collab/log.sh verify "$drun" >/dev/null 2>&1 ) \
+  && no "delegate: verify PASSED a tampered patch — the diff is outside the integrity contract" \
+  || ok "delegate: verify catches a tampered patch (the diff is covered by the hashes)"
+rm -rf "$dele"
 
 # claude-final (W0.5) — without it a watcher can audit dispositions but not the
 # summary the developer actually read.

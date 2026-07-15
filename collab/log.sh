@@ -36,6 +36,11 @@
 #   claude-final          Claude's final user-facing answer (W0.5). Without it a
 #                         watcher can audit dispositions but NOT the summary the
 #                         developer actually read — the thing most worth auditing.
+#   delegate-diff         what a delegated model ACTUALLY changed (a patch in the run
+#                         dir, complete incl. created files). Machine-generated from
+#                         git plumbing, so `claim: false` — unlike the entry below,
+#                         this is evidence, not testimony. A watcher auditing a
+#                         delegation compares Claude's account against THIS.
 #   claude-disposition    Claude's claimed Adopt/Adapt/Reject/Defer of a model's
 #                         point. **These are CLAIMS TO AUDIT, NOT FACTS** — Claude
 #                         writing its own disposition record is self-report in new
@@ -54,6 +59,8 @@
 #   log.sh final [--run <id>]                claude-final; text on stdin
 #   log.sh disposition --model <m> --point <p> --verdict <Adopt|Adapt|Reject|Defer> \
 #                    [--why <text>]          claude-disposition (a claim, not a fact)
+#   log.sh diff --call-id <id> --patch-file <f> [--base <tree>] [--after <tree>]
+#                                            record what a delegated model changed
 #   log.sh verify [run_id]                   integrity: every started has a completed
 #   log.sh prune [--days <n>]                delete run dirs older than n days
 #
@@ -271,13 +278,13 @@ cmd_started() {
   local call_id="" command="" model="" agent="" session="" prompt_file="" run=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --call-id) call_id="${2:?}"; shift 2 ;;
-      --command) command="${2:?}"; shift 2 ;;
-      --model)   model="${2:?}";   shift 2 ;;
-      --agent)   agent="${2:?}";   shift 2 ;;
-      --session) session="${2:?}"; shift 2 ;;
-      --prompt-file) prompt_file="${2:?}"; shift 2 ;;
-      --run)     run="${2:?}";     shift 2 ;;
+      --call-id) call_id="${2-}"; shift 2 ;;
+      --command) command="${2-}"; shift 2 ;;
+      --model)   model="${2-}";   shift 2 ;;
+      --agent)   agent="${2-}";   shift 2 ;;
+      --session) session="${2-}"; shift 2 ;;
+      --prompt-file) prompt_file="${2-}"; shift 2 ;;
+      --run)     run="${2-}";     shift 2 ;;
       *) echo "log.sh started: unknown arg '$1'" >&2; exit 2 ;;
     esac
   done
@@ -316,15 +323,15 @@ cmd_completed() {
   local call_id="" exit_code="0" turn="" session="" command="" model="" agent="" response_file="" run=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --call-id) call_id="${2:?}"; shift 2 ;;
-      --exit)    exit_code="${2:?}"; shift 2 ;;
-      --turn)    turn="${2:?}";    shift 2 ;;
-      --session) session="${2:?}"; shift 2 ;;
-      --command) command="${2:?}"; shift 2 ;;
-      --model)   model="${2:?}";   shift 2 ;;
-      --agent)   agent="${2:?}";   shift 2 ;;
-      --response-file) response_file="${2:?}"; shift 2 ;;
-      --run)     run="${2:?}";     shift 2 ;;
+      --call-id) call_id="${2-}"; shift 2 ;;
+      --exit)    exit_code="${2-}"; shift 2 ;;
+      --turn)    turn="${2-}";    shift 2 ;;
+      --session) session="${2-}"; shift 2 ;;
+      --command) command="${2-}"; shift 2 ;;
+      --model)   model="${2-}";   shift 2 ;;
+      --agent)   agent="${2-}";   shift 2 ;;
+      --response-file) response_file="${2-}"; shift 2 ;;
+      --run)     run="${2-}";     shift 2 ;;
       *) echo "log.sh completed: unknown arg '$1'" >&2; exit 2 ;;
     esac
   done
@@ -363,7 +370,7 @@ cmd_final() {
   local run=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --run) run="${2:?}"; shift 2 ;;
+      --run) run="${2-}"; shift 2 ;;
       *) echo "log.sh final: unknown arg '$1'" >&2; exit 2 ;;
     esac
   done
@@ -384,11 +391,11 @@ cmd_disposition() {
   local model="" point="" verdict="" why="" run=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --model)   model="${2:?}";   shift 2 ;;
-      --point)   point="${2:?}";   shift 2 ;;
-      --verdict) verdict="${2:?}"; shift 2 ;;
-      --why)     why="${2:?}";     shift 2 ;;
-      --run)     run="${2:?}";     shift 2 ;;
+      --model)   model="${2-}";   shift 2 ;;
+      --point)   point="${2-}";   shift 2 ;;
+      --verdict) verdict="${2-}"; shift 2 ;;
+      --why)     why="${2-}";     shift 2 ;;
+      --run)     run="${2-}";     shift 2 ;;
       *) echo "log.sh disposition: unknown arg '$1'" >&2; exit 2 ;;
     esac
   done
@@ -413,6 +420,43 @@ cmd_disposition() {
 # means a call crashed, timed out or was killed, and its response never reached the
 # log. `/collab:witness` (W2) refuses to audit a failed-integrity log rather than report
 # "clean" over a hole.
+# diff — record what a delegated model actually changed. The patch already lives in the
+# run dir (ask.sh writes it there so it is inside the watcher's read scope); this logs
+# the entry that points at it, with a hash so `verify` covers it like any other payload.
+#
+# This entry is NOT a claim, unlike claude-disposition: it is machine-generated from git
+# plumbing, and the patch file itself is the evidence. A watcher auditing a delegation
+# should compare Claude's account against the PATCH, not against the model's report of
+# what it did.
+cmd_diff() {
+  local call_id="" patch_file="" base="" after="" run=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --call-id) call_id="${2-}"; shift 2 ;;
+      --patch-file) patch_file="${2-}"; shift 2 ;;
+      --base) base="${2-}"; shift 2 ;;
+      --after) after="${2-}"; shift 2 ;;
+      --run) run="${2-}"; shift 2 ;;
+      *) echo "log.sh diff: unknown arg '$1'" >&2; exit 2 ;;
+    esac
+  done
+  [ -n "$patch_file" ] && [ -f "$patch_file" ] || { echo "log.sh diff: --patch-file must exist" >&2; exit 2; }
+  disabled && return 0
+  have_jq || return 0
+  local rid rd file; rid="$(resolve_run "$run")"; rd="$(ensure_run "$rid")"; file="$rd/calls.jsonl"
+  local entry; entry="$(mktemp)"
+  _entry "$rid" delegate-diff "" | jq -c \
+    --arg call_id "$call_id" --arg patch "$(basename "$patch_file")" \
+    --arg base "$base" --arg after "$after" --arg h "$(_sha < "$patch_file")" \
+    --argjson bytes "$(wc -c < "$patch_file" | tr -d ' ')" \
+    --argjson files "$(grep -c '^diff --git ' "$patch_file" 2>/dev/null || echo 0)" \
+    '. + {call_id:$call_id, patch:$patch, base_tree:$base, after_tree:$after,
+          files_changed:$files, patch_bytes:$bytes, claim:false,
+          response_hash:(if $h=="" then null else $h end)}' > "$entry"
+  _with_lock "$file.lock" _append_locked "$file" "$entry"
+  rm -f "$entry"
+}
+
 cmd_verify() {
   local rid rd file; rid="$(resolve_run "${1:-}")"; rd="$(run_dir "$rid")"; file="$rd/calls.jsonl"
   if [ ! -f "$file" ]; then
@@ -468,7 +512,7 @@ cmd_verify() {
     #    half-flushed final write is the single most likely accidental corruption
     #    here. So each entry ALSO carries response_hash over its own payload, which
     #    is verifiable standalone and covers the tail.
-    local i=0 prev="" line got rh
+    local i=0 prev="" line got rh etype pf
     while IFS= read -r line; do
       i=$((i+1))
       got="$(printf '%s' "$line" | jq -r '.prev_hash // ""')"
@@ -478,7 +522,23 @@ cmd_verify() {
       fi
       rh="$(printf '%s' "$line" | jq -r '.response_hash // ""')"
       if [ -n "$rh" ]; then
-        if [ "$(printf '%s' "$line" | jq -j 'if .type=="claude-final" then (.text // "") else (.raw_response // "") end' | _sha)" != "$rh" ]; then
+        etype="$(printf '%s' "$line" | jq -r '.type // ""')"
+        if [ "$etype" = "delegate-diff" ]; then
+          # This entry's payload is a FILE, not a field: the patch of what a delegated
+          # model changed. Hash the file — that folds the patch into the integrity
+          # contract, so a diff deleted or edited after the fact is caught, not just a
+          # mangled JSON line. A missing patch is a failure: the entry claims evidence
+          # that isn't there.
+          pf="$rd/$(printf '%s' "$line" | jq -r '.patch // ""')"
+          if [ ! -f "$pf" ]; then
+            echo "INTEGRITY FAIL: line $i references patch '$(basename "$pf")' which is MISSING — the record points at evidence that no longer exists." >&2
+            bad=1; break
+          fi
+          if [ "$(_sha < "$pf")" != "$rh" ]; then
+            echo "INTEGRITY FAIL: patch '$(basename "$pf")' does not match its digest (line $i) — the recorded diff was altered." >&2
+            bad=1; break
+          fi
+        elif [ "$(printf '%s' "$line" | jq -j 'if .type=="claude-final" then (.text // "") else (.raw_response // "") end' | _sha)" != "$rh" ]; then
           echo "INTEGRITY FAIL: response_hash mismatch at line $i (the recorded answer does not match its digest)." >&2
           bad=1; break
         fi
@@ -493,7 +553,7 @@ cmd_verify() {
 cmd_prune() {
   local days; days="$(cfg COLLAB_LOG_RETENTION_DAYS 14)"
   while [ $# -gt 0 ]; do
-    case "$1" in --days) days="${2:?}"; shift 2 ;; *) echo "log.sh prune: unknown arg '$1'" >&2; exit 2 ;; esac
+    case "$1" in --days) days="${2-}"; shift 2 ;; *) echo "log.sh prune: unknown arg '$1'" >&2; exit 2 ;; esac
   done
   [ "$days" -gt 0 ] 2>/dev/null || return 0     # 0/invalid = pruning disabled
   [ -d "$LOG_DIR" ] || return 0
@@ -518,6 +578,7 @@ case "$sub" in
   completed)   cmd_completed "$@" ;;
   final)       cmd_final "$@" ;;
   disposition) cmd_disposition "$@" ;;
+  diff)        cmd_diff "$@" ;;
   verify)      cmd_verify "$@" ;;
   prune)       cmd_prune "$@" ;;
   -h|--help)   usage 0 ;;
