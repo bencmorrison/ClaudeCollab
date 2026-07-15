@@ -35,6 +35,15 @@ Six commands is the ceiling — do not add more without a distinct workflow + sa
 - **License = MIT.**
 - **Model policy (allow / ask / deny)** — a *configurable per-developer mechanism* (see below), not a fixed list. Ships **default-allow** with commented examples; each developer gates whatever specific models they want.
 
+### Guiding priority (2026-07-15)
+- **Done well over done fast.** There is no pressure to ship a quick v0.1. Correctness, reliability, and a good experience win over scope-cutting for speed. Infrastructure that makes it work well — **background servers/daemons, a persistent warm process, lifecycle management — is explicitly in scope.** (This overrides the earlier "no background daemons" scope cut, which was a planning-round assumption, not a requirement.)
+
+### Transport note (2026-07-15) — the "latency crisis" was a stdin bug, not opencode
+- **What actually happened:** `opencode run` **blocks waiting on stdin** when stdin is a non-TTY pipe — exactly what Claude Code's Bash tool provides. Every Claude-invoked call hung ~60s until killed. This was misdiagnosed at length as a degraded backend, a per-call instance-boot cost, TUI/session contention, and Bash-sandbox interference — **all wrong.** Interactive terminals are a TTY and never hit it, which is why it only bit the wrapper when Claude drove it (the user's TUI was always fast — the data point that should have been believed sooner).
+- **Fix (shipped in `ask.sh`):** redirect the opencode call's stdin from `/dev/null` (immediate EOF), plus a `$COLLAB_TIMEOUT` backstop (default 300s) that fails loudly instead of hanging. With the fix, opencode responds in **~3–5s**. There is **no inherent opencode latency problem and no backend degradation.**
+- **Consequence:** a persistent `opencode serve`/daemon is **NOT needed for latency.** A warm server might still be worth it *later*, purely for multi-turn `/collaborate` continuity/economy — but that's an optional enhancement, evidence-gated, not a fix. Daemons remain permissible (see Guiding priority) but are unneeded now.
+- **Lesson:** when one clean data point contradicts the theory, test the invocation path early — don't explain the data point away.
+
 ## The collaboration contract ("engage, don't dismiss")
 
 Bake into every command prompt so engagement is observable, not promised:
@@ -120,4 +129,6 @@ Because a `deny` rule can sit above `ask`/`allow`, a broad "ask before family X"
 - **Provider/CLI churn** → pin container version, keep a tested compatibility range, keep the wrapper the single narrow boundary.
 
 ## Explicitly NOT doing (v0.1)
-Autonomous model routing, persistent conversation DBs, model scoring/leaderboards, N-model debate trees, a workflow DSL, background daemons, telemetry.
+Autonomous model routing, persistent conversation DBs, model scoring/leaderboards, N-model debate trees, a workflow DSL, telemetry.
+
+*(Removed 2026-07-15: "background daemons" left off this list per the user's "done well, servers/daemons are fine" directive. But note a daemon is NOT needed for latency — that was a stdin bug, now fixed; see the Transport note above. A warm server would only ever be an optional multi-turn-continuity enhancement.)*

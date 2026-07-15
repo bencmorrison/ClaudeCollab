@@ -25,6 +25,9 @@
 # refused; an `ask` model requires $COLLAB_CONFIRMED=1 (Claude sets it only after
 # confirming with the user). See that file for the format.
 #
+# Env: $COLLAB_MODEL (default model), $COLLAB_TIMEOUT (seconds; unset = no timeout,
+#      so long-running model/coding work is never cut off).
+#
 set -euo pipefail
 
 usage() {
@@ -96,4 +99,23 @@ esac
 args=(run --agent "$agent" --auto)
 [ -n "$model" ] && args+=(-m "$model")
 
-exec opencode "${args[@]}" "$prompt"
+# stdin MUST be redirected from /dev/null: `opencode run` blocks waiting on stdin
+# when stdin is a non-TTY pipe (exactly what Claude Code's Bash tool provides), so
+# without this the call hangs until it is killed. Interactive terminals are a TTY
+# and don't hit this — which is why it only bit us when Claude invoked the wrapper.
+# This redirect is the actual fix for the "hangs forever" behavior.
+#
+# Timeout is OPT-IN and OFF by default: legitimate work — deep reasoning, or a
+# --edit coding task running many tool iterations — can take a long time, and a
+# hard cap would kill it. Set $COLLAB_TIMEOUT (seconds) only if you want a backstop
+# against a genuinely stuck call.
+status=0
+if [ -n "${COLLAB_TIMEOUT:-}" ]; then
+  timeout "$COLLAB_TIMEOUT" opencode "${args[@]}" "$prompt" </dev/null || status=$?
+  if [ "$status" -eq 124 ]; then
+    echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT}s with no response (model '${model:-opencode default}', agent '${agent}'). Raise \$COLLAB_TIMEOUT or re-run." >&2
+  fi
+else
+  opencode "${args[@]}" "$prompt" </dev/null || status=$?
+fi
+exit "$status"

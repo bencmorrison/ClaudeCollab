@@ -43,6 +43,7 @@ Claude Code ──(slash command)──▶ collab/ask.sh ──▶ opencode run 
 
 ## Gotchas / decisions
 
+- **`ask.sh` redirects opencode's stdin from `/dev/null` — this is load-bearing, do not remove it.** `opencode run` blocks waiting on stdin when stdin is a non-TTY pipe (exactly what Claude Code's Bash tool hands the wrapper), so without the redirect every Claude-invoked call hangs until killed. Interactive TTYs don't hit this, which is why it only bites when Claude drives it. The optional `$COLLAB_TIMEOUT` (off by default) is just a backstop; the redirect is the actual fix. (Diagnosed the hard way 2026-07-15 — see PLAN.md "Transport note".)
 - No network firewall on the container (decided against — low threat for trusted repos + frontier models). Revisit if delegating on untrusted repos.
 - PAL/Zen-style MCP servers were intentionally **not** used — they need API keys, conflicting with the subscription-only design.
 - opencode's `run` supports `-m/--model`, `--agent`, and `--auto` (verified on opencode 1.17.20). If you bump opencode and these flags change, update `ask.sh` and this file together.
