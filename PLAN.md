@@ -101,8 +101,8 @@ Because a `deny` rule can sit above `ask`/`allow`, a broad "ask before family X"
   - **Ships with the required adversarial test: `collab/verify-collab-read.sh`** (static perms check + runtime write-attempt asserting the file is absent + fail-open guard). Run after any opencode/agent-def bump. *Still TODO: wire it into CI + `doctor.sh` (Phase 3 / Phase 1 doctor).*
   - **Fail-open trap found & guarded:** a `mode: subagent` agent invoked via `opencode run --agent` silently falls back to the full-access `build` agent. `collab-read` is `mode: all`; the verify script fails loudly if the fallback ever happens; ask.sh falls back to `plan` (never `build`) if the def is missing.
   - **Still open:** `collab-build` (deny secret files + external dirs for the `--edit` path) — not yet built.
-- [ ] `--dry-run` on `ask.sh` (print the `opencode` command without running it) — also enables token-free testing.
-- [ ] Validate args (`-a` values, missing `-m`/`-a`); print selected model + mode; preserve and report non-zero opencode exit status.
+- [x] **`--dry-run` on `ask.sh`** (2026-07-15) — prints the faithful `opencode` command (timeout prefix + `</dev/null` included, safely `%q`-quoted) and exits 0 without calling a model. Token-free; the model policy still runs first, so a denied model refuses even under `--dry-run`. Unblocks the fake-`opencode` tests below.
+- [x] **Validate args** (2026-07-15) — `need_arg` rejects a value-flag with a missing/flag-looking value (catches `-m --edit`); soft-notes a non-`collab-read|plan|build` agent; echoes `collab: model=… agent=…` to stderr; reports non-zero opencode exit (distinct message for `$COLLAB_TIMEOUT` 124 vs other codes) while preserving the exit status.
 - [ ] `collab/doctor.sh` — tool versions, auth presence, available models, default model, permission-policy check.
 - [ ] Tests with a **fake `opencode` executable** asserting exact args (no model calls).
 - [ ] Delegate safety: require clean worktree (`--allow-dirty` escape hatch), record pre-delegation `HEAD`, diff against it, tell build agent not to commit / touch unrelated files.

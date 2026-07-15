@@ -22,6 +22,9 @@
 #                       the session id and continue with -s (used by /collaborate,
 #                       Option B: opencode carries the peer's turns, not Claude).
 #                       Requires `jq`.
+#   --dry-run           Print the exact opencode command that WOULD run (safely
+#                       quoted) and exit 0 without calling any model. Token-free;
+#                       use it to inspect model/agent selection or in tests.
 #
 # Examples:
 #   collab/ask.sh "Critique this migration plan: ..."          # read-only opinion
@@ -71,13 +74,24 @@ agent="collab-read"  # our read-only agent: denies bash/write/edit/patch at open
                      # to opencode's `plan` if the def is missing — see below.
 session=""      # opencode session id to continue (Option B multi-turn), forwarded via -s
 emit_session="" # when set, emit "SESSION: <id>" + the extracted answer (for /collaborate)
+dry_run=""      # when set, print the opencode command and exit without running it
+
+# need_arg <flag> <next-token> — reject a value-taking flag whose value is missing
+# or looks like another flag (a common "-m -a build" typo would otherwise swallow
+# the next flag as the value). Model/agent/session ids never start with '-'.
+need_arg() {
+  case "${2:-__MISSING__}" in
+    __MISSING__|-*) echo "error: $1 requires a value (got '${2:-}')." >&2; usage ;;
+  esac
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -m) model="${2:-}"; shift 2 ;;
-    -a) agent="${2:-}"; shift 2 ;;
-    -s|--session) session="${2:-}"; shift 2 ;;
+    -m) need_arg -m "${2:-}"; model="$2"; shift 2 ;;
+    -a) need_arg -a "${2:-}"; agent="$2"; shift 2 ;;
+    -s|--session) need_arg "$1" "${2:-}"; session="$2"; shift 2 ;;
     --emit-session) emit_session=1; shift ;;
+    --dry-run) dry_run=1; shift ;;
     --edit) agent="build"; shift ;;
     -h|--help) usage 0 ;;
     --) shift; break ;;
@@ -88,6 +102,14 @@ done
 
 prompt="$*"
 [ -z "$prompt" ] && { echo "error: no prompt given" >&2; usage; }
+
+# Soft-validate the agent: collab-read|plan|build are the ones this repo ships and
+# reasons about. A custom agent is allowed (opencode may define others), but flag it
+# so a typo like '-a paln' doesn't silently run an unintended/again-fallback agent.
+case "$agent" in
+  collab-read|plan|build) ;;
+  *) echo "note: '-a $agent' is not one of collab-read|plan|build; using it as-is." >&2 ;;
+esac
 
 if ! command -v opencode >/dev/null 2>&1; then
   echo "error: opencode not found. Install with: npm install -g opencode-ai" >&2
@@ -124,6 +146,22 @@ args=(run --agent "$agent" --auto)
 [ -n "$model" ] && args+=(-m "$model")
 [ -n "$session" ] && args+=(-s "$session")
 
+# --dry-run: show the faithful command (timeout prefix + stdin redirect included, so
+# what's printed is exactly what would execute) and stop. No model is called.
+if [ -n "$dry_run" ]; then
+  dry=()
+  [ -n "${COLLAB_TIMEOUT:-}" ] && dry+=(timeout "$COLLAB_TIMEOUT")
+  dry+=(opencode "${args[@]}")
+  [ -n "$emit_session" ] && dry+=(--format json)
+  dry+=("$prompt")
+  printf '%q ' "${dry[@]}"; printf '</dev/null\n'
+  exit 0
+fi
+
+# Echo the resolved selection to stderr (stdout carries only the model's answer /
+# the SESSION payload). Cheap observability into what actually ran.
+echo "collab: model=${model:-<opencode default>} agent=${agent}${session:+ session=$session}" >&2
+
 # run_opencode: invoke opencode with stdin redirected from /dev/null and an optional
 # timeout. stdin MUST be /dev/null: `opencode run` blocks waiting on stdin when stdin
 # is a non-TTY pipe (exactly what Claude Code's Bash tool provides), so without this
@@ -153,6 +191,8 @@ if [ -n "$emit_session" ]; then
   if [ "$status" -eq 124 ]; then
     echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT}s with no response." >&2
     exit "$status"
+  elif [ "$status" -ne 0 ]; then
+    echo "error: opencode exited $status (model '${model:-opencode default}', agent '${agent}')." >&2
   fi
   valid="$(printf '%s\n' "$raw" | jq -rR 'fromjson? // empty' 2>/dev/null)"
   sid="$(printf '%s\n' "$valid" | jq -rs '[.[].sessionID] | map(select(. != null)) | .[0] // ""' 2>/dev/null)"
@@ -166,6 +206,8 @@ else
   run_opencode "${args[@]}" "$prompt" || status=$?
   if [ "$status" -eq 124 ]; then
     echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT}s with no response (model '${model:-opencode default}', agent '${agent}'). Raise \$COLLAB_TIMEOUT or re-run." >&2
+  elif [ "$status" -ne 0 ]; then
+    echo "error: opencode exited $status (model '${model:-opencode default}', agent '${agent}')." >&2
   fi
   exit "$status"
 fi
