@@ -14,6 +14,11 @@
 #   -a plan|build       opencode agent. `plan` is read-only (default); `build`
 #                       can edit files in this repo.
 #   --edit              Shorthand for `-a build` — let the other model change files.
+#   -s, --session <id>  Continue an existing opencode session (multi-turn dialogue).
+#   --emit-session      Print "SESSION: <id>\n---\n<answer>" so a caller can capture
+#                       the session id and continue with -s (used by /collaborate,
+#                       Option B: opencode carries the peer's turns, not Claude).
+#                       Requires `jq`.
 #
 # Examples:
 #   collab/ask.sh "Critique this migration plan: ..."          # read-only opinion
@@ -59,11 +64,15 @@ policy_tier() {
 model="${COLLAB_MODEL:-}"
 agent="plan"   # default to opencode's read-only plan agent (see PLAN.md: enforced by
                # plan-mode + model compliance, not a hard sandbox)
+session=""      # opencode session id to continue (Option B multi-turn), forwarded via -s
+emit_session="" # when set, emit "SESSION: <id>" + the extracted answer (for /collaborate)
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -m) model="${2:-}"; shift 2 ;;
     -a) agent="${2:-}"; shift 2 ;;
+    -s|--session) session="${2:-}"; shift 2 ;;
+    --emit-session) emit_session=1; shift ;;
     --edit) agent="build"; shift ;;
     -h|--help) usage 0 ;;
     --) shift; break ;;
@@ -98,24 +107,50 @@ esac
 # apply edits without blocking on prompts (that's the point of delegating).
 args=(run --agent "$agent" --auto)
 [ -n "$model" ] && args+=(-m "$model")
+[ -n "$session" ] && args+=(-s "$session")
 
-# stdin MUST be redirected from /dev/null: `opencode run` blocks waiting on stdin
-# when stdin is a non-TTY pipe (exactly what Claude Code's Bash tool provides), so
-# without this the call hangs until it is killed. Interactive terminals are a TTY
-# and don't hit this — which is why it only bit us when Claude invoked the wrapper.
-# This redirect is the actual fix for the "hangs forever" behavior.
+# run_opencode: invoke opencode with stdin redirected from /dev/null and an optional
+# timeout. stdin MUST be /dev/null: `opencode run` blocks waiting on stdin when stdin
+# is a non-TTY pipe (exactly what Claude Code's Bash tool provides), so without this
+# the call hangs until killed. Interactive terminals are a TTY and don't hit it —
+# which is why it only bit us when Claude invoked the wrapper. This is the real fix.
 #
-# Timeout is OPT-IN and OFF by default: legitimate work — deep reasoning, or a
-# --edit coding task running many tool iterations — can take a long time, and a
-# hard cap would kill it. Set $COLLAB_TIMEOUT (seconds) only if you want a backstop
-# against a genuinely stuck call.
+# Timeout is OPT-IN and OFF by default: legitimate work — deep reasoning, or a --edit
+# task running many tool iterations — can take a long time, and a hard cap would kill
+# it. Set $COLLAB_TIMEOUT (seconds) only if you want a backstop against a stuck call.
+run_opencode() {
+  if [ -n "${COLLAB_TIMEOUT:-}" ]; then
+    timeout "$COLLAB_TIMEOUT" opencode "$@" </dev/null
+  else
+    opencode "$@" </dev/null
+  fi
+}
+
 status=0
-if [ -n "${COLLAB_TIMEOUT:-}" ]; then
-  timeout "$COLLAB_TIMEOUT" opencode "${args[@]}" "$prompt" </dev/null || status=$?
+if [ -n "$emit_session" ]; then
+  # Option B (multi-turn): run in JSON mode, then extract the session id and the
+  # assistant's answer. The caller (/collaborate) captures the id from the SESSION:
+  # line and threads it back with -s on later turns, so opencode — not Claude —
+  # carries the peer's prior words (fidelity by construction, not by Claude's
+  # discipline). Two-stage jq tolerates any stray non-JSON line before slurping.
+  command -v jq >/dev/null 2>&1 || { echo "error: --emit-session needs 'jq' (not found)." >&2; exit 127; }
+  raw="$(run_opencode "${args[@]}" --format json "$prompt")" || status=$?
+  if [ "$status" -eq 124 ]; then
+    echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT}s with no response." >&2
+    exit "$status"
+  fi
+  valid="$(printf '%s\n' "$raw" | jq -rR 'fromjson? // empty' 2>/dev/null)"
+  sid="$(printf '%s\n' "$valid" | jq -rs '[.[].sessionID] | map(select(. != null)) | .[0] // ""' 2>/dev/null)"
+  text="$(printf '%s\n' "$valid" | jq -rs '[.[] | select(.type=="text") | .part.text] | add // ""' 2>/dev/null)"
+  if [ -z "$text" ] && [ "$status" -eq 0 ]; then
+    echo "warning: opencode returned no answer text (session '${sid:-?}', model '${model:-opencode default}')." >&2
+  fi
+  printf 'SESSION: %s\n---\n%s\n' "$sid" "$text"
+  exit "$status"
+else
+  run_opencode "${args[@]}" "$prompt" || status=$?
   if [ "$status" -eq 124 ]; then
     echo "error: opencode hit \$COLLAB_TIMEOUT=${COLLAB_TIMEOUT}s with no response (model '${model:-opencode default}', agent '${agent}'). Raise \$COLLAB_TIMEOUT or re-run." >&2
   fi
-else
-  opencode "${args[@]}" "$prompt" </dev/null || status=$?
+  exit "$status"
 fi
-exit "$status"
