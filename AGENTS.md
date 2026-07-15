@@ -50,6 +50,11 @@ Claude Code ──(slash command)──▶ collab/ask.sh ──▶ opencode run 
 - PAL/Zen-style MCP servers were intentionally **not** used — they need API keys, conflicting with the subscription-only design.
 - opencode's `run` supports `-m/--model`, `--agent`, and `--auto` (verified on opencode 1.17.20). If you bump opencode and these flags change, update `ask.sh` and this file together.
 
+## Testing
+
+- **`bash collab/tests/run-tests.sh`** — unit tests for `ask.sh` via a fake `opencode` on `PATH` (`collab/tests/fake-opencode`). No model is called; each case asserts argv/behaviour (agent & model selection, session threading, the `</dev/null` redirect, `--emit-session` extraction, exit-status propagation, policy short-circuit, `--dry-run`, collab-read→plan fallback). Run it after touching `ask.sh`.
+- **`bash collab/verify-collab-read.sh`** — adversarial proof the `collab-read` agent's read-only deny holds (uses a free model). Run after bumping opencode or the agent def.
+
 ## Repo health notes
 
 - This is a normal git repo on branch `main`. (If git ever reports "not a repository" but `.git/` exists, check that `.git/HEAD` is present — it should contain `ref: refs/heads/main`.)

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# fake-opencode — a stand-in for the real `opencode` binary used by the ask.sh
+# test suite. It NEVER calls a model. It records the argv and stdin it received,
+# emits canned output, and exits with a controllable status, so tests can assert
+# exactly what ask.sh would have run.
+#
+# Controlled via env (all optional):
+#   FAKE_OPENCODE_ARGS   file to write received argv to, one arg per line
+#   FAKE_OPENCODE_STDIN  file to write received stdin to (proves the </dev/null redirect)
+#   FAKE_OPENCODE_EXIT   exit code to return (default 0)
+#   FAKE_OPENCODE_TEXT   answer text (plain mode, and the text embedded in JSON mode)
+#   FAKE_OPENCODE_SID    session id embedded in JSON-mode events (default ses_fake)
+#
+# Output shape is chosen by whether `--format json` appears in argv (that's how
+# ask.sh's --emit-session path invokes it).
+set -euo pipefail
+
+[ -n "${FAKE_OPENCODE_ARGS:-}" ] && printf '%s\n' "$@" > "$FAKE_OPENCODE_ARGS"
+# Drain stdin so we can prove ask.sh redirected it from /dev/null (empty capture).
+if [ -n "${FAKE_OPENCODE_STDIN:-}" ]; then cat > "$FAKE_OPENCODE_STDIN"; else cat >/dev/null; fi
+
+text="${FAKE_OPENCODE_TEXT:-canned answer}"
+sid="${FAKE_OPENCODE_SID:-ses_fake}"
+
+json=0
+for a in "$@"; do [ "$a" = "--format" ] && json=1; done
+
+if [ "$json" -eq 1 ]; then
+  # Line-delimited events with sessionID on each, matching what ask.sh's jq expects.
+  printf '{"type":"step-start","sessionID":"%s"}\n' "$sid"
+  printf '{"type":"text","part":{"text":%s},"sessionID":"%s"}\n' "$(printf '%s' "$text" | jq -Rs .)" "$sid"
+else
+  printf '%s\n' "$text"
+fi
+
+exit "${FAKE_OPENCODE_EXIT:-0}"
