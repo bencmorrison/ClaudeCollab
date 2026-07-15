@@ -35,9 +35,11 @@ Claude Code  ──(slash command)──▶  collab/ask.sh  ──▶  opencode 
 
 That's it. The slash commands below are already in `.claude/commands/`.
 
-## Dev container (recommended)
+## Dev container (for working *on* ClaudeCollab)
 
-Development runs in a dev container (`.devcontainer/`) with **Claude Code and opencode both preinstalled**. You log in **once inside the container**; login state persists across rebuilds in named volumes (`claudecollab-claude`, `claudecollab-opencode`). No API keys or host credentials are baked into the image.
+**To *use* ClaudeCollab you don't need this** — the Setup above (opencode authenticated in your own environment) is all it takes. The dev container is for **developing ClaudeCollab itself**: it brings the whole development environment — Claude Code, opencode, and the test tooling — into one reproducible box so contributors get an identical setup. If you're just running the slash commands in your own repo, skip this section.
+
+The container (`.devcontainer/`) has **Claude Code and opencode both preinstalled**. You log in **once inside the container**; login state persists across rebuilds in named volumes (`claudecollab-claude`, `claudecollab-opencode`). No API keys or host credentials are baked into the image.
 
 > Why in-container login and not host-credential mounts? On macOS, the host credential files are mode `600` and appear `root`-owned through Docker's mount layer, so the non-root `node` user the agents run as can't read them. In-container login sidesteps that and lets the agents refresh their own tokens.
 
