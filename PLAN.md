@@ -35,6 +35,13 @@ Six commands is the ceiling — do not add more without a distinct workflow + sa
 - **License = MIT.**
 - **Model policy (allow / ask / deny)** — a *configurable per-developer mechanism* (see below), not a fixed list. Ships **default-allow** with commented examples; each developer gates whatever specific models they want.
 
+### `/collaborate` memory = Option B, session continuation (2026-07-15)
+- **Decision:** `/collaborate` uses opencode **session continuation** (`-s <session-id>`, id captured from the first call's `--format json`), **not** Claude re-packaging the transcript each turn.
+- **Why:** the peer's prior turns live in opencode's session, so **Claude never re-transmits the other model's words** — it only sends its own new turn. Fidelity becomes a **construction guarantee**, not a matter of Claude's discipline. Option A was rejected because its "pass the peer's words verbatim" rule relies on Claude actually doing so, and Claude is known to quietly edit/paraphrase outputs — an unenforceable, trust-based guarantee. (A wrapper-owned mechanical transcript was also considered; B was preferred as the cleaner construction guarantee.)
+- **Logging:** a full back-and-forth record is still kept by capturing each peer response (`ask.sh` stdout) plus Claude's sent turns — a parallel log, slightly harder to assemble since opencode's session is the authoritative store.
+- **Requires** the session plumbing (capture session id via `--format json`, thread `-s <id>`, `--fork` to branch, hard turn cap) — promoted from "Phase 4 / later" into the `/collaborate` build itself.
+- **Provenance:** settled via a live `/collaborate`-contract dogfood — independent view (leaned A) → peer `gpt-5.5` (also A, but surfaced the "Claude-as-curator" risk) → user flagged verbatim-by-Claude is unenforceable → resolved to B (verbatim-by-construction).
+
 ### Guiding priority (2026-07-15)
 - **Done well over done fast.** There is no pressure to ship a quick v0.1. Correctness, reliability, and a good experience win over scope-cutting for speed. Infrastructure that makes it work well — **background servers/daemons, a persistent warm process, lifecycle management — is explicitly in scope.** (This overrides the earlier "no background daemons" scope cut, which was a planning-round assumption, not a requirement.)
 
@@ -116,7 +123,7 @@ Because a `deny` rule can sit above `ask`/`allow`, a broad "ask before family X"
 
 ### Phase 4 — Installability & post-release  *(evidence-driven)*
 - [ ] Simple installer that copies wrapper + commands + owned agents into a target repo; refuses to overwrite; never clobbers the target's `AGENTS.md`/`CLAUDE.md`. (v0.2 — document manual copy for v0.1.)
-- [ ] **Multi-turn `/collaborate` via opencode sessions** (mechanism *verified* in Phase 0). Needs `ask.sh` to capture a session id from the first call (likely via `--format json`) and pass `-s <id>` on later calls; `--fork` to branch. Keep a hard turn cap. Until then, v1 `/collaborate` does bounded back-and-forth by having Claude re-package the transcript each call (no new plumbing).
+- [ ] **Multi-turn `/collaborate` via opencode sessions** (mechanism *verified* in Phase 0; chosen as **Option B** — see the decision above). `ask.sh` captures the session id from the first call's `--format json` and threads `-s <id>` on later calls; `--fork` to branch; hard turn cap. This is the v1 approach (the transcript-repackaging fallback was rejected on fidelity grounds), so this plumbing is required for `/collaborate`, not deferred.
 - [ ] Only if evidence demands: worktree isolation for delegation, structured JSON event parsing, smarter panel selection.
 
 ## Risks & mitigations (carry forward)
