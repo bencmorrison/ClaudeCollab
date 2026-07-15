@@ -101,8 +101,9 @@ dirty_repo="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
   || no "--research was gated by the worktree guard (rc=$RC)"
 rm -rf "$dirty_repo"
 
-# 3d. --watch selects the collab-watch oversight agent.
-run_ask --watch "audit the log"
+# 3d. --watch selects the collab-watch oversight agent. (-m is required on this path
+#     now — an unpinned watcher is refused; see 3e2.)
+run_ask --watch -m openai/gpt-5.5 "audit the log"
 args_has 'collab-watch' && ! args_has 'collab-read' \
   && ok "--watch -> --agent collab-watch" \
   || no "--watch did not select collab-watch (got: $(tr '\n' ' ' <"$argsfile"))"
@@ -120,6 +121,18 @@ done
 COLLAB_POLICY="$allow_pol" COLLAB_CONFIRMED=1 bash "$ask" --watch --dry-run -m anthropic/claude-opus-4-5 "audit" >/dev/null 2>&1 \
   && ok "--watch allows a Claude model once COLLAB_CONFIRMED=1 (user's call, not ours)" \
   || no "--watch still refused a Claude model after explicit confirmation"
+
+# 3e2. An UNPINNED watcher model must be refused. This is the hole the Claude-model
+#      check had: with no -m and no $COLLAB_WATCH_MODEL/$COLLAB_MODEL, `model` is
+#      empty, no -m reaches opencode, opencode uses ITS OWN default — and the check
+#      below never fires, because "" matches no pattern. If that default is Claude,
+#      Claude audits Claude in silence. (Found by dogfooding /review, 2026-07-15.)
+: > "$argsfile"
+( unset COLLAB_MODEL COLLAB_WATCH_MODEL
+  COLLAB_POLICY="$allow_pol" bash "$ask" --watch --dry-run "audit" >/dev/null 2>&1 ); RC=$?
+{ [ "$RC" -eq 8 ] && ! [ -s "$argsfile" ]; } \
+  && ok "--watch refuses an UNPINNED model (exit 8) — opencode's own default may be Claude" \
+  || no "--watch ran with no model id (rc=$RC) — opencode's default could be Claude, unchecked"
 
 # 3f. $COLLAB_WATCH_MODEL is preferred over the general default, but an explicit -m
 #     still wins — the watcher is pinned separately from the model doing the work.
@@ -148,6 +161,13 @@ cp "$ask" "$watchdir/collab/"; printf 'allow *\n' > "$watchdir/collab/models.pol
 { [ "$RC" -eq 5 ] && ! [ -s "$argsfile" ]; } \
   && ok "--watch hard-fails (exit 5) when the def is missing — no silent downgrade of oversight" \
   || no "--watch fell back to a weaker agent with the def missing (rc=$RC)"
+# ...and the MISSING DEF wins over the model complaint when both are wrong: "reinstall
+# the def" is the actionable error; "pick a non-Claude model" sends you chasing the
+# wrong thing.
+( cd "$watchdir" && COLLAB_LOG=off bash collab/ask.sh --watch --dry-run -m anthropic/claude-opus-4-5 "audit" >/dev/null 2>&1 ); RC=$?
+[ "$RC" -eq 5 ] \
+  && ok "--watch reports the missing def (5) ahead of the model refusal (8)" \
+  || no "--watch reported the model complaint over the missing def (rc=$RC)"
 rm -rf "$watchdir"
 
 # 4. -a plan honoured.
@@ -773,6 +793,13 @@ r1="$(newrun)"; r2="$(COLLAB_RUN_ID="$r1" bash "$logsh" new-run /panel)"
 [ -n "$r2" ] && [ "$r1" != "$r2" ] \
   && ok "log: new-run mints a fresh id even when \$COLLAB_RUN_ID is set" \
   || no "log: new-run returned the ambient run id ($r1 == $r2)"
+
+# `latest` — /witness resolves the most recent run with it, and must not have to shell
+# out to `readlink` (which it is not permitted to run, and whose flags differ on BSD).
+r="$(newrun)"; run_logged "$r" -m m/x "q"
+[ "$(bash "$logsh" latest 2>/dev/null)" = "$r" ] \
+  && ok "log: 'latest' prints the most recent run id" \
+  || no "log: 'latest' wrong (got '$(bash "$logsh" latest 2>&1)', expected $r)"
 
 # Retention (W0.6): an unbounded log dir is an indefinite sensitive-data surface.
 oldrun="$COLLAB_LOG_DIR/20200101T000000Z-deadbeef"; mkdir -p "$oldrun"

@@ -228,8 +228,18 @@ case "$agent" in
 esac
 
 # ---- the oversight path (--watch / /witness) --------------------------------
-# Two rules apply here that apply nowhere else, because this agent's job is to check
-# up on Claude and both rules exist to stop that check quietly becoming worthless.
+# Three rules apply here that apply nowhere else, because this agent's job is to
+# check up on Claude and each exists to stop that check quietly becoming worthless.
+#
+# The def check comes FIRST: if the def is missing AND the model is a Claude one,
+# "reinstall the def" is the actionable error, and the model complaint would just
+# send the user chasing the wrong thing.
+if [ "$agent" = "collab-watch" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-watch.md" ]; then
+  echo "error: collab-watch agent def not found. Refusing to fall back — any weaker agent can read the" >&2
+  echo "repo's source and would 'audit' that instead of the log, which is not oversight. Reinstall it." >&2
+  exit 5
+fi
+
 if [ "$agent" = "collab-watch" ]; then
   # 1. Model: prefer $COLLAB_WATCH_MODEL (env or config) so the auditor can be pinned
   #    to a different model from the one doing the work, without disturbing the
@@ -239,7 +249,25 @@ if [ "$agent" = "collab-watch" ]; then
     [ -n "$watch_model" ] && model="$watch_model"
   fi
 
-  # 2. Refuse to let Claude audit Claude unless the user explicitly says so. An
+  # 2. The watcher model must be PINNED. With no -m, no $COLLAB_WATCH_MODEL and no
+  #    $COLLAB_MODEL, `model` is empty: no -m reaches opencode, opencode falls back to
+  #    ITS OWN configured default — and the Claude check below never fires, because an
+  #    empty string matches no pattern. If that default is a Claude model, Claude
+  #    audits Claude and nothing says a word. The refusal below is worthless unless we
+  #    know what we're refusing, and we only know that if the id is explicit.
+  #    (Found by dogfooding /review on this very commit — the guarantee held only in
+  #    the case that had been tested.)
+  if [ -z "$model" ]; then
+    {
+      echo "error: the watcher model must be named explicitly. With no model id, opencode would fall back"
+      echo "to its own default — which may be a Claude model, and Claude is the party under audit. This"
+      echo "wrapper cannot check a model it hasn't been told about."
+      echo "Set COLLAB_WATCH_MODEL (env or collab/collab.conf.local), or pass -m <provider/model>."
+    } >&2
+    exit 8
+  fi
+
+  # 3. Refuse to let Claude audit Claude unless the user explicitly says so. An
   #    auditor from the same family as the party under audit is not the independent
   #    view /witness claims to provide — and the developer would have no way to tell
   #    from the report. This is a fail-CLOSED heuristic on the model id, not a
@@ -320,20 +348,6 @@ if [ "$agent" = "collab-research" ] && [ ! -f "$(dirname "$0")/../.opencode/agen
   fi
   echo "warning: collab-research agent def not found; falling back to opencode's 'plan' — WEAKER (compliance-only; does not deny bash, secret reads, or grep/glob) and this path has network egress." >&2
   agent="plan"
-fi
-
-# The watch path has NO fallback, deliberately — unlike every other agent here.
-# `plan` (the usual read-only fallback) has whole-repo read AND bash, so falling back
-# would hand the auditor the repo's source and a shell. It would still produce a
-# confident report; it just wouldn't be an audit any more — it'd be a second
-# consultant reading the code instead of the log, which is the exact failure
-# collab-watch's scoped read map exists to make impossible. A missing def is a
-# hard error (exit 5) regardless of $COLLAB_REQUIRE_HARDENED: silently degrading
-# oversight is worse than having none, because it still looks like oversight.
-if [ "$agent" = "collab-watch" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-watch.md" ]; then
-  echo "error: collab-watch agent def not found. Refusing to fall back — any weaker agent can read the" >&2
-  echo "repo's source and would 'audit' that instead of the log, which is not oversight. Reinstall it." >&2
-  exit 5
 fi
 
 # Enforce the model policy as a hard backstop (independent of Claude's own check).

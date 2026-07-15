@@ -51,9 +51,18 @@ permission:
   read:
     "*": deny
     # The evidence log — this agent's only window onto anything. Both forms are
-    # listed because opencode resolves the tool's path argument as given: the
-    # repo-relative form covers the normal in-repo run, the `**/` form covers an
-    # absolute path or a $COLLAB_LOG_DIR pointed elsewhere.
+    # listed because opencode matches the path as resolved: the repo-relative form
+    # covers an in-repo relative read, and the `**/` form is LOAD-BEARING because
+    # /witness passes an ABSOLUTE path (`log.sh path` returns one), which the
+    # repo-relative pattern does not match. Removing it breaks /witness outright.
+    #
+    # Known and accepted (raised by /review 2026-07-15): `**/collab/logs/**` matches
+    # ANY project's collab/logs/, not just this one's. $COLLAB_LOG_DIR is
+    # configurable, so no static glob can name the real root. The exposure is other
+    # ClaudeCollab log dirs — same class of data, and this agent has no egress to
+    # send them anywhere. Path traversal out of the scope was probed and does NOT
+    # work: opencode normalizes before matching, so collab/logs/../x resolves to
+    # collab/x and hits the deny floor.
     "collab/logs/**": allow
     "**/collab/logs/**": allow
 ---

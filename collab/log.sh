@@ -44,6 +44,7 @@
 #
 # Usage:
 #   log.sh new-run [command]                 mint a run_id (mkdir + prune), print it
+#   log.sh latest                            print the most recent run's id
 #   log.sh dir  [run_id]                     print the run directory
 #   log.sh path [run_id]                     print the calls.jsonl path
 #   log.sh started   --call-id <id> --command <c> --model <m> --agent <a> \
@@ -253,6 +254,14 @@ cmd_new_run() {
   # Retention: an unbounded log directory is an indefinite sensitive-data surface.
   cmd_prune --days "$(cfg COLLAB_LOG_RETENTION_DAYS 14)" >/dev/null 2>&1 || true
   printf '%s\n' "$rid"
+}
+
+# latest — the most recent run's id. /witness needs this and must not have to shell
+# out to `readlink` (which it isn't permitted to run, and whose flags differ on BSD).
+cmd_latest() {
+  local l="$LOG_DIR/latest"
+  [ -L "$l" ] || { echo "log.sh latest: no runs logged yet ($LOG_DIR)" >&2; return 1; }
+  basename "$(readlink "$l")"
 }
 
 cmd_dir()  { printf '%s\n' "$(run_dir "$(resolve_run "${1:-}")")"; }
@@ -502,6 +511,7 @@ cmd_prune() {
 sub="$1"; shift
 case "$sub" in
   new-run)     cmd_new_run "$@" ;;
+  latest)      cmd_latest "$@" ;;
   dir)         cmd_dir "$@" ;;
   path)        cmd_path "$@" ;;
   started)     cmd_started "$@" ;;
