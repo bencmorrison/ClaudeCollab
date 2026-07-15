@@ -101,6 +101,55 @@ dirty_repo="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
   || no "--research was gated by the worktree guard (rc=$RC)"
 rm -rf "$dirty_repo"
 
+# 3d. --watch selects the collab-watch oversight agent.
+run_ask --watch "audit the log"
+args_has 'collab-watch' && ! args_has 'collab-read' \
+  && ok "--watch -> --agent collab-watch" \
+  || no "--watch did not select collab-watch (got: $(tr '\n' ' ' <"$argsfile"))"
+
+# 3e. The watcher must NOT be a Claude model without explicit confirmation: Claude is
+#     the party under audit, so a same-family auditor is not the independent check
+#     /witness reports itself to be — and the developer can't tell from the report.
+for m in anthropic/claude-opus-4-5 some-provider/claude-3; do
+  : > "$argsfile"
+  COLLAB_POLICY="$allow_pol" bash "$ask" --watch --dry-run -m "$m" "audit" >/dev/null 2>&1; RC=$?
+  { [ "$RC" -eq 8 ] && ! [ -s "$argsfile" ]; } \
+    && ok "--watch refuses Claude model '$m' (exit 8, never invoked)" \
+    || no "--watch ran a Claude watcher '$m' (rc=$RC) — Claude auditing Claude"
+done
+COLLAB_POLICY="$allow_pol" COLLAB_CONFIRMED=1 bash "$ask" --watch --dry-run -m anthropic/claude-opus-4-5 "audit" >/dev/null 2>&1 \
+  && ok "--watch allows a Claude model once COLLAB_CONFIRMED=1 (user's call, not ours)" \
+  || no "--watch still refused a Claude model after explicit confirmation"
+
+# 3f. $COLLAB_WATCH_MODEL is preferred over the general default, but an explicit -m
+#     still wins — the watcher is pinned separately from the model doing the work.
+: > "$argsfile"
+COLLAB_POLICY="$allow_pol" COLLAB_MODEL=openai/gpt-5.4 COLLAB_WATCH_MODEL=openai/gpt-5.5 \
+  bash "$ask" --watch --dry-run "audit" >/dev/null 2>&1
+OUT="$(COLLAB_POLICY="$allow_pol" COLLAB_MODEL=openai/gpt-5.4 COLLAB_WATCH_MODEL=openai/gpt-5.5 \
+  bash "$ask" --watch --dry-run "audit" 2>/dev/null)"
+printf '%s' "$OUT" | grep -q 'gpt-5.5' \
+  && ok "--watch prefers \$COLLAB_WATCH_MODEL over \$COLLAB_MODEL" \
+  || no "--watch ignored \$COLLAB_WATCH_MODEL (got: $OUT)"
+OUT="$(COLLAB_POLICY="$allow_pol" COLLAB_WATCH_MODEL=openai/gpt-5.5 \
+  bash "$ask" --watch --dry-run -m openai/gpt-5.4 "audit" 2>/dev/null)"
+printf '%s' "$OUT" | grep -q 'gpt-5.4' \
+  && ok "--watch: an explicit -m beats \$COLLAB_WATCH_MODEL" \
+  || no "--watch overrode an explicit -m (got: $OUT)"
+
+# 3g. NO fallback on the watch path. Every other agent degrades to a weaker built-in;
+#     this one must hard-fail (exit 5) even WITHOUT COLLAB_REQUIRE_HARDENED, because
+#     any weaker agent can read the repo's source and would "audit" that instead of
+#     the log — still producing a confident report, just not an audit.
+watchdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$watchdir/collab" "$watchdir/.opencode/agent"
+cp "$ask" "$watchdir/collab/"; printf 'allow *\n' > "$watchdir/collab/models.policy"
+: > "$argsfile"
+( cd "$watchdir" && COLLAB_LOG=off bash collab/ask.sh --watch --dry-run -m openai/gpt-5.5 "audit" >/dev/null 2>&1 ); RC=$?
+{ [ "$RC" -eq 5 ] && ! [ -s "$argsfile" ]; } \
+  && ok "--watch hard-fails (exit 5) when the def is missing — no silent downgrade of oversight" \
+  || no "--watch fell back to a weaker agent with the def missing (rc=$RC)"
+rm -rf "$watchdir"
+
 # 4. -a plan honoured.
 run_ask -a plan "q"
 args_has 'plan' && ok "-a plan honoured" || no "-a plan not forwarded"
@@ -286,7 +335,7 @@ fi
 
 # 17. Unknown -a value emits a soft note to stderr (but still runs).
 run_ask --dry-run -a paln "q"
-printf '%s' "$ERR" | grep -q "not one of collab-read|collab-build|collab-research|plan|build" \
+printf '%s' "$ERR" | grep -q "not one of collab-read|collab-build|collab-research|collab-watch|plan|build" \
   && ok "-a <unknown> emits soft note" || no "-a unknown note missing (err: $ERR)"
 
 # 18. --emit-session + opencode timeout (124): reports timeout, exits 124.
@@ -437,7 +486,7 @@ lintdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$lintdir/colla
 cp "$repo_root/collab/tests/check-agent-permissions.sh" "$lintdir/collab/tests/"
 # run_lint : 0 if the lint passes the files currently in $lintdir/.opencode/agent.
 run_lint() { ( cd "$lintdir" && bash collab/tests/check-agent-permissions.sh >/dev/null 2>&1 ); }
-reset_agents() { cp "$repo_root/.opencode/agent/collab-read.md" "$repo_root/.opencode/agent/collab-build.md" "$repo_root/.opencode/agent/collab-research.md" "$lintdir/.opencode/agent/"; }
+reset_agents() { cp "$repo_root/.opencode/agent/collab-read.md" "$repo_root/.opencode/agent/collab-build.md" "$repo_root/.opencode/agent/collab-research.md" "$repo_root/.opencode/agent/collab-watch.md" "$lintdir/.opencode/agent/"; }
 
 # L1. Real, valid agents pass.
 reset_agents
@@ -464,6 +513,29 @@ printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  edit: allow' '
   '    "*.env": deny' '    "*.key": deny' '    "*.pem": deny' '    "*credentials*": deny' '---' 'body' \
   > "$lintdir/.opencode/agent/collab-build.md"
 run_lint && no "lint MISSED collab-build floor-after-allows (edit path dead)" || ok "lint: catches '*': deny placed after the allows"
+
+# L5. collab-watch with an OPENED read map (`read "*": allow` + secret globs — i.e.
+#     made to look exactly like every other agent here) -> must FAIL. This is the
+#     realistic regression: it doesn't look like sabotage, it looks like someone
+#     making the watcher "consistent" or fixing a read error. And nothing else would
+#     catch it — the reports would keep coming, fluent and confident, but the auditor
+#     would be reading the SOURCE instead of the LOG.
+reset_agents
+printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  "*": deny' '  read:' \
+  '    "*": allow' '    ".env": deny' '    "*.env": deny' '    "*.key": deny' '    "*.pem": deny' \
+  '    "*credentials*": deny' '---' 'body' \
+  > "$lintdir/.opencode/agent/collab-watch.md"
+run_lint && no "lint MISSED collab-watch's read scope being opened to the whole repo (auditor becomes a consultant)" \
+         || ok "lint: catches collab-watch's read scope widened past collab/logs/**"
+
+# L6. collab-watch scoped but with bash re-allowed -> must FAIL. A shell routes around
+#     the read scope entirely (`cat src/foo.c`), reducing the scoping to advice.
+reset_agents
+printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  "*": deny' '  bash: allow' '  read:' \
+  '    "*": deny' '    "collab/logs/**": allow' '---' 'body' \
+  > "$lintdir/.opencode/agent/collab-watch.md"
+run_lint && no "lint MISSED bash re-allowed on collab-watch (read scope bypassable via shell)" \
+         || ok "lint: catches bash re-allowed on collab-watch"
 rm -rf "$lintdir"
 
 # --- check-shebangs.sh meta-tests ----------------------------------------------

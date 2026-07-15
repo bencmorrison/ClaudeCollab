@@ -134,10 +134,10 @@ if [ "$action" = "uninstall" ]; then
     # Last resort: no manifest and no source. Remove only files we can name; some
     # may remain, but we never blow away a directory (your files stay).
     warn "no manifest and no source payload — removing only the known ClaudeCollab files (any others must be removed by hand)"
-    rm -f "$dest/.claude/commands/"{consult,panel,workshop,review,research,delegate,collaborate,configure-collab}.md
-    rm -f "$dest/.opencode/agent/"{collab-read,collab-build,collab-research}.md
+  rm -f "$dest/.claude/commands/"{consult,panel,workshop,review,research,delegate,collaborate,witness,configure-collab}.md
+    rm -f "$dest/.opencode/agent/"{collab-read,collab-build,collab-research,collab-watch}.md
     for k in ask.sh log.sh panel-models.sh doctor.sh verify-collab-read.sh verify-collab-build.sh \
-             verify-collab-research.sh models.policy collab.conf.example .install-manifest \
+             verify-collab-research.sh verify-collab-watch.sh models.policy collab.conf.example .install-manifest \
              tests/run-tests.sh tests/check-agent-permissions.sh tests/check-frontmatter.sh \
              tests/check-shebangs.sh tests/test-install.sh tests/fake-opencode; do
       rm -f "$dest/collab/$k"

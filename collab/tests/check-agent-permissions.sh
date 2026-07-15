@@ -84,9 +84,18 @@ EOF
   printf '%s' "$act"
 }
 
-# check_agent <file> <space-separated expected-allow tools>
+# check_agent <file> <space-separated expected-allow tools> [read-spec]
+#
+# read-spec describes the SHAPE of the read map, because they are not all alike:
+#   nonsecret          (default) `*` allows, each secret glob denies — the shape used
+#                      by collab-read/build/research: "read the repo, except secrets".
+#   scoped:<glob>      `*` DENIES and only <glob> allows — collab-watch's inverted
+#                      map: "read nothing except the log". Secrets need no globs
+#                      here; they're denied by the floor, and listing them would
+#                      imply the floor were allow. Asserted anyway (below), since
+#                      "secrets are unreadable" is the guarantee either way.
 check_agent() {
-  local f="$1" expect="$2" label f0="$fail"; label="$(basename "$f")"
+  local f="$1" expect="$2" readspec="${3:-nonsecret}" label f0="$fail"; label="$(basename "$f")"
   if [ ! -f "$f" ]; then bad "$label" "file not found"; return; fi
   local fm; fm="$(frontmatter "$f")"
   [ -n "$fm" ] || { bad "$label" "no YAML frontmatter block (first line must be '---', closed by '---')"; return; }
@@ -119,10 +128,21 @@ EOF
     esac
   done
 
-  # read map: `*` must effectively allow; each representative secret must effectively deny.
+  # read map. Either shape must leave every representative secret effectively denied.
   local rm; rm="$(printf '%s\n' "$fm" | read_map)"
-  [ "$(effective "$rm" '*')" = "allow" ] \
-    || bad "$label" "read map: '*' resolves to '$(effective "$rm" '*')', expected allow (agent can't read non-secret files)"
+  case "$readspec" in
+    scoped:*)
+      local scope="${readspec#scoped:}"
+      [ "$(effective "$rm" '*')" = "deny" ] \
+        || bad "$label" "read map: '*' resolves to '$(effective "$rm" '*')', expected deny — this agent's scope is enforced BY CONSTRUCTION, and an allow floor silently hands it the whole repo"
+      [ "$(effective "$rm" "$scope")" = "allow" ] \
+        || bad "$label" "read map: scope '$scope' resolves to '$(effective "$rm" "$scope")', expected allow (the agent cannot read the only thing it exists to read)"
+      ;;
+    *)
+      [ "$(effective "$rm" '*')" = "allow" ] \
+        || bad "$label" "read map: '*' resolves to '$(effective "$rm" '*')', expected allow (agent can't read non-secret files)"
+      ;;
+  esac
   local s
   for s in '.env' '*.env' '*.key' '*.pem' '*credentials*'; do
     [ "$(effective "$rm" "$s")" = "deny" ] \
@@ -143,6 +163,12 @@ check_agent ".opencode/agent/collab-build.md" "edit write patch bash"
 # grep/glob denies real on a path that can reach the network.
 echo "== collab-research (allowlist: webfetch/websearch) =="
 check_agent ".opencode/agent/collab-research.md" "webfetch websearch"
+
+# collab-watch is the /witness oversight path. Its read map is INVERTED (deny floor,
+# only collab/logs/** allowed) — that scoping is the construction guarantee that keeps
+# an auditor auditing the log instead of drifting into reviewing the source.
+echo "== collab-watch (allowlist: no tool; read scoped to collab/logs/**) =="
+check_agent ".opencode/agent/collab-watch.md" "" "scoped:collab/logs/**"
 
 echo
 if [ "$fail" -eq 0 ]; then printf '\033[32magent permissions: allowlist invariants hold\033[0m\n'

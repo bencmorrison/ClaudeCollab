@@ -33,3 +33,9 @@
 #                                 # Responses are ALWAYS kept in full: they are the
 #                                 # evidence, and they're the other model's words.
 # COLLAB_LOG_RETENTION_DAYS=14    # prune runs older than this; 0 disables pruning
+
+# Model the watcher (/witness) uses to audit whether Claude's account of a model
+# exchange matched what the models actually said. Falls back to COLLAB_MODEL if unset.
+# It MUST NOT be a Claude model — Claude is the party under audit, so ask.sh refuses
+# one (exit 8) unless you explicitly confirm.
+# COLLAB_WATCH_MODEL=openai/gpt-5.5

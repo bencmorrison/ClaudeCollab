@@ -46,6 +46,14 @@ So: **run `/research` on repos whose non-secret contents you'd accept leaking.**
 - **Model policy.** `collab/models.policy` (first-match glob, default-allow) lets you `deny`/`ask`/`allow` specific models; the wrapper enforces it as a hard backstop (a `deny` model is refused; an `ask` model needs explicit confirmation).
 - **Preflight.** `bash collab/doctor.sh` checks tools, auth, the policy, and runs the permission proofs + unit suite before you rely on the commands.
 
+### `collab-watch` — the `/witness` oversight path: reads the log and nothing else
+
+Used by `/witness` to audit whether Claude's account of a model exchange matched what the models actually said. Same default-deny allowlist as the others, but the read map is **inverted**: `read: {"*": deny, "collab/logs/**": allow}`.
+
+- **What holds by construction:** it can read the evidence log and no other file — not your source, not your secrets (denied by the floor, which is why no secret globs are listed). Every tool is denied: no `bash` (a shell would `cat` anything), no `grep`/`glob` (opencode's grep returns file *content* and walks the tree with `--hidden`, bypassing per-path read rules), no `webfetch`/`websearch` (the log holds every prompt and response you've exchanged — an auditor with egress would be a channel pointed straight at it), no `task` (it would spawn the full-access `build` agent and escape all of this). Verified by `collab/verify-collab-watch.sh`, statically and with a runtime canary planted outside the scope.
+- **`--watch` has no fallback.** A missing agent def is a hard error (exit 5), not a downgrade to a weaker built-in — those can read your source and would "audit" that instead of the log, still producing a confident report. Degraded oversight is worse than none because it still looks like oversight.
+- **What does NOT hold:** this bounds what the auditor can *see*. It does not make Claude honest about the prompt it writes for that auditor, or about which run it submits. Omission and misrepresentation are caught (the watcher reads the raw log); dispositional honesty is not. This is documented, disclosed by `/witness` at time of use, and **not** a vulnerability — see Scope notes.
+
 ### `collab/logs/` — the evidence layer holds prompts, on disk, in your repo
 
 `collab/log.sh` records every model call to a git-ignored `collab/logs/<run_id>/calls.jsonl`. By default (`COLLAB_LOG_PROMPTS=full`) that includes **the full prompt Claude sent**, which in practice means whatever context it pasted in from your repo. Responses are always recorded in full.

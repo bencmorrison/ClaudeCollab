@@ -7,7 +7,7 @@
 # /collaborate slash commands shell out to.
 #
 # Usage:
-#   collab/ask.sh [-m provider/model] [-a plan|build] [--edit|--research] [--allow-dirty] <prompt...>
+#   collab/ask.sh [-m provider/model] [-a plan|build] [--edit|--research|--watch] [--allow-dirty] <prompt...>
 #
 #   -m provider/model   Pick the model (run `opencode models` to list options).
 #                       Defaults to $COLLAB_MODEL, else opencode's own default.
@@ -23,6 +23,14 @@
 #                       files (edit/write/patch/bash), but with task + network egress
 #                       + secret reads denied at the tool layer. Falls back to the
 #                       unrestricted `build` agent if the collab-build def is missing.
+#   --watch             Shorthand for `-a collab-watch` — the OVERSIGHT path (/witness).
+#                       The agent can read collab/logs/** and nothing else: no shell,
+#                       no search/glob, no egress, no other file. Used to audit whether
+#                       Claude's account of an exchange matches what the models really
+#                       said. Prefers $COLLAB_WATCH_MODEL, REFUSES a Claude model
+#                       unless COLLAB_CONFIRMED=1 (exit 8 — Claude is the party under
+#                       audit), and has NO fallback: a missing def is exit 5, because
+#                       a weaker agent could read the source and "audit" that instead.
 #   --research          Shorthand for `-a collab-research` — let the other model reach
 #                       the WEB (webfetch/websearch) and read non-secret files, with
 #                       mutation/bash/grep/glob/task denied. Read + egress together is
@@ -74,7 +82,12 @@
 #      (=1: hard-fail with exit 5 instead of falling back to a weaker/unrestricted
 #      agent when the collab-read/collab-build def is missing — for automated/CI use),
 #      $COLLAB_LOG / $COLLAB_LOG_DIR / $COLLAB_LOG_PROMPTS / $COLLAB_RUN_ID /
-#      $COLLAB_COMMAND (see Logging above).
+#      $COLLAB_COMMAND (see Logging above), $COLLAB_WATCH_MODEL (the model --watch
+#      prefers; env or collab.conf.local).
+#
+# Exit codes: 3 = model denied by policy, 4 = model gated `ask` unconfirmed,
+#      5 = required-hardened def missing (always, for --watch), 6 = dirty worktree on
+#      the write path, 8 = --watch would run a Claude model (Claude auditing Claude).
 #
 set -euo pipefail
 
@@ -165,6 +178,7 @@ agent="collab-read"  # our read-only agent: denies mutation (bash/edit/write), s
 session=""      # opencode session id to continue (Option B multi-turn), forwarded via -s
 emit_session="" # when set, emit "SESSION: <id>" + the extracted answer (for /collaborate)
 dry_run=""      # when set, print the opencode command and exit without running it
+model_explicit="" # set when -m was passed, so --watch won't override a deliberate choice
 allow_dirty=""  # when set, skip the clean-worktree guard on the write (--edit) path
 
 # need_arg <flag> <next-token> — reject a value-taking flag whose value is missing
@@ -178,7 +192,7 @@ need_arg() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    -m) need_arg -m "${2:-}"; model="$2"; shift 2 ;;
+    -m) need_arg -m "${2:-}"; model="$2"; model_explicit=1; shift 2 ;;
     -a) need_arg -a "${2:-}"; agent="$2"; shift 2 ;;
     -s|--session) need_arg "$1" "${2:-}"; session="$2"; shift 2 ;;
     --emit-session) emit_session=1; shift ;;
@@ -186,6 +200,7 @@ while [ $# -gt 0 ]; do
     --allow-dirty) allow_dirty=1; shift ;;
     --edit) agent="collab-build"; shift ;;
     --research) agent="collab-research"; shift ;;
+    --watch) agent="collab-watch"; shift ;;
     -h|--help) usage 0 ;;
     --) shift; break ;;
     -*) echo "unknown option: $1" >&2; usage ;;
@@ -208,9 +223,42 @@ esac
 # custom agent is allowed (opencode may define others), but flag it so a typo like
 # '-a paln' doesn't silently run an unintended/again-fallback agent.
 case "$agent" in
-  collab-read|collab-build|collab-research|plan|build) ;;
-  *) echo "note: '-a $agent' is not one of collab-read|collab-build|collab-research|plan|build; using it as-is." >&2 ;;
+  collab-read|collab-build|collab-research|collab-watch|plan|build) ;;
+  *) echo "note: '-a $agent' is not one of collab-read|collab-build|collab-research|collab-watch|plan|build; using it as-is." >&2 ;;
 esac
+
+# ---- the oversight path (--watch / /witness) --------------------------------
+# Two rules apply here that apply nowhere else, because this agent's job is to check
+# up on Claude and both rules exist to stop that check quietly becoming worthless.
+if [ "$agent" = "collab-watch" ]; then
+  # 1. Model: prefer $COLLAB_WATCH_MODEL (env or config) so the auditor can be pinned
+  #    to a different model from the one doing the work, without disturbing the
+  #    default used by /consult and friends. An explicit -m still wins.
+  if [ -z "$model_explicit" ]; then
+    watch_model="${COLLAB_WATCH_MODEL:-$(conf_get COLLAB_WATCH_MODEL)}"
+    [ -n "$watch_model" ] && model="$watch_model"
+  fi
+
+  # 2. Refuse to let Claude audit Claude unless the user explicitly says so. An
+  #    auditor from the same family as the party under audit is not the independent
+  #    view /witness claims to provide — and the developer would have no way to tell
+  #    from the report. This is a fail-CLOSED heuristic on the model id, not a
+  #    policy tier: the policy ships default-allow and Anthropic is never denied
+  #    there (see AGENTS.md), so the check has to live here.
+  case "$model" in
+    anthropic/*|*claude*|*Claude*)
+      if [ -z "${COLLAB_CONFIRMED:-}" ]; then
+        {
+          echo "error: refusing to run the watcher on '$model' — that is a Claude model, and Claude is the"
+          echo "party under audit. An auditor from the same family is not the independent check /witness"
+          echo "reports itself to be. Pick a non-Claude model (COLLAB_WATCH_MODEL, or -m), or, if you"
+          echo "genuinely want this, confirm with the user and re-run with COLLAB_CONFIRMED=1."
+        } >&2
+        exit 8
+      fi
+      echo "warning: watcher model '$model' is a Claude model — Claude is auditing Claude (you confirmed this)." >&2 ;;
+  esac
+fi
 
 if ! command -v opencode >/dev/null 2>&1; then
   echo "error: opencode not found. Install with: npm install -g opencode-ai" >&2
@@ -272,6 +320,20 @@ if [ "$agent" = "collab-research" ] && [ ! -f "$(dirname "$0")/../.opencode/agen
   fi
   echo "warning: collab-research agent def not found; falling back to opencode's 'plan' — WEAKER (compliance-only; does not deny bash, secret reads, or grep/glob) and this path has network egress." >&2
   agent="plan"
+fi
+
+# The watch path has NO fallback, deliberately — unlike every other agent here.
+# `plan` (the usual read-only fallback) has whole-repo read AND bash, so falling back
+# would hand the auditor the repo's source and a shell. It would still produce a
+# confident report; it just wouldn't be an audit any more — it'd be a second
+# consultant reading the code instead of the log, which is the exact failure
+# collab-watch's scoped read map exists to make impossible. A missing def is a
+# hard error (exit 5) regardless of $COLLAB_REQUIRE_HARDENED: silently degrading
+# oversight is worse than having none, because it still looks like oversight.
+if [ "$agent" = "collab-watch" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-watch.md" ]; then
+  echo "error: collab-watch agent def not found. Refusing to fall back — any weaker agent can read the" >&2
+  echo "repo's source and would 'audit' that instead of the log, which is not oversight. Reinstall it." >&2
+  exit 5
 fi
 
 # Enforce the model policy as a hard backstop (independent of Claude's own check).

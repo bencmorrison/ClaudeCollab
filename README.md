@@ -21,7 +21,7 @@ ClaudeCollab is three drop-in directories you add to a project:
 | `.claude/commands/` | The slash commands Claude Code runs (`/consult`, `/panel`, `/review`, `/delegate`, `/collaborate`, `/configure-collab`). |
 | `.opencode/agent/` | Three **hardened** opencode agents: `collab-read` (read-only), `collab-build` (the `/delegate` write path), and `collab-research` (the `/research` web path). |
 | `collab/` | The `ask.sh` wrapper plus the `log`, `panel`, `doctor`, and `verify` scripts, tests, and the model policy. |
-| `collab/logs/` | Git-ignored. A record of every model call — see [The record it keeps](#the-record-it-keeps). |
+| `collab/logs/` | Git-ignored. A record of every model call, and where `/witness` reports land — see [The record it keeps](#the-record-it-keeps). |
 
 - `collab-read` → read-only **by construction** for opinions (`/consult`, `/panel`, `/review`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`.
 - `collab-build` → can edit files for `/delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`.
@@ -127,6 +127,14 @@ This isn't for debugging. When Claude tells you "GPT-5 agreed with my approach",
 - **See it:** `cat collab/logs/latest/calls.jsonl | jq` — or check a run is complete with `bash collab/log.sh verify $(readlink collab/logs/latest)`. A call that died mid-flight shows up as a gap rather than passing for a clean record.
 - **Privacy:** by default the log keeps the full prompt, which means whatever context Claude pasted in from your repo. Set `COLLAB_LOG_PROMPTS=hash` (keep a digest, not the text) or `off` in `collab/collab.conf.local` if that's not OK for your work. Runs older than 14 days are pruned automatically (`COLLAB_LOG_RETENTION_DAYS`); `COLLAB_LOG=off` turns the whole thing off.
 - **What it is not:** tamper-proofing. The hashes catch accidental corruption; they're not a chain of custody, and anything that can write the log can rewrite them.
+
+### `/witness` — have another model check Claude's account
+
+`/witness` hands the log to a **non-Claude** model whose only capability is reading `collab/logs/` — no shell, no web, and no access to your source, so it audits the record rather than drifting into reviewing your code. It reports what Claude dropped, misrepresented, or flattened, with the model's actual words next to Claude's rendering of them, and a verdict of OK / Concerns / Inconclusive. The report is saved under `collab/logs/<run_id>/reports/`, so Claude isn't the only thing standing between you and it.
+
+It refuses to audit a log that fails its integrity check, rather than reporting "clean" over a gap. Set `COLLAB_WATCH_MODEL` in `collab/collab.conf.local` to pin the auditor; a Claude model is refused unless you explicitly confirm it.
+
+**The honest bound, stated plainly:** Claude writes the prompt the auditor works from, and picks which run to audit. What's caught *by construction* is omission and misrepresentation — the watcher reads the whole raw log, so Claude cannot hide what another model said. What is **not** caught is Claude's dispositional honesty: a subtly biased prompt is still Claude's to write. Closing that would need Claude Code to expose its own decision state unmediated, and it doesn't. A clean verdict means one bounded check found nothing — not that the engagement was honest.
 
 ## Uninstall
 
