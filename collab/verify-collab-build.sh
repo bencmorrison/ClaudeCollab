@@ -54,14 +54,25 @@ last_action() {
   printf '%s\n' "$perms" | jq -r --arg p "$1" --arg pat "${2:-}" '
     [ .[] | select(.permission==$p) | select($pat=="" or .pattern==$pat) ] | last | .action // ""' 2>/dev/null
 }
+# effective_action <tool> — enforced action for a no-pattern tool: last rule
+# matching the tool name OR the "*" catch-all (makes the default-deny allowlist
+# verifiable — an un-allowed tool inherits "*": deny).
+effective_action() {
+  printf '%s\n' "$perms" | jq -r --arg p "$1" '
+    [ .[] | select(.permission==$p or .permission=="*") ] | last | .action // ""' 2>/dev/null
+}
 
-# Capability MUST be present (else /delegate can't edit) — assert allow.
+# Foundation: default-deny allowlist floor.
+[ "$(last_action '*')" = "deny" ] && pass "'*' catch-all => deny (default-deny allowlist)" \
+  || bad "'*' catch-all is NOT deny — un-listed tools would be ALLOWED"
+# The mutation set MUST be allowed (else /delegate can't edit).
 for cap in edit write patch bash; do
-  if [ "$(last_action "$cap")" = "allow" ]; then pass "$cap => allow (edit path works)"; else bad "$cap is NOT allow — /delegate cannot edit"; fi
+  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (edit path works)"; else bad "$cap is NOT allow — /delegate cannot edit"; fi
 done
-# Escape hatch + network egress MUST be denied.
-for cap in task webfetch websearch; do
-  if [ "$(last_action "$cap")" = "deny" ]; then pass "$cap => deny"; else bad "$cap is NOT denied (last rule wins)"; fi
+# Everything else — escape hatch, egress, AND the tool-native secret-search routes
+# (grep/glob) a compliant model would default to — must be effectively denied.
+for cap in task webfetch websearch grep glob todowrite lsp skill; do
+  if [ "$(effective_action "$cap")" = "deny" ]; then pass "$cap => deny (effective)"; else bad "$cap is NOT effectively denied"; fi
 done
 # Secret reads denied at the read-tool layer (defense-in-depth; bash bypasses).
 for secret in "*.env" ".env" "*.pem" "*.key"; do

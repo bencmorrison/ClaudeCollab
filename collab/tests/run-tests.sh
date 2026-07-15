@@ -7,6 +7,14 @@
 # the --emit-session cases; ask.sh itself needs jq only on that path too).
 set -uo pipefail
 
+# Hermetic: the ambient environment must not change assertions. A user who followed
+# the docs and exported COLLAB_MODEL (README/AGENTS recommend it) would otherwise make
+# ask.sh inject `-m …` and fail the "default: no -m" case — so `doctor.sh`, which runs
+# this suite, would cry wolf in the exact config the docs tell people to set up. Cases
+# that need these vars set them inline as command-prefixes, so clearing the ambient
+# values here is safe and correct.
+unset COLLAB_MODEL COLLAB_CONFIRMED COLLAB_TIMEOUT COLLAB_POLICY
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
 ask="$repo_root/collab/ask.sh"
@@ -152,12 +160,30 @@ rm -rf "$tmp_repo"
 #      built-in `build` (the only write-capable built-in), never collab-read/plan.
 tmp_repo2="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$tmp_repo2/collab"
 cp "$ask" "$tmp_repo2/collab/ask.sh"; cp "$repo_root/collab/models.policy" "$tmp_repo2/collab/" 2>/dev/null || true
-: > "$argsfile"
-OUT="$(COLLAB_POLICY="$allow_pol" bash "$tmp_repo2/collab/ask.sh" --edit "q" 2>/dev/null)"; RC=$?
-{ args_has 'build' && ! args_has 'collab-build' && ! args_has 'collab-read' && ! args_has 'plan'; } \
-  && ok "missing collab-build def + --edit -> falls back to build" \
-  || no "collab-build fallback wrong (got: $(tr '\n' ' ' <"$argsfile"))"
+: > "$argsfile"; errf2="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"
+OUT="$(COLLAB_POLICY="$allow_pol" bash "$tmp_repo2/collab/ask.sh" --edit "q" 2>"$errf2")"; RC=$?
+ERR2="$(cat "$errf2")"; rm -f "$errf2"
+# Must fall back to build AND warn loudly that hardening is gone — the warning is the
+# safety-relevant behavior of this fallback, so assert it, not just the agent choice.
+{ args_has 'build' && ! args_has 'collab-build' && ! args_has 'collab-read' && ! args_has 'plan' \
+  && printf '%s' "$ERR2" | grep -qi 'UNRESTRICTED'; } \
+  && ok "missing collab-build def + --edit -> falls back to build with loud UNRESTRICTED warning" \
+  || no "collab-build fallback wrong (agent: $(tr '\n' ' ' <"$argsfile"); err: $ERR2)"
 rm -rf "$tmp_repo2"
+
+# 14c. COLLAB_REQUIRE_HARDENED=1 turns a missing def into a hard error (exit 5, no
+#      opencode call) instead of falling back to a weaker/unrestricted agent.
+tmp_repo3="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$tmp_repo3/collab"
+cp "$ask" "$tmp_repo3/collab/ask.sh"; cp "$repo_root/collab/models.policy" "$tmp_repo3/collab/" 2>/dev/null || true
+: > "$argsfile"
+COLLAB_REQUIRE_HARDENED=1 COLLAB_POLICY="$allow_pol" bash "$tmp_repo3/collab/ask.sh" "q" >/dev/null 2>&1; RC=$?
+rc_read=$RC
+: > "$argsfile"
+COLLAB_REQUIRE_HARDENED=1 COLLAB_POLICY="$allow_pol" bash "$tmp_repo3/collab/ask.sh" --edit "q" >/dev/null 2>&1; RC=$?
+{ [ "$rc_read" -eq 5 ] && [ "$RC" -eq 5 ] && ! [ -s "$argsfile" ]; } \
+  && ok "COLLAB_REQUIRE_HARDENED=1 + missing def -> exit 5, no fallback, no call" \
+  || no "REQUIRE_HARDENED not enforced (read rc=$rc_read, edit rc=$RC)"
+rm -rf "$tmp_repo3"
 
 # 15. COLLAB_MODEL supplies the default model when no -m is given.
 : > "$argsfile"

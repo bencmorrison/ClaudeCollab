@@ -14,8 +14,8 @@ Claude Code  ──(slash command)──▶  collab/ask.sh  ──▶  opencode 
      └───────────────────  reads the other model's answer, then reasons over it  ──┘
 ```
 
-- `collab-read` agent → read-only **by construction** for opinions (`/consult`, `/consensus`): denies file mutation, secret reads (`.env`/keys/creds), and network egress at opencode's permission layer, verified by `collab/verify-collab-read.sh`. (Falls back to opencode's weaker compliance-only `plan` agent if the def is missing.)
-- `collab-build` agent → can edit files in the repo for `/delegate`: allows edit/write/patch/bash, but denies sub-agent spawning and the network tools, and blocks secret reads via the read tool (defense-in-depth — `bash` is allowed, so review the diff; verified by `collab/verify-collab-build.sh`). Falls back to opencode's unrestricted `build` agent if the def is missing.
+- `collab-read` agent → read-only **by construction** for opinions (`/consult`, `/consensus`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`. (Falls back to opencode's weaker compliance-only `plan` agent if the def is missing.)
+- `collab-build` agent → can edit files in the repo for `/delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else (sub-agents, grep/glob, network, secret reads) is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`. Falls back to opencode's unrestricted `build` agent if the def is missing.
 
 ## Setup
 

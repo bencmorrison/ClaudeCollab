@@ -42,7 +42,9 @@
 # confirming with the user). See that file for the format.
 #
 # Env: $COLLAB_MODEL (default model), $COLLAB_TIMEOUT (seconds; unset = no timeout,
-#      so long-running model/coding work is never cut off).
+#      so long-running model/coding work is never cut off), $COLLAB_REQUIRE_HARDENED
+#      (=1: hard-fail with exit 5 instead of falling back to a weaker/unrestricted
+#      agent when the collab-read/collab-build def is missing — for automated/CI use).
 #
 set -euo pipefail
 
@@ -143,7 +145,15 @@ fi
 # network — so its read-only-ness is compliance, not construction. It's still a
 # safer fallback than `build` (which grants everything), but it is not equivalent
 # to collab-read; warn loudly so the weaker guarantee is visible.
+#
+# COLLAB_REQUIRE_HARDENED=1 turns the (loud but easy-to-miss) downgrade into a hard
+# error: for automated/CI use, refuse to run at all rather than silently drop to a
+# weaker/unrestricted agent. Off by default so interactive use still degrades.
 if [ "$agent" = "collab-read" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-read.md" ]; then
+  if [ -n "${COLLAB_REQUIRE_HARDENED:-}" ]; then
+    echo "error: collab-read agent def not found and COLLAB_REQUIRE_HARDENED=1 — refusing to fall back to a weaker agent." >&2
+    exit 5
+  fi
   echo "warning: collab-read agent def not found; falling back to opencode's 'plan' — WEAKER (compliance-only; does not deny bash, secret reads, or network)." >&2
   agent="plan"
 fi
@@ -153,6 +163,10 @@ fi
 # `build` is UNRESTRICTED (no task/egress/secret-read denies), so warn loudly: the
 # delegated edit still works, but without collab-build's hardening.
 if [ "$agent" = "collab-build" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-build.md" ]; then
+  if [ -n "${COLLAB_REQUIRE_HARDENED:-}" ]; then
+    echo "error: collab-build agent def not found and COLLAB_REQUIRE_HARDENED=1 — refusing to fall back to the unrestricted 'build' agent." >&2
+    exit 5
+  fi
   echo "warning: collab-build agent def not found; falling back to opencode's 'build' — UNRESTRICTED (no task/webfetch/websearch or secret-read denies)." >&2
   agent="build"
 fi

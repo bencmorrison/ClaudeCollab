@@ -16,7 +16,7 @@ set -uo pipefail
 full=""
 case "${1:-}" in
   --full) full=1 ;;
-  -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   "") ;;
   *) echo "unknown option: $1 (use --full or --help)" >&2; exit 2 ;;
 esac
@@ -105,11 +105,13 @@ if [ -f "$pol" ]; then
   rules=0; badlines=""
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*|' '*'#'*) continue ;; esac
-    set -- $line
-    case "${1:-}" in
+    # First whitespace-delimited token = the tier. Extract via parameter expansion
+    # (not `set -- $line`, which would glob-expand a pattern token like `allow *`).
+    tier=${line%%[[:space:]]*}
+    case "$tier" in
       ''|'#'*) : ;;
       allow|ask|deny) rules=$((rules+1)) ;;
-      *) badlines="$badlines '$1'" ;;
+      *) badlines="$badlines '$tier'" ;;
     esac
   done < "$pol"
   if [ -z "$badlines" ]; then pass "policy parses cleanly: ${rules} active rule(s) in $(basename "$pol")"

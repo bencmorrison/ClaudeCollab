@@ -42,13 +42,15 @@ check() {  # <file> <key1> [key2 ...]
 echo "== slash commands (.claude/commands/*.md) =="
 shopt -s nullglob
 cmds=(.claude/commands/*.md)
-if [ ${#cmds[@]} -eq 0 ]; then echo "  (none found)"; fi
-for f in "${cmds[@]}"; do check "$f" description; done
+# Guard the array expansion with the count: `"${arr[@]}"` on an empty array under
+# `set -u` errors on bash < 4.4 (macOS system bash 3.2), so only loop when non-empty.
+if [ ${#cmds[@]} -eq 0 ]; then echo "  (none found)"
+else for f in "${cmds[@]}"; do check "$f" description; done; fi
 
 echo "== opencode agents (.opencode/agent/*.md) =="
 agents=(.opencode/agent/*.md)
-if [ ${#agents[@]} -eq 0 ]; then echo "  (none found)"; fi
-for f in "${agents[@]}"; do check "$f" description mode permission; done
+if [ ${#agents[@]} -eq 0 ]; then echo "  (none found)"
+else for f in "${agents[@]}"; do check "$f" description mode permission; done; fi
 
 echo
 if [ "$fail" -eq 0 ]; then printf '\033[32mfrontmatter: all valid\033[0m\n'
