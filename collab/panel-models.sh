@@ -36,7 +36,7 @@ conf_get() {
     line ~ /^#/ || line !~ /=/ { next }
     { eq=index(line,"="); lk=substr(line,1,eq-1); gsub(/[[:space:]]/,"",lk)
       if(lk!=k) next
-      lv=substr(line,eq+1); sub(/^[[:space:]]+/,"",lv); sub(/[[:space:]]+$/,"",lv)
+      lv=substr(line,eq+1); sub(/[[:space:]]+#.*/,"",lv); sub(/^[[:space:]]+/,"",lv); sub(/[[:space:]]+$/,"",lv)
       gsub(/^"|"$/,"",lv); gsub(/^\047|\047$/,"",lv); val=lv }
     END{ if(val!="") print val }' "$conf_file"
 }

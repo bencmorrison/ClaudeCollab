@@ -1,7 +1,7 @@
 ---
 description: Interactively set up your ClaudeCollab model policy (deny/ask/allow) and preferred models
 argument-hint: (interactive — no arguments needed)
-allowed-tools: Bash(opencode models:*), Bash(bash collab/ask.sh --dry-run:*), Bash(COLLAB_CONFIRMED=1 bash collab/ask.sh --dry-run:*), Bash(bash collab/doctor.sh:*), Read, Write, Edit
+allowed-tools: Bash(opencode models:*), Bash(bash collab/ask.sh --dry-run:*), Bash(COLLAB_CONFIRMED=1 bash collab/ask.sh --dry-run:*), Bash(bash collab/panel-models.sh:*), Bash(bash collab/doctor.sh:*), Read, Write, Edit
 ---
 Guide the user through configuring ClaudeCollab's model policy and preferences. This is **interactive** — ASK the user for their choices, don't assume them, and show the result for confirmation before writing anything.
 
@@ -32,9 +32,10 @@ $ARGUMENTS
      ```
      These take effect immediately (no shell reload needed) — that's the point of using a file. Do NOT print `export` lines; the file is the durable home now.
 
-6. **Validate.** Run `bash collab/doctor.sh` (confirms the active policy parses and reports the default-model tier), then spot-check the intent with dry-runs (token-free):
-   - a **denied** id must refuse: `bash collab/ask.sh --dry-run -m <denied-id> "x"` → exits non-zero, "denied by …";
-   - an **allowed** id prints the command and exits 0.
+6. **Validate.** Run `bash collab/doctor.sh` — it confirms the active policy parses, checks the default model's tier, **and now policy-checks each `/panel` member** (so a denied panel member is caught here, not at runtime). Then spot-check intent with dry-runs (token-free):
+   - a **denied** id must refuse: `bash collab/ask.sh --dry-run -m <denied-id> "x"` → exits 3, "denied by …";
+   - an **allowed** id prints the command and exits 0;
+   - if you set a panel, also confirm each member: `bash collab/ask.sh --dry-run -m <panel-id> "x"` per id (`panel-models.sh` checks *diversity*, not policy).
    Report what you verified.
 
 7. **Summarize** what you wrote and where (`collab/models.policy.local` for the policy, `collab/collab.conf.local` for preferred models — both git-ignored, both effective immediately). Keep it short.

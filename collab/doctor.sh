@@ -42,7 +42,7 @@ conf_get() {
     line ~ /^#/ || line !~ /=/ { next }
     { eq=index(line,"="); lk=substr(line,1,eq-1); gsub(/[[:space:]]/,"",lk)
       if(lk!=k) next
-      lv=substr(line,eq+1); sub(/^[[:space:]]+/,"",lv); sub(/[[:space:]]+$/,"",lv)
+      lv=substr(line,eq+1); sub(/[[:space:]]+#.*/,"",lv); sub(/^[[:space:]]+/,"",lv); sub(/[[:space:]]+$/,"",lv)
       gsub(/^"|"$/,"",lv); gsub(/^\047|\047$/,"",lv); val=lv }
     END{ if(val!="") print val }' "$conf_file"
 }
@@ -89,8 +89,8 @@ fi
 # --- 3. Model selection ------------------------------------------------------
 hdr "Model selection"
 # Effective default: $COLLAB_MODEL (one-off override) else the config file.
-eff_model="${COLLAB_MODEL:-}"; msrc="\$COLLAB_MODEL"
-if [ -z "$eff_model" ]; then eff_model="$(conf_get COLLAB_MODEL)"; msrc="collab.conf.local"; fi
+eff_model="${COLLAB_MODEL:-}"; msrc="\$COLLAB_MODEL (env)"
+if [ -z "$eff_model" ]; then eff_model="$(conf_get COLLAB_MODEL)"; msrc="${conf_file:-collab.conf.local}"; fi
 if [ -n "$eff_model" ]; then
   info "default model: ${eff_model} (from ${msrc})"
   # Cross-check it against the policy via ask.sh --dry-run (token-free, authoritative:
@@ -109,9 +109,19 @@ else
   info "default model: <opencode's own default> (no COLLAB_MODEL in env or collab.conf.local)."
   info "note: set one via /configure-collab (writes collab.conf.local); prefer a non-Claude model for consults. The policy backstop can't police opencode's built-in default (no -m passed)."
 fi
-# Panel default, if configured.
+# Panel default, if configured — policy-check each member too (a denied member
+# passes the single-model check above silently and only fails at /panel runtime).
 eff_models="${COLLAB_MODELS:-}"; [ -n "$eff_models" ] || eff_models="$(conf_get COLLAB_MODELS)"
-[ -n "$eff_models" ] && info "default /panel set: ${eff_models}"
+if [ -n "$eff_models" ]; then
+  info "default /panel set: ${eff_models}"
+  for pm in ${eff_models//,/ }; do
+    bash collab/ask.sh --dry-run -m "$pm" "x" >/dev/null 2>&1
+    case $? in
+      3) bad "/panel member ${pm} is DENIED by the model policy — /panel will refuse it" ;;
+      4) warn "/panel member ${pm} is gated 'ask' — /panel needs COLLAB_CONFIRMED=1 for it" ;;
+    esac
+  done
+fi
 
 # --- 4. Agent definitions ----------------------------------------------------
 hdr "Agent definitions"
@@ -122,10 +132,15 @@ done
 
 # --- 5. Model policy file ----------------------------------------------------
 hdr "Model policy"
-# Same resolution ask.sh uses: $COLLAB_POLICY, else the git-ignored .local, else default.
+# Same resolution ask.sh uses: $COLLAB_POLICY, else a RULEFUL .local, else default.
+# An empty/comment-only .local is ignored (it must not silently void a committed deny).
+_has_rules() { [ -f "$1" ] && grep -qE '^[[:space:]]*(allow|ask|deny)([[:space:]]|$)' "$1" 2>/dev/null; }
 if [ -n "${COLLAB_POLICY:-}" ]; then pol="$COLLAB_POLICY"
-elif [ -f "$repo_root/collab/models.policy.local" ]; then pol="$repo_root/collab/models.policy.local"
-else pol="$repo_root/collab/models.policy"; fi
+elif _has_rules "$repo_root/collab/models.policy.local"; then pol="$repo_root/collab/models.policy.local"
+else
+  pol="$repo_root/collab/models.policy"
+  [ -f "$repo_root/collab/models.policy.local" ] && warn "models.policy.local exists but has no rules — ignored; the committed models.policy is in effect (put an explicit rule like 'allow *' in .local to override it)."
+fi
 if [ -f "$pol" ]; then
   rules=0; badlines=""
   while IFS= read -r line || [ -n "$line" ]; do

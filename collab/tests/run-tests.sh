@@ -278,7 +278,30 @@ COLLAB_POLICY="$allow_pol" bash "$presol/collab/ask.sh" -m openai/gpt-5.5 "q" >/
 [ "$RC" -eq 0 ] \
   && ok "policy: \$COLLAB_POLICY overrides .local" \
   || no "\$COLLAB_POLICY did not override .local (rc=$RC)"
+# 20b. An empty / comment-only .local must NOT silently void a committed deny set
+#      (fail-closed: it's skipped, and the committed deny still applies). [review 2026-07-15]
+printf '# personal file, no rules yet\n' > "$presol/collab/models.policy.local"
+printf 'deny openai/gpt-5.5\nallow *\n' > "$presol/collab/models.policy"
+bash "$presol/collab/ask.sh" -m openai/gpt-5.5 "q" >/dev/null 2>&1; RC=$?
+[ "$RC" -eq 3 ] \
+  && ok "policy: empty/comment-only .local doesn't void the committed deny (fail-closed)" \
+  || no "empty .local shadowed the committed policy (rc=$RC, expected 3)"
 rm -rf "$presol"
+
+# 20c. Unreadable policy file fails CLOSED (deny), not open (allow). Root ignores
+#      file perms, so skip there.
+if [ "$(id -u)" -ne 0 ]; then
+  unrd="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$unrd/collab"
+  cp "$ask" "$unrd/collab/ask.sh"
+  printf 'deny openai/evil\nallow *\n' > "$unrd/collab/models.policy"; chmod 000 "$unrd/collab/models.policy"
+  bash "$unrd/collab/ask.sh" --dry-run -m openai/anything "q" >/dev/null 2>&1; RC=$?
+  chmod 644 "$unrd/collab/models.policy"; rm -rf "$unrd"
+  [ "$RC" -eq 3 ] \
+    && ok "policy: unreadable policy file fails closed (deny), not open" \
+    || no "unreadable policy failed OPEN (rc=$RC, expected 3)"
+else
+  ok "policy: unreadable-fails-closed (skipped as root)"
+fi
 
 # 21. Config file: collab.conf.local supplies the default model when both -m and
 #     $COLLAB_MODEL are absent; $COLLAB_MODEL still overrides the file.
@@ -295,7 +318,30 @@ COLLAB_MODEL=openai/from-env COLLAB_POLICY="$allow_pol" bash "$confrepo/collab/a
 { args_has 'openai/from-env' && ! args_has 'openai/from-conf'; } \
   && ok "config: \$COLLAB_MODEL overrides collab.conf.local" \
   || no "env did not override config file (got: $(tr '\n' ' ' <"$argsfile"))"
+# 21b. Inline `# comment` in a config value is stripped (review footgun fix).
+printf 'COLLAB_MODEL=openai/commented   # my default\n' > "$confrepo/collab/collab.conf.local"
+: > "$argsfile"
+COLLAB_POLICY="$allow_pol" bash "$confrepo/collab/ask.sh" "q" >/dev/null 2>&1
+{ args_has 'openai/commented' && ! args_has 'openai/commented   # my default'; } \
+  && ok "config: inline '# comment' stripped from a value" \
+  || no "inline comment not stripped (got: $(tr '\n' ' ' <"$argsfile"))"
+# 21c. A config model id starting with '-' is refused (exit 2), not passed as a flag.
+printf 'COLLAB_MODEL=--print-logs\n' > "$confrepo/collab/collab.conf.local"
+: > "$argsfile"
+COLLAB_POLICY="$allow_pol" bash "$confrepo/collab/ask.sh" "q" >/dev/null 2>&1; RC=$?
+{ [ "$RC" -eq 2 ] && ! [ -s "$argsfile" ]; } \
+  && ok "config: leading-dash model id refused (exit 2, no opencode call)" \
+  || no "leading-dash config model not refused (rc=$RC)"
 rm -rf "$confrepo"
+
+# 21d. conf_get is byte-identical across ask.sh / panel-models.sh / doctor.sh — the
+#      parser is duplicated (standalone by design for this copy-based harness), so
+#      guard against silent drift. [review 2026-07-15]
+xget() { awk '/^conf_get\(\) \{/{f=1} f{print} f&&/^}/{exit}' "$1"; }
+cg_a="$(xget "$repo_root/collab/ask.sh")"; cg_p="$(xget "$repo_root/collab/panel-models.sh")"; cg_d="$(xget "$repo_root/collab/doctor.sh")"
+{ [ -n "$cg_a" ] && [ "$cg_a" = "$cg_p" ] && [ "$cg_p" = "$cg_d" ]; } \
+  && ok "conf_get identical across ask.sh/panel-models.sh/doctor.sh (no drift)" \
+  || no "conf_get copies have DRIFTED — fix all three"
 
 # --- panel-models.sh (the /panel model-set resolver; opencode-free) --------------
 panel="$repo_root/collab/panel-models.sh"

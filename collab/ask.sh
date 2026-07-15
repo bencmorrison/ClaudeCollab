@@ -68,12 +68,17 @@ usage() {
   exit "${1:-1}"
 }
 
+# _has_rules <file> — true if the file exists and has ≥1 allow/ask/deny rule line.
+_has_rules() { [ -f "$1" ] && grep -qE '^[[:space:]]*(allow|ask|deny)([[:space:]]|$)' "$1" 2>/dev/null; }
+
 # Policy file resolution: $COLLAB_POLICY wins if set; otherwise prefer a personal,
-# git-ignored collab/models.policy.local (what /configure-collab writes, so a user's
-# prefs never touch the committed default) if it exists; else the shipped default.
+# git-ignored collab/models.policy.local (what /configure-collab writes) — but ONLY
+# if it actually has rules, so an empty or comment-only .local (e.g. a half-written
+# file from a crashed setup) can't silently VOID a committed/shared deny set. Else
+# the shipped default.
 if [ -n "${COLLAB_POLICY:-}" ]; then
   policy_file="$COLLAB_POLICY"
-elif [ -f "$(dirname "$0")/models.policy.local" ]; then
+elif _has_rules "$(dirname "$0")/models.policy.local"; then
   policy_file="$(dirname "$0")/models.policy.local"
 else
   policy_file="$(dirname "$0")/models.policy"
@@ -85,7 +90,14 @@ fi
 policy_tier() {
   local model="$1" tier pat
   [ -n "$model" ] || { echo allow; return; }        # unknown default model: can't police
-  [ -f "$policy_file" ] || { echo allow; return; }
+  [ -f "$policy_file" ] || { echo allow; return; }  # no policy file: default-allow
+  # Fail CLOSED if the policy exists but can't be read: we can't tell whether the
+  # model is denied, so refuse rather than silently allow (the `done < file` redirect
+  # would otherwise fail, the loop skip, and control fall through to `echo allow`).
+  if [ ! -r "$policy_file" ]; then
+    echo "error: policy file '$policy_file' exists but is unreadable — refusing (fail-closed)." >&2
+    echo deny; return
+  fi
   # `|| [ -n "$tier" ]` so a final line with no trailing newline is still read —
   # otherwise a policy file ending in `deny <model>` (no newline) drops that rule
   # and fails OPEN (the deny is silently ignored).
@@ -117,7 +129,7 @@ conf_get() {
     line ~ /^#/ || line !~ /=/ { next }
     { eq=index(line,"="); lk=substr(line,1,eq-1); gsub(/[[:space:]]/,"",lk)
       if(lk!=k) next
-      lv=substr(line,eq+1); sub(/^[[:space:]]+/,"",lv); sub(/[[:space:]]+$/,"",lv)
+      lv=substr(line,eq+1); sub(/[[:space:]]+#.*/,"",lv); sub(/^[[:space:]]+/,"",lv); sub(/[[:space:]]+$/,"",lv)
       gsub(/^"|"$/,"",lv); gsub(/^\047|\047$/,"",lv); val=lv }
     END{ if(val!="") print val }' "$conf_file"
 }
@@ -164,6 +176,14 @@ done
 
 prompt="$*"
 [ -z "$prompt" ] && { echo "error: no prompt given" >&2; usage; }
+
+# Reject a model id starting with '-'. The -m flag already blocks this (need_arg),
+# but a value from $COLLAB_MODEL or the config file bypasses that and would be emitted
+# verbatim as `-m <value>`, injecting an unintended opencode flag. Not a shell/code
+# risk (it's passed as a quoted argv element), but refuse it for a clean error.
+case "$model" in
+  -*) echo "error: model id '$model' starts with '-' (from env or config) — refusing to avoid injecting an opencode flag." >&2; exit 2 ;;
+esac
 
 # Soft-validate the agent: collab-read|plan|build are the ones this repo ships and
 # reasons about. A custom agent is allowed (opencode may define others), but flag it

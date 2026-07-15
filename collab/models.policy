@@ -1,5 +1,6 @@
 # collab/models.policy — governs which models the ClaudeCollab commands
-# (/consult, /panel, /review, /research, /delegate, /collaborate) may use.
+# (/consult, /panel, /review, /delegate, /collaborate) may use. (/research is
+# planned, not yet a command — see PLAN.md.)
 #
 # Format:  <tier>  <glob-pattern>        # optional comment
 #   tier    = deny | ask | allow
