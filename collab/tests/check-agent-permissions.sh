@@ -138,6 +138,12 @@ check_agent ".opencode/agent/collab-read.md" ""
 echo "== collab-build (allowlist: edit/write/patch/bash) =="
 check_agent ".opencode/agent/collab-build.md" "edit write patch bash"
 
+# collab-research is the /research path: the ONLY agent allowed network egress.
+# `bash` must stay OUT of this allow-set — it's what keeps the secret-read and
+# grep/glob denies real on a path that can reach the network.
+echo "== collab-research (allowlist: webfetch/websearch) =="
+check_agent ".opencode/agent/collab-research.md" "webfetch websearch"
+
 echo
 if [ "$fail" -eq 0 ]; then printf '\033[32magent permissions: allowlist invariants hold\033[0m\n'
 else printf '\033[31magent permissions: INVARIANT VIOLATED — do not ship\033[0m\n'; fi

@@ -125,7 +125,7 @@ fi
 
 # --- 4. Agent definitions ----------------------------------------------------
 hdr "Agent definitions"
-for def in collab-read collab-build; do
+for def in collab-read collab-build collab-research; do
   if [ -f ".opencode/agent/${def}.md" ]; then pass "${def} agent def present"
   else bad "${def} agent def MISSING (.opencode/agent/${def}.md) — ask.sh falls back to a weaker/unrestricted built-in"; fi
 done
@@ -175,6 +175,8 @@ if command -v opencode >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   else bad "collab-read static verification FAILED — run: bash collab/verify-collab-read.sh --static"; fi
   if bash collab/verify-collab-build.sh --static >/dev/null 2>&1; then pass "collab-build has the expected allow/deny shape (resolved config)"
   else bad "collab-build static verification FAILED — run: bash collab/verify-collab-build.sh --static"; fi
+  if bash collab/verify-collab-research.sh --static >/dev/null 2>&1; then pass "collab-research reaches the web but cannot mutate (resolved config)"
+  else bad "collab-research static verification FAILED — run: bash collab/verify-collab-research.sh --static"; fi
 else
   warn "resolved-config proof skipped (needs opencode + jq) — the source lint above still ran"
 fi

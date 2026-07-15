@@ -7,7 +7,7 @@
 # /collaborate slash commands shell out to.
 #
 # Usage:
-#   collab/ask.sh [-m provider/model] [-a plan|build] [--edit] [--allow-dirty] <prompt...>
+#   collab/ask.sh [-m provider/model] [-a plan|build] [--edit|--research] [--allow-dirty] <prompt...>
 #
 #   -m provider/model   Pick the model (run `opencode models` to list options).
 #                       Defaults to $COLLAB_MODEL, else opencode's own default.
@@ -16,12 +16,19 @@
 #                       .opencode/agent/collab-read.md, proven by
 #                       collab/verify-collab-read.sh). `collab-build` can edit files
 #                       but denies task/webfetch/websearch + secret reads;
+#                       `collab-research` can read + reach the web but not mutate;
 #                       `build` is opencode's unrestricted editor; `plan` is
 #                       opencode's compliance-only read-only agent.
 #   --edit              Shorthand for `-a collab-build` — let the other model change
 #                       files (edit/write/patch/bash), but with task + network egress
 #                       + secret reads denied at the tool layer. Falls back to the
 #                       unrestricted `build` agent if the collab-build def is missing.
+#   --research          Shorthand for `-a collab-research` — let the other model reach
+#                       the WEB (webfetch/websearch) and read non-secret files, with
+#                       mutation/bash/grep/glob/task denied. Read + egress together is
+#                       an exfiltration channel by design (see the agent def); use it
+#                       on repos whose non-secret contents you'd accept leaking. Falls
+#                       back to `plan` (weaker) if the collab-research def is missing.
 #   -s, --session <id>  Continue an existing opencode session (multi-turn dialogue).
 #   --emit-session      Print "SESSION: <id>\n---\n<answer>" so a caller can capture
 #                       the session id and continue with -s (used by /collaborate,
@@ -41,6 +48,7 @@
 #   collab/ask.sh "Critique this migration plan: ..."          # read-only opinion
 #   collab/ask.sh -m google/gemini-2.5-pro "Second opinion..." # specific model
 #   collab/ask.sh --edit "Add input validation to parser.c"    # delegate coding
+#   collab/ask.sh --research "What changed in Swift 6 strict concurrency?"  # web
 #
 # Model policy: the requested -m model is checked against a deny/ask/allow policy.
 # The policy file is resolved as: $COLLAB_POLICY if set, else a git-ignored personal
@@ -167,6 +175,7 @@ while [ $# -gt 0 ]; do
     --dry-run) dry_run=1; shift ;;
     --allow-dirty) allow_dirty=1; shift ;;
     --edit) agent="collab-build"; shift ;;
+    --research) agent="collab-research"; shift ;;
     -h|--help) usage 0 ;;
     --) shift; break ;;
     -*) echo "unknown option: $1" >&2; usage ;;
@@ -185,12 +194,12 @@ case "$model" in
   -*) echo "error: model id '$model' starts with '-' (from env or config) — refusing to avoid injecting an opencode flag." >&2; exit 2 ;;
 esac
 
-# Soft-validate the agent: collab-read|plan|build are the ones this repo ships and
-# reasons about. A custom agent is allowed (opencode may define others), but flag it
-# so a typo like '-a paln' doesn't silently run an unintended/again-fallback agent.
+# Soft-validate the agent: these are the ones this repo ships and reasons about. A
+# custom agent is allowed (opencode may define others), but flag it so a typo like
+# '-a paln' doesn't silently run an unintended/again-fallback agent.
 case "$agent" in
-  collab-read|collab-build|plan|build) ;;
-  *) echo "note: '-a $agent' is not one of collab-read|collab-build|plan|build; using it as-is." >&2 ;;
+  collab-read|collab-build|collab-research|plan|build) ;;
+  *) echo "note: '-a $agent' is not one of collab-read|collab-build|collab-research|plan|build; using it as-is." >&2 ;;
 esac
 
 if ! command -v opencode >/dev/null 2>&1; then
@@ -239,6 +248,20 @@ if [ "$agent" = "collab-build" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/c
   fi
   echo "warning: collab-build agent def not found; falling back to opencode's 'build' — UNRESTRICTED (no task/webfetch/websearch or secret-read denies)." >&2
   agent="build"
+fi
+
+# Same idea for the --research path: if the collab-research def is missing, fall back
+# to `plan` (never `build`) — it's read-capable and web-capable enough for research,
+# but it's compliance-only: it does not deny bash, secret reads, or grep/glob. Since
+# this path has network egress, a downgrade here means secrets could be both read AND
+# exfiltrated, so the warning matters more than on the collab-read path.
+if [ "$agent" = "collab-research" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-research.md" ]; then
+  if [ -n "${COLLAB_REQUIRE_HARDENED:-}" ]; then
+    echo "error: collab-research agent def not found and COLLAB_REQUIRE_HARDENED=1 — refusing to fall back to a weaker agent." >&2
+    exit 5
+  fi
+  echo "warning: collab-research agent def not found; falling back to opencode's 'plan' — WEAKER (compliance-only; does not deny bash, secret reads, or grep/glob) and this path has network egress." >&2
+  agent="plan"
 fi
 
 # Enforce the model policy as a hard backstop (independent of Claude's own check).

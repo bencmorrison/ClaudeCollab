@@ -76,6 +76,24 @@ args_has 'collab-build' && ! args_has 'collab-read' && ! args_has 'build' \
   && ok "--edit -> --agent collab-build" \
   || no "--edit did not select collab-build (got: $(tr '\n' ' ' <"$argsfile"))"
 
+# 3b. --research switches to the collab-research agent (web-capable, non-mutating).
+#     No worktree guard here: it's a read-only path, which case 3c asserts.
+run_ask --research "what changed in X"
+args_has 'collab-research' && ! args_has 'collab-read' && ! args_has 'collab-build' \
+  && ok "--research -> --agent collab-research" \
+  || no "--research did not select collab-research (got: $(tr '\n' ' ' <"$argsfile"))"
+
+# 3c. --research is NOT write-capable, so the clean-worktree guard must not gate it
+#     (the guard is write-path only). Run it with a deliberately dirty tree.
+dirty_repo="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+( cd "$dirty_repo" && git init -q && echo dirty > uncommitted.txt ) 2>/dev/null
+: > "$argsfile"
+( cd "$dirty_repo" && COLLAB_POLICY="$allow_pol" bash "$ask" --research "q" >/dev/null 2>&1 ); RC=$?
+{ [ "$RC" -ne 6 ] && args_has 'collab-research'; } \
+  && ok "--research skips the write-path worktree guard (dirty tree still runs)" \
+  || no "--research was gated by the worktree guard (rc=$RC)"
+rm -rf "$dirty_repo"
+
 # 4. -a plan honoured.
 run_ask -a plan "q"
 args_has 'plan' && ok "-a plan honoured" || no "-a plan not forwarded"
@@ -174,6 +192,20 @@ ERR2="$(cat "$errf2")"; rm -f "$errf2"
   || no "collab-build fallback wrong (agent: $(tr '\n' ' ' <"$argsfile"); err: $ERR2)"
 rm -rf "$tmp_repo2"
 
+# 14d. collab-research fallback: --research with no sibling .opencode falls back to
+#      `plan` (never build) and warns loudly. This path has network egress, so a
+#      silent downgrade to a bash-capable agent would be the worst case.
+tmp_repo4="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$tmp_repo4/collab"
+cp "$ask" "$tmp_repo4/collab/ask.sh"; cp "$repo_root/collab/models.policy" "$tmp_repo4/collab/" 2>/dev/null || true
+: > "$argsfile"; errf4="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"
+OUT="$(COLLAB_POLICY="$allow_pol" bash "$tmp_repo4/collab/ask.sh" --research "q" 2>"$errf4")"; RC=$?
+ERR4="$(cat "$errf4")"; rm -f "$errf4"
+{ args_has 'plan' && ! args_has 'build' && ! args_has 'collab-research' \
+  && printf '%s' "$ERR4" | grep -qi 'WEAKER'; } \
+  && ok "missing collab-research def + --research -> falls back to plan with loud warning" \
+  || no "collab-research fallback wrong (agent: $(tr '\n' ' ' <"$argsfile"); err: $ERR4)"
+rm -rf "$tmp_repo4"
+
 # 14c. COLLAB_REQUIRE_HARDENED=1 turns a missing def into a hard error (exit 5, no
 #      opencode call) instead of falling back to a weaker/unrestricted agent.
 tmp_repo3="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$tmp_repo3/collab"
@@ -247,7 +279,7 @@ fi
 
 # 17. Unknown -a value emits a soft note to stderr (but still runs).
 run_ask --dry-run -a paln "q"
-printf '%s' "$ERR" | grep -q "not one of collab-read|collab-build|plan|build" \
+printf '%s' "$ERR" | grep -q "not one of collab-read|collab-build|collab-research|plan|build" \
   && ok "-a <unknown> emits soft note" || no "-a unknown note missing (err: $ERR)"
 
 # 18. --emit-session + opencode timeout (124): reports timeout, exits 124.
@@ -398,7 +430,7 @@ lintdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$lintdir/colla
 cp "$repo_root/collab/tests/check-agent-permissions.sh" "$lintdir/collab/tests/"
 # run_lint : 0 if the lint passes the files currently in $lintdir/.opencode/agent.
 run_lint() { ( cd "$lintdir" && bash collab/tests/check-agent-permissions.sh >/dev/null 2>&1 ); }
-reset_agents() { cp "$repo_root/.opencode/agent/collab-read.md" "$repo_root/.opencode/agent/collab-build.md" "$lintdir/.opencode/agent/"; }
+reset_agents() { cp "$repo_root/.opencode/agent/collab-read.md" "$repo_root/.opencode/agent/collab-build.md" "$repo_root/.opencode/agent/collab-research.md" "$lintdir/.opencode/agent/"; }
 
 # L1. Real, valid agents pass.
 reset_agents

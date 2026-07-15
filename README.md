@@ -19,11 +19,12 @@ ClaudeCollab is three drop-in directories you add to a project:
 | Directory | What it is |
 |---|---|
 | `.claude/commands/` | The slash commands Claude Code runs (`/consult`, `/panel`, `/review`, `/delegate`, `/collaborate`, `/configure-collab`). |
-| `.opencode/agent/` | Two **hardened** opencode agents: `collab-read` (read-only) and `collab-build` (the `/delegate` write path). |
+| `.opencode/agent/` | Three **hardened** opencode agents: `collab-read` (read-only), `collab-build` (the `/delegate` write path), and `collab-research` (the `/research` web path). |
 | `collab/` | The `ask.sh` wrapper plus the `panel`, `doctor`, and `verify` scripts, tests, and the model policy. |
 
 - `collab-read` → read-only **by construction** for opinions (`/consult`, `/panel`, `/review`): a default-deny allowlist (`"*": deny` at opencode's permission layer) that grants **only** reading non-secret files — all mutation, content search/glob, sub-agent spawning, network egress, and secret reads are denied. Verified by `collab/verify-collab-read.sh`.
 - `collab-build` → can edit files for `/delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`.
+- `collab-research` → can reach the web for `/research`: same allowlist construction, re-allowing only `webfetch`/`websearch` + reading non-secret files. Mutation, shell, and content search/glob are denied — and because `bash` is denied, the secret-read denies genuinely hold here. But this is the one agent with **both local read and network egress**, so it is *not* an exfiltration boundary: point it at repos whose non-secret contents you'd accept leaking. Verified by `collab/verify-collab-research.sh`.
 
 ## Requirements
 
@@ -67,7 +68,9 @@ Run these inside Claude Code in a project you've installed into:
 |---|---|
 | `/consult <question>` | Get a second opinion from another LLM on a plan or approach (read-only). Claude weighs it against its own view. |
 | `/panel <question>` | Ask 2–3 different models the same question and have Claude synthesize + break ties. Warns if the panel isn't cross-provider. |
+| `/workshop <goal>` | A **multi-LLM planning session**: 2–3 models write independent plans, Claude synthesizes them, then those same models **critique Claude's synthesis** ("what did you drop?") before Claude dispositions each point into a final plan. ~2 calls per model. |
 | `/review <target>` | Findings-first code review by another model, then Claude verifies each finding against the code before reporting. Target a path, the diff, or a branch. |
+| `/research <question>` | Source-backed investigation by a **web-capable** model, then Claude fetches the cited sources and verifies each claim before reporting. Fabricated citations get refuted, not repeated. |
 | `/delegate <coding task>` | Hand a coding task to another model (it edits files), then Claude reviews the diff. |
 | `/collaborate <question>` | Bounded multi-turn peer exchange with another model; Claude dispositions each point (read-only). |
 | `/configure-collab` | Interactive setup: writes your model policy and preferred-model defaults to git-ignored config files. |
@@ -109,6 +112,7 @@ See the header of [`collab/ask.sh`](collab/ask.sh) (or `bash collab/ask.sh -h`) 
 ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Use it on trusted repositories. See **[SECURITY.md](SECURITY.md)** for the full threat model; the essentials:
 
 - **Read-only commands (`/consult`, `/panel`, `/review`, `/collaborate`)** run under a default-deny allowlist agent that can *only* read non-secret files — no mutation, no content search, no network — enforced at opencode's permission layer, not by asking the model nicely. Proven by `collab/verify-collab-read.sh`.
+- **`/research` trades egress for capability, on purpose.** It's the only path with both local read and network access, so while it can't mutate, shell out, or grep (and therefore *can't* reach your `.env`/keys), a non-secret file it reads could in principle leave over an outbound fetch — and fetched pages are attacker-controlled. Use it on repos whose non-secret contents you'd accept leaking. Proven by `collab/verify-collab-research.sh`.
 - **`/delegate` can edit files and run shell.** Its non-mutation restrictions are defense-in-depth, not a guarantee (a coding task needs `bash`, and `bash` can reach around them), so **the trust boundary is you reviewing the diff.** The wrapper refuses to delegate on a dirty worktree and prints the pre-edit `HEAD` so the diff is exactly the model's work.
 - **External model output is treated as data, not instructions** — a consulted model can't smuggle commands into Claude's control flow.
 - Run `bash collab/doctor.sh` to check your setup before relying on any of this.
