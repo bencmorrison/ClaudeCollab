@@ -4,6 +4,11 @@ name: CI
 # syntax, ShellCheck, the fake-opencode wrapper unit tests, and command/agent
 # frontmatter and documentation validation. The agent permission runtime proofs
 # are intentionally not here because they need a real authenticated opencode.
+#
+# Two jobs: `shell` on Linux, and `macos` running the same opencode-free set
+# against BSD awk/sed/mktemp and stock bash 3.2. The macOS job is free only
+# because this repo is public (private repos bill macOS minutes at 10x), which
+# is why it landed at release rather than earlier.
 
 on:
   push:
@@ -71,4 +76,78 @@ jobs:
         run: bash collab/tests/run-tests.sh
 
       - name: Installer smoke tests (install/uninstall into temp dirs)
+        run: bash collab/tests/test-install.sh
+
+  macos:
+    name: macOS / BSD (stock bash 3.2)
+    runs-on: macos-latest
+    # Same token-free, opencode-free checks as the Linux job, run against BSD
+    # awk/sed/mktemp and stock bash 3.2 — the platform difference no lint can
+    # catch. ShellCheck is deliberately NOT repeated here: it is static analysis
+    # with identical results on either OS, so it would cost a brew install to
+    # prove nothing.
+    steps:
+      - uses: actions/checkout@v4
+
+      # THE TRAP THIS JOB EXISTS TO AVOID (see PLAN.md, Phase 1 portability):
+      # GitHub's macOS images ship a Homebrew bash 5 ahead of the stock /bin/bash
+      # 3.2 on PATH. Our shebangs are `#!/usr/bin/env bash`, so without this the
+      # whole suite would silently run on bash 5 and mask the exact 3.2 bugs the
+      # job is here to find — a green check proving nothing.
+      #
+      # Shadowing `bash` on PATH (rather than invoking /bin/bash per step) is what
+      # makes this total: it also covers `#!/usr/bin/env bash` shebangs and the
+      # nested `bash foo.sh` calls the test scripts make internally.
+      - name: Pin stock bash 3.2 onto PATH
+        run: |
+          mkdir -p /tmp/stockbash
+          ln -sf /bin/bash /tmp/stockbash/bash
+          echo "/tmp/stockbash" >> "$GITHUB_PATH"
+
+      - name: Verify the pin took (fail loudly if this is not bash 3.x)
+        run: |
+          echo "which bash : $(command -v bash)"
+          bash --version | head -1
+          # If Apple ever ships a newer stock bash, this job stops testing what it
+          # was created to test. That must be loud, not a silent pass: the whole
+          # point is coverage of 3.2, which the Linux job cannot provide.
+          major="$(bash -c 'echo "${BASH_VERSINFO[0]}"')"
+          if [ "$major" != "3" ]; then
+            echo "::error::Expected stock bash 3.x, got ${major}.x — this job is no longer testing bash 3.2. Re-point the pin or retire the job deliberately."
+            exit 1
+          fi
+
+      - name: Syntax check (bash -n)
+        run: |
+          rc=0
+          for f in $(git ls-files '*.sh' 'collab/tests/fake-opencode'); do
+            bash -n "$f" && echo "syntax ok: $f" || { echo "SYNTAX FAIL: $f"; rc=1; }
+          done
+          exit "$rc"
+
+      - name: Shebang conformance
+        run: bash collab/tests/check-shebangs.sh
+
+      - name: Frontmatter validation
+        run: bash collab/tests/check-frontmatter.sh
+
+      - name: Documentation workflow lint
+        run: bash collab/tests/check-docs.sh --self-test
+
+      - name: Host-config symlink confinement
+        # Genuinely macOS-relevant: prepare-host-config.sh runs on the HOST, so a
+        # Mac user runs this code path for real.
+        run: bash .devcontainer/test-prepare-host-config.sh
+
+      - name: Agent permission invariants (source-level allowlist lint)
+        # High value here: its effective-permission resolver is awk, and this is
+        # the only place that awk meets BSD awk.
+        run: bash collab/tests/check-agent-permissions.sh
+
+      - name: Wrapper unit tests (fake opencode, no model calls)
+        run: bash collab/tests/run-tests.sh
+
+      - name: Installer smoke tests (install/uninstall into temp dirs)
+        # The highest-risk surface on BSD: newest code, heavy awk, and it edits
+        # users' .gitignore and deletes files.
         run: bash collab/tests/test-install.sh
