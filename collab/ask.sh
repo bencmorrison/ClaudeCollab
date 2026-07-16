@@ -273,12 +273,17 @@ if [ "$agent" = "collab-watch" ]; then
     case "$input" in /*) probe="$input" ;; *) probe="$PWD/$input" ;; esac
     while [ "$probe" != "/" ] && [ ! -d "$probe" ]; do
       while [ "$probe" != "/" ] && [[ "$probe" = */ ]]; do probe="${probe%/}"; done
-      base="${probe##*/}"; suffix=("$base" "${suffix[@]}")
+      # `${suffix[@]+"${suffix[@]}"}` guards the empty case: under `set -u`, bash 3.2
+      # (stock macOS) treats an empty array's [@] expansion as unbound and aborts.
+      # Both sites below hit it — this one on the first iteration (suffix still
+      # empty), and the loop below whenever the input is an existing directory, so
+      # the while loop never runs. That made this function fail on macOS either way.
+      base="${probe##*/}"; suffix=("$base" ${suffix[@]+"${suffix[@]}"})
       parent="${probe%/*}"; [ -n "$parent" ] || parent="/"; probe="$parent"
     done
     [ -d "$probe" ] || return 1
     canon="$(cd -P -- "$probe" 2>/dev/null && pwd -P)" || return 1
-    for part in "${suffix[@]}"; do
+    for part in ${suffix[@]+"${suffix[@]}"}; do
       case "$part" in
         ''|.) ;;
         ..) canon="${canon%/*}"; [ -n "$canon" ] || canon="/" ;;

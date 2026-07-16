@@ -28,16 +28,28 @@ pass() { printf '\033[32mok\033[0m   %s\n' "$*"; }
 bad()  { printf '\033[31mFAIL\033[0m %s — %s\n' "$1" "$2"; fail=1; }
 
 if [ "$#" -gt 0 ]; then
+  # Explicit paths: the meta-tests pass non-scripts here on purpose and expect a
+  # clean pass with nothing checked, so an empty result is legitimate.
   files=("$@")
 else
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   cd "$repo_root" || exit 1
   # shellcheck disable=SC2207
   files=($(git ls-files))
+  # Scanning the whole repo and finding no files means git listed nothing, not that
+  # the repo conforms — without this the lint prints "all 0 conform" and exits 0,
+  # the vacuous green that check-frontmatter.sh guards against for the same reason.
+  if [ "${#files[@]}" -eq 0 ]; then
+    printf '\033[31mFAIL\033[0m git ls-files returned nothing — this lint would otherwise pass vacuously\n' >&2
+    exit 1
+  fi
 fi
 
 checked=0
-for f in "${files[@]}"; do
+# `${files[@]+"${files[@]}"}`, not plain `"${files[@]}"`: under `set -u`, bash 3.2
+# (stock macOS) treats an empty array's [@] expansion as unbound and aborts. Still
+# reachable above via explicit empty args.
+for f in ${files[@]+"${files[@]}"}; do
   [ -f "$f" ] || continue
   # Only files that actually declare an interpreter. Reading 2 bytes keeps binaries out.
   [ "$(head -c 2 "$f" 2>/dev/null)" = '#!' ] || continue

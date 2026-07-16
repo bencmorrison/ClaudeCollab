@@ -52,10 +52,15 @@ scan_tree() {
   local root="$1" path resolved seen active_index
   resolved="$(resolve_existing "$root")" || die "cannot resolve selected directory: $root"
   [ -d "$resolved" ] || die "selected directory is not a directory: $root"
-  for seen in "${active_dirs[@]}"; do
+  # `${arr[@]+"${arr[@]}"}` — NOT plain `"${arr[@]}"`. Both arrays are empty on the
+  # first scan_tree call, and under `set -u` bash 3.2 (stock macOS) calls an empty
+  # array's [@] expansion an unbound variable and aborts. bash >= 4.4 does not, so
+  # Linux never sees it: this aborted host-config staging on macOS outright, caught
+  # by the macOS CI job on its first run.
+  for seen in ${active_dirs[@]+"${active_dirs[@]}"}; do
     [ "$seen" = "$resolved" ] && die "refusing cyclic internal directory symlink: $root -> $resolved"
   done
-  for seen in "${scanned_dirs[@]}"; do
+  for seen in ${scanned_dirs[@]+"${scanned_dirs[@]}"}; do
     [ "$seen" = "$resolved" ] && return 0
   done
   scanned_dirs+=("$resolved")
