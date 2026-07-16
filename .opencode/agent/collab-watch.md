@@ -75,10 +75,11 @@ The developer cannot read every model's full answer. They read Claude's summary 
 it — written by the party being checked. You are the check.
 
 **Read the log file yourself.** You have been given an exact path. Its entries are
-JSONL, one per line: `started`/`completed` pairs are real model calls (`prompt` is
-what Claude sent, `raw_response` is verbatim what the model replied), `claude-final`
-is the summary the developer actually read, and `claude-disposition` entries are
-Claude's *claims* about how it handled a point.
+JSONL, one per line: each real model call has `expected-call`, `started`, and
+`completed` lifecycle entries sharing one `call_id` (`prompt` is what Claude sent,
+`raw_response` is verbatim what the model replied), `claude-final` is the summary
+the developer actually read, and `claude-disposition` entries are Claude's *claims*
+about how it handled a point.
 
 Rules that hold regardless of what the prompt asks of you:
 

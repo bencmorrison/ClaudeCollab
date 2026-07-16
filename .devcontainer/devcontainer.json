@@ -11,6 +11,7 @@
   "name": "ClaudeCollab",
   "build": { "dockerfile": "Dockerfile" },
   "remoteUser": "node",
+  "initializeCommand": "bash .devcontainer/prepare-host-config.sh",
 
   "features": {
     // GitHub CLI (gh) for repo / PR / Actions work. Installed as a Feature so it
@@ -24,22 +25,15 @@
     "source=claudecollab-claude,target=/home/node/.claude,type=volume",
     "source=claudecollab-opencode,target=/home/node/.local/share/opencode,type=volume",
     // gh CLI auth (device-code login persists here across rebuilds).
-    "source=claudecollab-gh,target=/home/node/.config/gh,type=volume",
+    "source=claudecollab-gh,target=/home/node/.config/gh,type=volume"
 
-    // Your host user-level Claude config, mounted read-only at a staging path so
-    // host edits show through. postCreate links the safe pieces (CLAUDE.md,
-    // commands, agents) into the active ~/.claude; settings.json is left staged
-    // for review (host hooks/statusLine/paths may not work in-container). Reads
-    // only world-readable config — never host credentials (600/root-owned on
-    // macOS). Whole-dir mount avoids per-file rebuild failures on missing paths.
-    "source=${localEnv:HOME}/.claude,target=/home/node/.claude-host,type=bind,readonly",
-    // Many setups (incl. this one) symlink ~/.claude/* into a dotfiles repo, so
-    // mount ~/.dotfiles too — otherwise those symlinks dangle in the container.
-    "source=${localEnv:HOME}/.dotfiles,target=/home/node/.dotfiles,type=bind,readonly"
+    // Host Claude config is not mounted. initializeCommand copies only selected
+    // config paths into git-ignored .devcontainer/.host-config; postCreate imports
+    // that snapshot. No whole host config or dotfiles directory is exposed.
   ],
 
   "containerEnv": {
-    // Default model for /consult (optional). Forwarded from host if set.
+    // Default model for /collab:consult (optional). Forwarded from host if set.
     "COLLAB_MODEL": "${localEnv:COLLAB_MODEL}"
     // If your host Claude relies on a custom endpoint, add:
     // "ANTHROPIC_BASE_URL": "${localEnv:ANTHROPIC_BASE_URL}"

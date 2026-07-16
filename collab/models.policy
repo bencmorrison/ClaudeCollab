@@ -1,6 +1,6 @@
-# collab/models.policy — governs which models the ClaudeCollab commands
-# (/consult, /panel, /review, /delegate, /collaborate) may use. (/research is
-# planned, not yet a command — see PLAN.md.)
+# collab/models.policy — committed default policy for models used by
+# /collab:consult, /collab:panel, /collab:workshop, /collab:review,
+# /collab:research, /collab:delegate, /collab:collaborate, and /collab:witness.
 #
 # Format:  <tier>  <glob-pattern>        # optional comment
 #   tier    = deny | ask | allow
@@ -14,9 +14,10 @@
 #   allow  — use freely.
 #
 # Ships permissive (default-allow). Uncomment / edit to gate what YOU care about,
-# or run `/configure-collab` for a guided setup. Personal prefs should go in a
-# git-ignored `collab/models.policy.local` (ask.sh auto-prefers it) so they aren't
-# committed; edit THIS file only to change the shared/committed default.
+# or run `/collab:configure` for guided setup. Effective resolution is
+# $COLLAB_POLICY when set, otherwise a ruleful git-ignored
+# collab/models.policy.local, otherwise THIS shared/committed default. An empty or
+# comment-only local file does not override this file.
 # Note: a bare `collab/ask.sh` with no -m uses opencode's default model, whose id
 # isn't known here, so it can't be policed — pass -m to bring a model under policy.
 #

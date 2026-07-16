@@ -3,8 +3,9 @@
 # ask.sh — let Claude Code consult or delegate to another LLM via opencode.
 #
 # opencode handles model access and auth (subscription/OAuth — no API keys needed
-# here). This script is the single entry point the /collab:consult, /collab:delegate, /collab:panel and
-# /collab:collaborate slash commands shell out to.
+# here). This script is the single entry point the /collab:consult, /collab:delegate,
+# /collab:panel, /collab:workshop, /collab:review, /collab:research,
+# /collab:collaborate, and /collab:witness slash commands shell out to.
 #
 # Usage:
 #   collab/ask.sh [-m provider/model] [-a plan|build] [--edit|--research|--watch] <prompt...>
@@ -12,15 +13,17 @@
 #   -m provider/model   Pick the model (run `opencode models` to list options).
 #                       Defaults to $COLLAB_MODEL, else opencode's own default.
 #   -a <agent>          opencode agent. Default `collab-read` (our hard-deny
-#                       read-only agent: no bash/write/edit — see
+#                       read-only agent: no bash/write/edit/grep/glob, but web allowed — see
 #                       .opencode/agent/collab-read.md, proven by
 #                       collab/verify-collab-read.sh). `collab-build` can edit files
-#                       but denies task/webfetch/websearch + secret reads;
+#                       but denies task + tool-native web/search + secret reads;
 #                       `collab-research` can read + reach the web but not mutate;
+#                       `collab-watch` can read only collab/logs/** and has no other
+#                       tools; it never falls back;
 #                       `build` is opencode's unrestricted editor; `plan` is
 #                       opencode's compliance-only read-only agent.
 #   --edit              Shorthand for `-a collab-build` — let the other model change
-#                       files (edit/write/patch/bash), but with task + network egress
+#                       files (edit/write/patch/bash), but with task + tool-native web/search
 #                       + secret reads denied at the tool layer. Falls back to the
 #                       unrestricted `build` agent if the collab-build def is missing.
 #   --watch             Shorthand for `-a collab-watch` — the OVERSIGHT path (/collab:witness).
@@ -45,6 +48,7 @@
 #   --dry-run           Print the exact opencode command that WOULD run (safely
 #                       quoted) and exit 0 without calling any model. Token-free;
 #                       use it to inspect model/agent selection or in tests.
+#   --allow-dirty       Legacy no-op compatibility flag. Dirty worktrees are allowed.
 #
 # Examples:
 #   collab/ask.sh "Critique this migration plan: ..."          # read-only opinion
@@ -64,7 +68,8 @@
 #      override for a single shell/call (precedence: -m flag > $COLLAB_MODEL > file).
 #
 # Logging: every call is recorded to a git-ignored collab/logs/<run_id>/calls.jsonl —
-#      raw, untruncated, two entries per call (started → completed). This is the
+#      raw, untruncated, three entries per call (expected → started → completed).
+#      This is the
 #      evidence layer a watcher agent audits INSTEAD of Claude's own summary; see
 #      collab/log.sh for the format, the knobs ($COLLAB_LOG, $COLLAB_LOG_PROMPTS,
 #      $COLLAB_LOG_RETENTION_DAYS) and what it deliberately does not claim.
@@ -74,7 +79,8 @@
 # Env: $COLLAB_MODEL (one-off default-model override), $COLLAB_TIMEOUT (seconds; unset = no timeout,
 #      so long-running model/coding work is never cut off), $COLLAB_REQUIRE_HARDENED
 #      (=1: hard-fail with exit 5 instead of falling back to a weaker/unrestricted
-#      agent when the collab-read/collab-build def is missing — for automated/CI use),
+#      agent when the collab-read/collab-build/collab-research def is missing — for
+#      automated/CI use),
 #      $COLLAB_LOG / $COLLAB_LOG_DIR / $COLLAB_LOG_PROMPTS / $COLLAB_RUN_ID /
 #      $COLLAB_COMMAND (see Logging above), $COLLAB_WATCH_MODEL (the model --watch
 #      prefers; env or collab.conf.local).
@@ -95,8 +101,14 @@ usage() {
   exit "${1:-1}"
 }
 
-# _has_rules <file> — true if the file exists and has ≥1 allow/ask/deny rule line.
-_has_rules() { [ -f "$1" ] && grep -qE '^[[:space:]]*(allow|ask|deny)([[:space:]]|$)' "$1" 2>/dev/null; }
+# _has_rules <file> — true if the file has at least one complete tier + pattern rule.
+# A bare `deny` is malformed, not a rule: it must not shadow the committed policy.
+_has_rules() {
+  [ -f "$1" ] && awk '
+    /^[[:space:]]*(#|$)/ { next }
+    $1 ~ /^(allow|ask|deny)$/ && NF >= 2 && $2 !~ /^#/ { found=1; exit }
+    END { exit !found }' "$1" 2>/dev/null
+}
 
 # Policy file resolution: $COLLAB_POLICY wins if set; otherwise prefer a personal,
 # git-ignored collab/models.policy.local (what /collab:configure writes) — but ONLY
@@ -115,8 +127,7 @@ fi
 # file (first matching glob wins). Defaults to allow: no file, no model id, or no
 # match all mean "allowed", so the policy only ever restricts, never surprises.
 policy_tier() {
-  local model="$1" tier pat
-  [ -n "$model" ] || { echo allow; return; }        # unknown default model: can't police
+  local model="$1" tier pat rest line line_no=0 matched=""
   [ -f "$policy_file" ] || { echo allow; return; }  # no policy file: default-allow
   # Fail CLOSED if the policy exists but can't be read: we can't tell whether the
   # model is denied, so refuse rather than silently allow (the `done < file` redirect
@@ -128,13 +139,28 @@ policy_tier() {
   # `|| [ -n "$tier" ]` so a final line with no trailing newline is still read —
   # otherwise a policy file ending in `deny <model>` (no newline) drops that rule
   # and fails OPEN (the deny is silently ignored).
-  while read -r tier pat _ || [ -n "$tier" ]; do
+  while IFS= read -r line || [ -n "$line" ]; do
+    line_no=$((line_no+1)); tier=""; pat=""; rest=""
+    read -r tier pat rest <<< "$line"
     case "$tier" in ''|'#'*) continue ;; esac        # skip blanks / comments
-    case "$tier" in allow|ask|deny) ;; *) continue ;; esac
-    # shellcheck disable=SC2254 # $pat is intentionally a glob pattern
-    case "$model" in $pat) echo "$tier"; return ;; esac
+    case "$tier" in
+      allow|ask|deny)
+        if [ -z "$pat" ] || [[ "$pat" = \#* ]] || { [ -n "$rest" ] && [[ "$rest" != \#* ]]; }; then
+          echo "error: malformed model policy rule at ${policy_file}:${line_no}: expected '<allow|ask|deny> <glob-pattern> [# comment]' — refusing (fail-closed)." >&2
+          echo deny; return
+        fi ;;
+      *)
+        echo "error: malformed model policy rule at ${policy_file}:${line_no}: unknown tier '$tier' — refusing (fail-closed)." >&2
+        echo deny; return ;;
+    esac
+    if [ -z "$matched" ] && [ -n "$model" ]; then
+      # shellcheck disable=SC2254 # $pat is intentionally a glob pattern
+      case "$model" in $pat) matched="$tier" ;; esac
+    fi
   done < "$policy_file"
-  echo allow
+  # An unknown opencode default cannot be matched, but the policy is still parsed so
+  # malformed active lines are never silently accepted merely because -m was omitted.
+  echo "${matched:-allow}"
 }
 
 # Config file — persistent per-user preferences. Env vars can't hold these durably
@@ -165,10 +191,10 @@ conf_get() {
 # > config file > opencode's own default (empty here).
 model="${COLLAB_MODEL:-}"
 [ -n "$model" ] || model="$(conf_get COLLAB_MODEL)"
-agent="collab-read"  # our read-only agent: denies mutation (bash/edit/write), secret
-                     # reads (.env/keys/creds) and network egress (webfetch/websearch)
-                     # at opencode's permission layer — read-only + no-egress by
-                     # construction, not model compliance. Proven by
+agent="collab-read"  # our read-only agent: denies mutation (bash/edit/write), grep/glob,
+                     # subagents, and secret reads (.env/keys/creds) at opencode's
+                     # permission layer; webfetch/websearch are allowed, so this is
+                     # not an exfiltration boundary. Proven by
                      # collab/verify-collab-read.sh. Falls back to `plan` (weaker) if
                      # the def is missing — see below.
 session=""      # opencode session id to continue (Option B multi-turn), forwarded via -s
@@ -192,6 +218,7 @@ while [ $# -gt 0 ]; do
     -s|--session) need_arg "$1" "${2:-}"; session="$2"; shift 2 ;;
     --emit-session) emit_session=1; shift ;;
     --dry-run) dry_run=1; shift ;;
+    --allow-dirty) shift ;; # legacy no-op: dirty worktrees are allowed
     --edit) agent="collab-build"; shift ;;
     --research) agent="collab-research"; shift ;;
     --watch) agent="collab-watch"; shift ;;
@@ -235,6 +262,44 @@ if [ "$agent" = "collab-watch" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/c
 fi
 
 if [ "$agent" = "collab-watch" ]; then
+  # The watch agent's read map permits only collab/logs/**. Validate the effective
+  # configured evidence root itself; prompt wording cannot widen a tool permission.
+  # Resolve symlinks and `..` without GNU realpath (not shipped by macOS/BSD).
+  # Resolve the deepest existing directory physically, then normalize any missing
+  # suffix lexically; no files or directories are created by this check.
+  _canonical_dir_path() {
+    local input="$1" probe parent base canon part
+    local -a suffix=()
+    case "$input" in /*) probe="$input" ;; *) probe="$PWD/$input" ;; esac
+    while [ "$probe" != "/" ] && [ ! -d "$probe" ]; do
+      while [ "$probe" != "/" ] && [[ "$probe" = */ ]]; do probe="${probe%/}"; done
+      base="${probe##*/}"; suffix=("$base" "${suffix[@]}")
+      parent="${probe%/*}"; [ -n "$parent" ] || parent="/"; probe="$parent"
+    done
+    [ -d "$probe" ] || return 1
+    canon="$(cd -P -- "$probe" 2>/dev/null && pwd -P)" || return 1
+    for part in "${suffix[@]}"; do
+      case "$part" in
+        ''|.) ;;
+        ..) canon="${canon%/*}"; [ -n "$canon" ] || canon="/" ;;
+        *) canon="${canon%/}/$part" ;;
+      esac
+    done
+    printf '%s\n' "$canon"
+  }
+  watch_log_dir="${COLLAB_LOG_DIR:-$(conf_get COLLAB_LOG_DIR)}"
+  [ -n "$watch_log_dir" ] || watch_log_dir="$(dirname "$0")/logs"
+  watch_log_dir_abs="$(_canonical_dir_path "$watch_log_dir" || true)"
+  watch_scope_abs="$(_canonical_dir_path "$(dirname "$0")/logs" || true)"
+  case "$watch_log_dir_abs" in
+    "$watch_scope_abs"|"$watch_scope_abs"/*) [ -n "$watch_scope_abs" ] ;;
+    *) false ;;
+  esac || {
+    echo "error: --watch cannot read the effective COLLAB_LOG_DIR '$watch_log_dir'." >&2
+    echo "The collab-watch agent is mechanically scoped to $(dirname "$0")/logs/**; use that root or a child of it." >&2
+    exit 5
+  }
+
   # 1. Model: prefer $COLLAB_WATCH_MODEL (env or config) so the auditor can be pinned
   #    to a different model from the one doing the work, without disturbing the
   #    default used by /collab:consult and friends. An explicit -m still wins.
@@ -434,9 +499,9 @@ echo "collab: model=${model:-<opencode default>} agent=${agent}${session:+ sessi
 
 # ---- evidence layer (W0) -----------------------------------------------------
 # Record this call to collab/logs/ so a watcher agent can later audit what the other
-# model ACTUALLY said, independently of Claude's summary of it. Two writes with a
-# status flip (started → completed) paired by call_id: without the pair, a call that
-# dies mid-flight leaves a log that reads as clean. See collab/log.sh.
+# model ACTUALLY said, independently of Claude's summary of it. Three writes
+# (expected → started → completed) paired by call_id ensure setup failure and a call
+# that dies mid-flight both leave an integrity gap. See collab/log.sh.
 #
 # Logging is best-effort and must NEVER fail the call it is recording: every hook is
 # `|| true`. A missing entry is not silently benign — `log.sh verify` catches the
@@ -461,20 +526,125 @@ if [ "${log_setting:-on}" != "off" ] && [ -f "$log_sh" ] && command -v jq >/dev/
   # missing entry surfaces in `log.sh verify`, not as a false success.
   if [ -n "$COLLAB_RUN_ID" ]; then
     export COLLAB_RUN_ID
-    prompt_file="$(mktemp 2>/dev/null || true)"
-    if [ -n "$prompt_file" ] && printf '%s' "$prompt" > "$prompt_file" 2>/dev/null; then
+    call_id="c-$(od -An -tx1 -N4 /dev/urandom 2>/dev/null | tr -d ' \n' || printf '%04x%04x' "$RANDOM" "$$")"
+    if bash "$log_sh" expect --call-id "$call_id" --command "${COLLAB_COMMAND:-ask}" \
+         --model "$model" --agent "$agent" >/dev/null 2>&1; then
       log_enabled=1
-      call_id="c-$(od -An -tx1 -N4 /dev/urandom 2>/dev/null | tr -d ' \n' || printf '%04x%04x' "$RANDOM" "$$")"
+    fi
+    prompt_file="$(mktemp 2>/dev/null || true)"
+    if [ -n "$log_enabled" ] && [ -n "$prompt_file" ] && printf '%s' "$prompt" > "$prompt_file" 2>/dev/null; then
       turn="$(bash "$log_sh" started \
                 --call-id "$call_id" --command "${COLLAB_COMMAND:-ask}" --model "$model" \
                 --agent "$agent" ${session:+--session "$session"} --prompt-file "$prompt_file" 2>/dev/null || true)"
       echo "collab: log=$(bash "$log_sh" path 2>/dev/null || echo '?') call_id=${call_id}" >&2
-    else
+    elif [ -n "$log_enabled" ]; then
       echo "warning: could not open the evidence log (no writable temp dir?); continuing WITHOUT a record of this call." >&2
       prompt_file=""
     fi
   fi
 fi
+
+# Fingerprint a bounded set of ignored regular files without retaining names or bytes.
+# Non-regular/unreadable files and limit overruns are explicitly INCOMPLETE before any
+# content open, so FIFOs/devices cannot block this path and huge ignored trees cannot
+# trigger unbounded hashing. The aggregate digest is ephemeral and is never logged.
+_ignored_fingerprint() {
+  local max_files=1024 max_bytes=16777216 max_walk=16384 count=0 total=0 p size digest
+  local manifest status_file walk_status_file list_status="" walk_status="" incomplete=""
+  manifest="$(mktemp 2>/dev/null || true)"; status_file="$(mktemp 2>/dev/null || true)"
+  walk_status_file="$(mktemp 2>/dev/null || true)"
+  if [ -z "$manifest" ] || [ -z "$status_file" ] || [ -z "$walk_status_file" ]; then
+    rm -f "$manifest" "$status_file" "$walk_status_file" 2>/dev/null || true
+    printf 'incomplete:setup-unavailable\n'; return 0
+  fi
+  # Git's ignored-file listing omits special files such as FIFOs. Its porcelain
+  # ignored view does report a matching ignored directory, so treat any such
+  # directory as unmonitorable rather than walking it or opening its contents.
+  while IFS= read -r -d '' p; do
+    case "$p" in
+      '!! collab/logs/'*) continue ;;
+      '!! '*/ ) incomplete="ignored-directory"; break ;;
+    esac
+    count=$((count+1))
+    if [ "$count" -gt "$max_files" ]; then incomplete="file-limit"; break; fi
+  done < <(git status --porcelain=1 --ignored=matching --untracked-files=all -z 2>/dev/null)
+  # Git omits FIFOs and some other special files from both ignored-file listings.
+  # Walk metadata only, with a hard entry cap, and ask Git whether each special path
+  # is ignored. No path is opened and no name is retained in the evidence record.
+  count=0
+  while [ -z "$incomplete" ] && IFS= read -r -d '' p; do
+    count=$((count+1))
+    if [ "$count" -gt "$max_walk" ]; then incomplete="walk-limit"; break; fi
+    [ -d "$p" ] && continue
+    if { [ -L "$p" ] || [ ! -f "$p" ]; } && git check-ignore -q -- "$p" 2>/dev/null; then
+      incomplete="unsupported-path"; break
+    fi
+  done < <(find . -xdev -path ./.git -prune -o -path ./collab/logs -prune -o -print0 2>/dev/null; printf '%s' "$?" > "$walk_status_file")
+  walk_status="$(cat "$walk_status_file" 2>/dev/null || true)"
+  if [ -z "$incomplete" ] && [ "$walk_status" != 0 ]; then incomplete="walk-failed"; fi
+  count=0
+  while [ -z "$incomplete" ] && IFS= read -r -d '' p; do
+    # The logger's own ignored output is evidence infrastructure, not delegated work.
+    case "$p" in collab/logs/*) continue ;; esac
+    count=$((count+1))
+    if [ "$count" -gt "$max_files" ]; then incomplete="file-limit"; break; fi
+    # Test type before readability/open. Symlinks, FIFOs, sockets and devices cannot
+    # be represented by the patch and are never opened here.
+    if [ -L "$p" ] || [ ! -f "$p" ]; then incomplete="unsupported-path"; break; fi
+    if [ ! -r "$p" ]; then incomplete="unreadable-path"; break; fi
+    size="$(stat -c %s -- "$p" 2>/dev/null || stat -f %z -- "$p" 2>/dev/null || true)"
+    case "$size" in ''|*[!0-9]*) incomplete="metadata-unavailable"; break ;; esac
+    if [ "$size" -gt $((max_bytes-total)) ]; then incomplete="byte-limit"; break; fi
+    total=$((total+size))
+    digest="$(git hash-object --no-filters -- "$p" 2>/dev/null || true)"
+    if [ -z "$digest" ]; then incomplete="read-failed"; break; fi
+    printf '%s\0%s\0' "$p" "$digest" >> "$manifest"
+  done < <(git ls-files --others --ignored --exclude-standard -z 2>/dev/null; printf '%s' "$?" > "$status_file")
+  list_status="$(cat "$status_file" 2>/dev/null || true)"
+  if [ -n "$incomplete" ] || [ "$list_status" != 0 ]; then
+    printf 'incomplete:%s\n' "${incomplete:-enumeration-failed}"
+  else
+    digest="$(git hash-object --stdin < "$manifest" 2>/dev/null || true)"
+    if [ -n "$digest" ]; then printf 'complete:%s\n' "$digest"
+    else printf 'incomplete:digest-unavailable\n'; fi
+  fi
+  rm -f "$manifest" "$status_file" "$walk_status_file"
+}
+ignored_before=""
+submodules_before="clean"
+_submodule_state() {
+  local key path state
+  [ -f .gitmodules ] || { printf 'clean\n'; return; }
+  git submodule status --recursive >/dev/null 2>&1 || { printf 'unavailable\n'; return; }
+  state="$(git status --porcelain=v2 --ignore-submodules=none 2>/dev/null)" || {
+    printf 'unavailable\n'; return
+  }
+  if printf '%s\n' "$state" | awk '$1=="1" && $3 ~ /^S/ && $3 != "S..." { found=1 } END { exit !found }'; then
+    printf 'dirty\n'; return
+  fi
+  while read -r key path; do
+    [ -n "$key" ] && [ -n "$path" ] || continue
+    # Parent Git marks a dirty submodule gitlink even though write-tree records only
+    # its committed object id. Check that signal before inspecting nested status.
+    if ! git diff-files --quiet --ignore-submodules=none -- "$path" 2>/dev/null; then
+      printf 'dirty\n'; return
+    fi
+    git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1 || continue
+    state="$(git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null)" || {
+      printf 'unavailable\n'; return
+    }
+    [ -z "$state" ] || { printf 'dirty\n'; return; }
+  done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null)
+  printf 'clean\n'
+}
+case "$agent" in
+  collab-build|build)
+    if [ -n "$write_base_tree" ]; then
+      ignored_before="$(_ignored_fingerprint || true)"
+      submodules_before="$(_submodule_state)"
+    fi ;;
+esac
+delegate_capture_failed=""
 
 # record_delegate_diff — capture what the model ACTUALLY changed, into the evidence log.
 #
@@ -490,20 +660,61 @@ fi
 # recorded patch is complete regardless of what the model did.
 record_delegate_diff() {
   [ -n "$log_enabled" ] || return 0
-  [ -n "$write_base_tree" ] || return 0
-  local after patch rd
-  after="$(_snapshot_tree || true)"; [ -n "$after" ] || return 0
-  rd="$(bash "$log_sh" dir 2>/dev/null || true)"; [ -n "$rd" ] || return 0
+  case "$agent" in collab-build|build) ;; *) return 0 ;; esac
+  local after="" patch rd ignored_after submodules_after complete=true reason=""
+  rd="$(bash "$log_sh" dir 2>/dev/null || true)"
+  if [ -z "$rd" ]; then
+    delegate_capture_failed=1
+    echo "warning: delegated-change capture failed: evidence run directory unavailable." >&2
+    return 0
+  fi
   patch="$rd/diff-${call_id}.patch"
-  git diff-tree -p "$write_base_tree" "$after" > "$patch" 2>/dev/null || { rm -f "$patch"; return 0; }
-  if [ ! -s "$patch" ]; then
+  if [ -z "$write_base_tree" ]; then
+    complete=false; reason="baseline-tree-unavailable"
+  else
+    after="$(_snapshot_tree || true)"
+    [ -n "$after" ] || { complete=false; reason="after-tree-unavailable"; }
+  fi
+  ignored_after="$(_ignored_fingerprint || true)"
+  if [ "$complete" = true ] && { [ -z "$ignored_before" ] || [ -z "$ignored_after" ] \
+      || [[ "$ignored_before" = incomplete:* ]] || [[ "$ignored_after" = incomplete:* ]]; }; then
+    complete=false; reason="ignored-state-incomplete"
+  elif [ "$complete" = true ] && [ "$ignored_before" != "$ignored_after" ]; then
+    complete=false; reason="ignored-paths-changed"
+  fi
+  submodules_after="$(_submodule_state)"
+  # Porcelain v2's submodule field is explicit (`S.M.`, `S..U`, etc.). Keep this
+  # parent-level check at capture time as the authoritative guard; it does not rely
+  # on nested-shell propagation from `git submodule foreach`.
+  if git status --porcelain=v2 --ignore-submodules=none 2>/dev/null \
+      | grep -Eq '^1 .. S[^ ]*[MU?]'; then
+    submodules_after="dirty"
+  fi
+  if [ "$submodules_before" != clean ] || [ "$submodules_after" != clean ]; then
+    complete=false; reason="submodule-worktree-unrepresentable"
+  fi
+  if [ -n "$write_base_tree" ] && [ -n "$after" ]; then
+    if ! git diff-tree --binary -p "$write_base_tree" "$after" > "$patch" 2>/dev/null; then
+      : > "$patch"; complete=false; reason="diff-generation-failed"
+    fi
+  else
+    : > "$patch"
+  fi
+  if [ ! -s "$patch" ] && [ "$complete" = true ]; then
     rm -f "$patch"
     echo "collab: the model changed no tracked files (nothing to review)." >&2
     return 0
   fi
-  bash "$log_sh" diff --call-id "$call_id" --patch-file "$patch" \
-    --base "$write_base_tree" --after "$after" >/dev/null 2>&1 || true
-  echo "collab: the model's changes (complete, incl. created files) => $patch" >&2
+  if ! bash "$log_sh" diff --call-id "$call_id" --patch-file "$patch" \
+      --base "$write_base_tree" --after "$after" --complete "$complete" --reason "$reason" >/dev/null 2>&1; then
+    delegate_capture_failed=1
+  fi
+  if [ "$complete" = true ]; then
+    echo "collab: the model's changes (complete, incl. created files and binary data) => $patch" >&2
+  else
+    echo "warning: delegated-change capture is INCOMPLETE ($reason); the log will fail integrity. Ignored names/content were not recorded." >&2
+    echo "collab: reviewable non-ignored subset => $patch" >&2
+  fi
   echo "collab: review them with:  git apply --stat '$patch'  /  cat '$patch'" >&2
 }
 
@@ -512,11 +723,13 @@ record_delegate_diff() {
 # in the response, so the `started` entry couldn't know it.
 log_complete() {
   [ -n "$log_enabled" ] || return 0
-  local sid="${3:-$session}"
+  local sid="${3:-$session}" capture_state=failed
+  [ -n "${2:-}" ] && [ -f "$2" ] && capture_state=complete
+  [ -n "$delegate_capture_failed" ] && capture_state=failed
   bash "$log_sh" completed --call-id "$call_id" --exit "$1" \
     ${turn:+--turn "$turn"} ${sid:+--session "$sid"} \
     --command "${COLLAB_COMMAND:-ask}" --model "$model" --agent "$agent" \
-    ${2:+--response-file "$2"} >/dev/null 2>&1 || true
+    --capture-state "$capture_state" ${2:+--response-file "$2"} >/dev/null 2>&1 || true
   rm -f "$prompt_file" 2>/dev/null || true
 }
 

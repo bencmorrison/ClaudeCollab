@@ -2,9 +2,8 @@ name: CI
 
 # Fast, token-free checks that need no opencode auth and call no model: shell
 # syntax, ShellCheck, the fake-opencode wrapper unit tests, and command/agent
-# frontmatter validation. The agent permission *runtime* proofs and the container
-# build are intentionally NOT here — they need a real authenticated opencode; the
-# container build runs on a schedule (see PLAN.md Phase 3), not per-commit.
+# frontmatter and documentation validation. The agent permission runtime proofs
+# are intentionally not here because they need a real authenticated opencode.
 
 on:
   push:
@@ -54,6 +53,12 @@ jobs:
 
       - name: Frontmatter validation
         run: bash collab/tests/check-frontmatter.sh
+
+      - name: Documentation workflow lint
+        run: bash collab/tests/check-docs.sh --self-test
+
+      - name: Host-config symlink confinement
+        run: bash .devcontainer/test-prepare-host-config.sh
 
       - name: Agent permission invariants (source-level allowlist lint)
         # Opencode-free: guards the realistic regression (a human weakens an agent

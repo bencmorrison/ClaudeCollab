@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# verify-collab-read.sh — prove the `collab-read` opencode agent is read-only AND
-# non-exfiltrating BY CONSTRUCTION, not by model compliance.
+# verify-collab-read.sh — prove the `collab-read` opencode agent is read-only,
+# allows webfetch/websearch, and blocks secret read/search paths by construction.
 #
 # Why this exists: ClaudeCollab's read-only commands (/collab:consult, /collab:panel,
-# /collab:collaborate) claim the delegated model "cannot" mutate the repo, read secrets,
-# or reach the network. That claim is only honest if opencode actually strips
+# /collab:review, /collab:collaborate, /collab:workshop) claim the delegated model "cannot" mutate the repo, read secrets,
+# while allowing web access. That claim is only honest if opencode actually strips
 # those tools / denies those paths. This script proves it two ways:
 #
 #   1. STATIC (authoritative, fail-CLOSED): read opencode's *resolved* permission
@@ -22,8 +22,8 @@
 #
 # Usage:  bash collab/verify-collab-read.sh [--static]
 #   --static  run only the token-free static checks (steps 1-2); skip the runtime
-#             probes (steps 3-4) that call a model. Used by doctor.sh / CI, where
-#             the authoritative static proof is what matters and no model is desired.
+#             probes (steps 3-4) that call a model. Used by doctor.sh; CI uses the
+#             opencode-free check-agent-permissions.sh source lint instead.
 # Exit 0 = static proof holds AND (unless --static) no runtime contradiction.
 # COLLAB_VERIFY_MODEL overrides the (free by default) runtime model.
 set -uo pipefail
@@ -38,10 +38,11 @@ model="${COLLAB_VERIFY_MODEL:-opencode/deepseek-v4-flash-free}"
 agent="collab-read"
 agent_file=".opencode/agent/collab-read.md"
 fail=0
+inconclusive=0
 
 pass() { printf '\033[32mPASS\033[0m %s\n' "$*"; }
 bad()  { printf '\033[31mFAIL\033[0m %s\n' "$*"; fail=1; }
-inc()  { printf '\033[33mINCONCLUSIVE\033[0m %s\n' "$*"; }
+inc()  { printf '\033[33mINCONCLUSIVE\033[0m %s\n' "$*"; inconclusive=1; }
 
 # Portability: `timeout` is GNU coreutils; macOS/BSD ship it as `gtimeout` or not
 # at all. Detect it; if absent, run without a cap (the runtime steps still work,
@@ -76,13 +77,16 @@ effective_action() {
 [ "$(last_action '*')" = "deny" ] && pass "'*' catch-all => deny (default-deny allowlist)" \
   || bad "'*' catch-all is NOT deny — the allowlist has no floor; un-listed tools would be ALLOWED"
 
-# Every dangerous/exfil-capable tool must be EFFECTIVELY denied. Includes grep/glob
-# (content + path leak, bypass the read: denies) and lsp/skill (finding: the proof
-# must cover every tool, not an enumerated subset — new tools inherit "*": deny).
-for cap in bash edit write patch grep glob task todowrite webfetch websearch lsp skill; do
+# Mutation/escape/search tools must be EFFECTIVELY denied. grep/glob are denied
+# because they bypass read: secret globs in opencode's harness; web is allowed.
+for cap in bash edit write patch grep glob task todowrite lsp skill; do
   if [ "$(effective_action "$cap")" = "deny" ]; then pass "$cap => deny (effective)"; else bad "$cap is NOT effectively denied — leak/mutation path open"; fi
 done
-for secret in "*.env" ".env" "*.pem" "*.key"; do
+for cap in webfetch websearch; do
+  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (effective)"; else bad "$cap is NOT effectively allowed — web capability missing"; fi
+done
+SECRET_GLOBS='*.env *.env.* .env **/.env **/.env.* *.pem **/*.pem *.key **/*.key *.pfx *.p12 id_rsa id_ed25519 **/id_rsa **/id_ed25519 **/.ssh/** **/.aws/** **/.gnupg/** *credentials* **/credentials* **/.netrc **/.git-credentials'
+for secret in $SECRET_GLOBS; do
   a="$(last_action read "$secret")"
   if [ "$a" = "deny" ]; then pass "read '$secret' => deny"; else bad "read '$secret' => '${a:-<none>}' (secret readable!)"; fi
 done
@@ -116,10 +120,10 @@ mout="$($TIMEOUT opencode run --agent "$agent" --auto -m "$model" \
   </dev/null 2>&1)"; mrc=$?
 if printf '%s' "$mout" | grep -qi 'falling back to default agent'; then
   bad "opencode fell back off collab-read (not primary-invocable — check 'mode: all')"
-elif [ "$mrc" -ne 0 ]; then
-  inc "opencode exited $mrc (missing timeout? auth? crash) — mutation step could not run; static check above is authoritative"
 elif [ -e "$probe" ]; then
   bad "probe file was created — mutation DENY FAILED"; rm -f "$probe"
+elif [ "$mrc" -ne 0 ]; then
+  inc "opencode exited $mrc (missing timeout? auth? crash) — mutation step could not run; static check above is authoritative"
 else
   pass "no file created and opencode exited 0 (consistent with mutation deny)"
 fi
@@ -164,13 +168,18 @@ rm -f "$grep_file"
 fi  # end runtime probes (skipped under --static)
 
 echo
-if [ "$fail" -eq 0 ]; then
+if [ "$fail" -eq 0 ] && [ "$inconclusive" -eq 0 ]; then
   if [ -n "$static_only" ]; then
-    printf '\033[32mcollab-read VERIFIED (static)\033[0m — mutation, secret-read and egress are denied by construction (resolved config). Runtime probes not run (--static).\n'
+    printf '\033[32mcollab-read VERIFIED (static)\033[0m — mutation/search denied; webfetch/websearch allowed; the ENUMERATED credential globs deny (resolved config). Runtime probes not run (--static).\n'
   else
-    printf '\033[32mcollab-read VERIFIED\033[0m — mutation, secret-read and egress are denied by construction (static config), with no runtime contradiction.\n'
+    printf '\033[32mcollab-read VERIFIED\033[0m — mutation/search denied; webfetch/websearch allowed; the ENUMERATED credential globs deny, with no runtime contradiction.\n'
   fi
+  printf '  NOTE: the credential denies are a LIST, not a boundary — a secret in a file matching none of the globs (.npmrc, .git/config, terraform.tfvars) is readable and fetchable. See SECURITY.md.\n'
+elif [ "$fail" -ne 0 ]; then
+  printf '\033[31mcollab-read NOT verified\033[0m — do not claim read-only or secret-read protections by construction.\n'
 else
-  printf '\033[31mcollab-read NOT verified\033[0m — do not claim read-only/no-egress by construction.\n'
+  printf '\033[33mcollab-read INCONCLUSIVE\033[0m — static proof passed, but one or more runtime probes did not establish a result.\n'
 fi
-exit "$fail"
+[ "$fail" -eq 0 ] || exit 1
+[ "$inconclusive" -eq 0 ] || exit 6
+exit 0

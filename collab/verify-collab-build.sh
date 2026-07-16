@@ -37,10 +37,11 @@ model="${COLLAB_VERIFY_MODEL:-opencode/deepseek-v4-flash-free}"
 agent="collab-build"
 agent_file=".opencode/agent/collab-build.md"
 fail=0
+inconclusive=0
 
 pass() { printf '\033[32mPASS\033[0m %s\n' "$*"; }
 bad()  { printf '\033[31mFAIL\033[0m %s\n' "$*"; fail=1; }
-inc()  { printf '\033[33mINCONCLUSIVE\033[0m %s\n' "$*"; }
+inc()  { printf '\033[33mINCONCLUSIVE\033[0m %s\n' "$*"; inconclusive=1; }
 
 TIMEOUT=""
 if command -v timeout >/dev/null 2>&1; then TIMEOUT="timeout 120"
@@ -75,7 +76,8 @@ for cap in task webfetch websearch grep glob todowrite lsp skill; do
   if [ "$(effective_action "$cap")" = "deny" ]; then pass "$cap => deny (effective)"; else bad "$cap is NOT effectively denied"; fi
 done
 # Secret reads denied at the read-tool layer (defense-in-depth; bash bypasses).
-for secret in "*.env" ".env" "*.pem" "*.key"; do
+SECRET_GLOBS='*.env *.env.* .env **/.env **/.env.* *.pem **/*.pem *.key **/*.key *.pfx *.p12 id_rsa id_ed25519 **/id_rsa **/id_ed25519 **/.ssh/** **/.aws/** **/.gnupg/** *credentials* **/credentials* **/.netrc **/.git-credentials'
+for secret in $SECRET_GLOBS; do
   a="$(last_action read "$secret")"
   if [ "$a" = "deny" ]; then pass "read '$secret' => deny (read-tool layer)"; else bad "read '$secret' => '${a:-<none>}' (secret readable via read tool!)"; fi
 done
@@ -112,13 +114,17 @@ rm -f "$probe"
 fi  # end runtime probe (skipped under --static)
 
 echo
-if [ "$fail" -eq 0 ]; then
+if [ "$fail" -eq 0 ] && [ "$inconclusive" -eq 0 ]; then
   if [ -n "$static_only" ]; then
     printf '\033[32mcollab-build VERIFIED (static)\033[0m — edit/write/patch/bash=allow; task/webfetch/websearch + secret READS=deny (resolved config). Runtime edit probe not run (--static). NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /collab:delegate diff review is the trust boundary.\n'
   else
     printf '\033[32mcollab-build VERIFIED\033[0m — edit path works; task/webfetch/websearch and secret READS are denied at the tool layer. NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /collab:delegate diff review is the trust boundary.\n'
   fi
-else
+elif [ "$fail" -ne 0 ]; then
   printf '\033[31mcollab-build NOT verified\033[0m — permission shape is wrong; check the agent def against verify-collab-read.sh conventions.\n'
+else
+  printf '\033[33mcollab-build INCONCLUSIVE\033[0m — static proof passed, but the runtime edit probe did not establish a result.\n'
 fi
-exit "$fail"
+[ "$fail" -eq 0 ] || exit 1
+[ "$inconclusive" -eq 0 ] || exit 6
+exit 0

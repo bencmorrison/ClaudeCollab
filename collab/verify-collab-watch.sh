@@ -47,10 +47,11 @@ model="${COLLAB_VERIFY_MODEL:-opencode/deepseek-v4-flash-free}"
 agent="collab-watch"
 agent_file=".opencode/agent/collab-watch.md"
 fail=0
+inconclusive=0
 
 pass() { printf '\033[32mPASS\033[0m %s\n' "$*"; }
 bad()  { printf '\033[31mFAIL\033[0m %s\n' "$*"; fail=1; }
-inc()  { printf '\033[33mINCONCLUSIVE\033[0m %s\n' "$*"; }
+inc()  { printf '\033[33mINCONCLUSIVE\033[0m %s\n' "$*"; inconclusive=1; }
 
 TIMEOUT=""
 if command -v timeout >/dev/null 2>&1; then TIMEOUT="timeout 120"
@@ -95,6 +96,12 @@ if [ "$(effective_read 'collab/logs/20260101T000000Z-abc/calls.jsonl')" = "allow
   pass "read 'collab/logs/**' => allow (the auditor can read the log)"
 else
   bad "read of collab/logs/** is NOT allowed — /collab:witness cannot read the evidence it exists to audit"
+fi
+abs_log="$repo_root/collab/logs/20260101T000000Z-abc/calls.jsonl"
+if [ "$(effective_read "$abs_log")" = "allow" ]; then
+  pass "read absolute collab/logs/** path => allow (witness passes an absolute log path)"
+else
+  bad "read of absolute collab/logs/** path is NOT allowed — /collab:witness passes an absolute path"
 fi
 
 # ...and NOTHING else. This is the inverted map that keeps an auditor auditing.
@@ -149,13 +156,17 @@ rm -f "$canary"
 fi  # end runtime probe (skipped under --static)
 
 echo
-if [ "$fail" -eq 0 ]; then
+if [ "$fail" -eq 0 ] && [ "$inconclusive" -eq 0 ]; then
   if [ -n "$static_only" ]; then
     printf '\033[32mcollab-watch VERIFIED (static)\033[0m — read scoped to collab/logs/** and nothing else; every tool denied (resolved config). Runtime probe not run (--static). NOTE: this bounds what the auditor can SEE; it does not make Claude honest about the prompt it writes for the auditor — see PLAN.md "The honest bound".\n'
   else
     printf '\033[32mcollab-watch VERIFIED\033[0m — reads the log and nothing else; no shell, no search, no egress. NOTE: this bounds what the auditor can SEE; it does not make Claude honest about the prompt it writes for the auditor — see PLAN.md "The honest bound".\n'
   fi
-else
+elif [ "$fail" -ne 0 ]; then
   printf '\033[31mcollab-watch NOT verified\033[0m — permission shape is wrong; an auditor that can read the source is a consultant, not a check.\n'
+else
+  printf '\033[33mcollab-watch INCONCLUSIVE\033[0m — static proof passed, but the runtime probe did not establish a result.\n'
 fi
-exit "$fail"
+[ "$fail" -eq 0 ] || exit 1
+[ "$inconclusive" -eq 0 ] || exit 6
+exit 0

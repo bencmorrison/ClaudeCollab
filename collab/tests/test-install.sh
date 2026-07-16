@@ -14,6 +14,7 @@ ok()  { printf '\033[32mok\033[0m   %s\n' "$*"; pass=$((pass+1)); }
 no()  { printf '\033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail+1)); }
 check(){ if eval "$2"; then ok "$1"; else no "$1 -- ($2)"; fi; }
 newrepo(){ local d; d="$(mktemp -d)"; ( cd "$d" && git init -q ) 2>/dev/null; printf '%s' "$d"; }
+sha256(){ if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1; else shasum -a 256 "$1" | cut -d ' ' -f 1; fi; }
 
 [ -f "$installer" ] || { echo "install.sh not found at $installer" >&2; exit 1; }
 
@@ -26,6 +27,8 @@ check "fake-opencode is executable"     "[ -x '$T/collab/tests/fake-opencode' ]"
 check "installs a slash command"        "[ -f '$T/.claude/commands/collab/consult.md' ]"
 check "installs an agent def"           "[ -f '$T/.opencode/agent/collab-read.md' ]"
 check "writes an install manifest"      "[ -f '$T/collab/.install-manifest' ]"
+check "writes ownership hashes"         "[ -f '$T/collab/.install-hashes' ]"
+check "installs check-docs.sh"           "[ -f '$T/collab/tests/check-docs.sh' ]"
 check "gitignore has our block"         "grep -q 'ClaudeCollab >>>' '$T/.gitignore'"
 check "gitignore ignores conf.local"    "grep -q 'collab/collab.conf.local' '$T/.gitignore'"
 
@@ -41,6 +44,43 @@ check "uninstall removes commands"      "[ ! -f '$T/.claude/commands/collab/cons
 check "uninstall removes agent defs"    "[ ! -f '$T/.opencode/agent/collab-read.md' ]"
 check "uninstall drops gitignore block" "! grep -q 'ClaudeCollab' '$T/.gitignore' 2>/dev/null"
 rm -rf "$T"
+
+# --- unchanged owned files upgrade; locally changed files do not -------------
+S="$(mktemp -d)"
+cp -R "$repo_root/." "$S/"
+T="$(newrepo)"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+printf '\n# source upgrade\n' >> "$S/collab/ask.sh"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+check "re-install upgrades an unchanged owned file" "grep -q 'source upgrade' '$T/collab/ask.sh'"
+printf '\n# user replacement\n' >> "$T/collab/ask.sh"
+printf '\n# second source upgrade\n' >> "$S/collab/ask.sh"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+check "re-install preserves a changed owned-path file" "grep -q 'user replacement' '$T/collab/ask.sh' && ! grep -q 'second source upgrade' '$T/collab/ask.sh'"
+bash "$S/install.sh" --uninstall --dest "$T" >/dev/null 2>&1
+check "uninstall preserves a changed owned-path file" "grep -q 'user replacement' '$T/collab/ask.sh'"
+rm -rf "$S" "$T"
+
+# --- upgrades replace hardlinks instead of writing through outside dest -------
+S="$(mktemp -d)"; cp -R "$repo_root/." "$S/"
+T="$(newrepo)"; outside="$(mktemp -d)"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+ln "$T/collab/ask.sh" "$outside/payload-canary"
+printf 'OUTSIDE MANIFEST CANARY\n' >> "$T/collab/.install-manifest"
+ln "$T/collab/.install-manifest" "$outside/manifest-canary"
+cp "$outside/manifest-canary" "$outside/manifest-before"
+printf 'invalid hash canary\n' >> "$T/collab/.install-hashes"
+ln "$T/collab/.install-hashes" "$outside/hashes-canary"
+cp "$outside/hashes-canary" "$outside/hashes-before"
+ln "$T/collab/.install-state" "$outside/state-canary"
+cp "$outside/state-canary" "$outside/state-before"
+printf '\n# hardlink-safe source upgrade\n' >> "$S/collab/ask.sh"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+check "hardlinked payload upgrade does not modify outside inode" "! grep -q 'hardlink-safe source upgrade' '$outside/payload-canary' && grep -q 'hardlink-safe source upgrade' '$T/collab/ask.sh'"
+check "hardlinked manifest replacement does not modify outside inode" "cmp -s '$outside/manifest-before' '$outside/manifest-canary' && ! grep -q 'OUTSIDE MANIFEST CANARY' '$T/collab/.install-manifest'"
+check "hardlinked hash replacement does not modify outside inode" "cmp -s '$outside/hashes-before' '$outside/hashes-canary' && ! grep -q 'invalid hash canary' '$T/collab/.install-hashes'"
+check "hardlinked state replacement does not modify outside inode" "cmp -s '$outside/state-before' '$outside/state-canary' && [ ! '$T/collab/.install-state' -ef '$outside/state-canary' ]"
+rm -rf "$S" "$T" "$outside"
 
 # --- merge-not-clobber: user's DIFFERENT-named files survive uninstall -------
 T="$(newrepo)"
@@ -112,6 +152,15 @@ check "user's file under collab/ survives uninstall" "[ -f '$T/collab/mine.sh' ]
 check "collab/ dir survives when user has files in it" "[ -d '$T/collab' ]"
 rm -rf "$T"
 
+# --- install chmod applies only to installed executable payload files ---------
+T="$(newrepo)"
+mkdir -p "$T/collab"
+printf '#!/usr/bin/env bash\n' > "$T/collab/mine.sh"
+chmod 0644 "$T/collab/mine.sh"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+check "install does not chmod an unrelated user script" "[ ! -x '$T/collab/mine.sh' ]"
+rm -rf "$T"
+
 # --- gitignore with a lone BEGIN marker is not truncated ----------------------
 T="$(newrepo)"
 printf '%s\n%s\n%s\n' '# >>> ClaudeCollab >>>' 'keep-me-line' 'node_modules/' > "$T/.gitignore"
@@ -119,14 +168,246 @@ bash "$installer" --dest "$T" >/dev/null 2>&1        # add_gitignore_block strip
 check "lone begin-marker does not eat the rest of .gitignore" "grep -q 'keep-me-line' '$T/.gitignore' && grep -q 'node_modules/' '$T/.gitignore'"
 rm -rf "$T"
 
+# --- malformed/reversed/duplicate fences are left byte-for-byte intact --------
+for variant in reversed duplicate_begin duplicate_end; do
+  T="$(newrepo)"
+  case "$variant" in
+    reversed) printf '%s\n' '# <<< ClaudeCollab <<<' 'keep-a' '# >>> ClaudeCollab >>>' 'keep-b' > "$T/.gitignore" ;;
+    duplicate_begin) printf '%s\n' '# >>> ClaudeCollab >>>' 'keep-a' '# >>> ClaudeCollab >>>' 'keep-b' '# <<< ClaudeCollab <<<' > "$T/.gitignore" ;;
+    duplicate_end) printf '%s\n' '# >>> ClaudeCollab >>>' 'keep-a' '# <<< ClaudeCollab <<<' 'keep-b' '# <<< ClaudeCollab <<<' > "$T/.gitignore" ;;
+  esac
+  cp "$T/.gitignore" "$T/.gitignore.before"
+  bash "$installer" --dest "$T" >/dev/null 2>&1
+  check "$variant gitignore fences never truncate or rewrite content" "cmp -s '$T/.gitignore.before' '$T/.gitignore'"
+  bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
+  check "$variant gitignore fences survive uninstall intact" "cmp -s '$T/.gitignore.before' '$T/.gitignore'"
+  rm -rf "$T"
+done
+
 # --- no-manifest fallback still removes our files (derived from source) --------
 T="$(newrepo)"
 bash "$installer" --dest "$T" >/dev/null 2>&1
 rm -f "$T/collab/.install-manifest"                  # simulate a lost/corrupt manifest
 bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
 check "fallback uninstall removes collab/"  "[ ! -d '$T/collab' ]"
-check "fallback uninstall removes commands" "[ ! -f '$T/.claude/commands/collab:panel.md' ]"
+check "fallback uninstall removes commands" "[ ! -f '$T/.claude/commands/collab/panel.md' ] && [ ! -f '$T/.claude/commands/collab/workshop.md' ]"
 rm -rf "$T"
+
+# --- missing-manifest fallback preserves replacements ------------------------
+T="$(newrepo)"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+rm -f "$T/collab/.install-manifest"
+printf 'USER REPLACEMENT\n' > "$T/collab/ask.sh"
+bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
+check "missing-manifest uninstall preserves replacement content" "grep -q 'USER REPLACEMENT' '$T/collab/ask.sh'"
+rm -rf "$T"
+
+# --- stale/forged path manifests are not ownership proof ---------------------
+T="$(newrepo)"
+mkdir -p "$T/collab"
+printf 'USER FILE\n' > "$T/collab/ask.sh"
+printf 'collab/ask.sh\n' > "$T/collab/.install-manifest"
+printf '%064d\tcollab/ask.sh\n' 0 > "$T/collab/.install-hashes"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+check "re-install ignores stale manifest ownership claims" "grep -q 'USER FILE' '$T/collab/ask.sh'"
+bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
+check "uninstall ignores stale manifest ownership claims" "grep -q 'USER FILE' '$T/collab/ask.sh'"
+rm -rf "$T"
+
+# --- even a correct forged hash cannot authorize an arbitrary destination file
+T="$(newrepo)"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+printf 'IMPORTANT USER DATA\n' > "$T/important.txt"
+forged_hash="$(sha256 "$T/important.txt")"
+printf 'important.txt\n' >> "$T/collab/.install-manifest"
+printf '%s\timportant.txt\n' "$forged_hash" >> "$T/collab/.install-hashes"
+bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
+check "forged correct hash cannot delete a non-payload file" "grep -q 'IMPORTANT USER DATA' '$T/important.txt'"
+rm -rf "$T"
+
+# --- unrecognized user files at installer metadata paths are never clobbered --
+for reserved in .install-manifest .install-hashes .install-state; do
+  T="$(newrepo)"; mkdir -p "$T/collab"
+  printf 'USER RESERVED METADATA\n' > "$T/collab/$reserved"
+  cp "$T/collab/$reserved" "$T/reserved.before"
+  if bash "$installer" --dest "$T" >/dev/null 2>&1; then
+    no "install fails safely on user-owned collab/$reserved"
+  else
+    ok "install fails safely on user-owned collab/$reserved"
+  fi
+  check "install preserves user-owned collab/$reserved" "cmp -s '$T/reserved.before' '$T/collab/$reserved'"
+  check "metadata conflict is detected before payload writes" "[ ! -e '$T/collab/ask.sh' ]"
+  if bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1; then
+    no "uninstall fails safely on user-owned collab/$reserved"
+  else
+    ok "uninstall fails safely on user-owned collab/$reserved"
+  fi
+  check "uninstall preserves user-owned collab/$reserved" "cmp -s '$T/reserved.before' '$T/collab/$reserved'"
+  rm -rf "$T"
+done
+
+# --- each reserved metadata file must be independently recognizable -----------
+for malformed in .install-manifest .install-hashes .install-state; do
+  T="$(newrepo)"; mkdir -p "$T/collab"
+  printf 'collab/ask.sh\n' > "$T/collab/.install-manifest"
+  printf '%064d\tcollab/ask.sh\n' 0 > "$T/collab/.install-hashes"
+  printf 'gitignore_preexisting=0\n' > "$T/collab/.install-state"
+  printf 'USER RESERVED METADATA\n' > "$T/collab/$malformed"
+  cp "$T/collab/$malformed" "$T/reserved.before"
+  if bash "$installer" --dest "$T" >/dev/null 2>&1; then
+    no "valid sibling metadata cannot authorize malformed collab/$malformed"
+  else
+    ok "valid sibling metadata cannot authorize malformed collab/$malformed"
+  fi
+  check "mixed-validity install preserves collab/$malformed" "cmp -s '$T/reserved.before' '$T/collab/$malformed'"
+  check "mixed-validity conflict is detected before payload writes" "[ ! -e '$T/collab/doctor.sh' ]"
+  if bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1; then
+    no "mixed-validity uninstall rejects malformed collab/$malformed"
+  else
+    ok "mixed-validity uninstall rejects malformed collab/$malformed"
+  fi
+  check "mixed-validity uninstall preserves collab/$malformed" "cmp -s '$T/reserved.before' '$T/collab/$malformed'"
+  rm -rf "$T"
+done
+
+# --- legacy path-only installs migrate only with byte-level proof -------------
+T="$(newrepo)"
+mkdir -p "$T/collab"
+cp "$repo_root/collab/ask.sh" "$T/collab/ask.sh"
+printf 'collab/ask.sh\n' > "$T/collab/.install-manifest"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+check "matching legacy path-only file gains an ownership hash" "grep -q $'^[0-9a-f][0-9a-f]*\\tcollab/ask.sh$' '$T/collab/.install-hashes'"
+bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
+check "migrated legacy install uninstalls cleanly" "[ ! -e '$T/collab/ask.sh' ]"
+rm -rf "$T"
+
+S="$(mktemp -d)"; cp -R "$repo_root/." "$S/"
+T="$(newrepo)"; mkdir -p "$T/collab"
+printf 'OLDER INSTALLED PAYLOAD\n' > "$T/collab/ask.sh"
+printf 'collab/ask.sh\n' > "$T/collab/.install-manifest"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+check "unverifiable legacy payload is not clobbered" "grep -q 'OLDER INSTALLED PAYLOAD' '$T/collab/ask.sh'"
+check "unverifiable legacy ownership path is retained" "grep -qx 'collab/ask.sh' '$T/collab/.install-manifest'"
+check "unverifiable legacy path is not assigned a fabricated hash" "! grep -q $'\\tcollab/ask.sh$' '$T/collab/.install-hashes'"
+printf 'USER CHANGED LEGACY FILE\n' > "$T/collab/ask.sh"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+check "changed legacy path-only file remains untouched" "grep -q 'USER CHANGED LEGACY FILE' '$T/collab/ask.sh'"
+rm -rf "$S" "$T"
+
+# --- surviving hashes work without a manifest across source upgrades ----------
+S="$(mktemp -d)"; cp -R "$repo_root/." "$S/"
+T="$(newrepo)"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+rm -f "$T/collab/.install-manifest"
+printf '\n# NEWER SOURCE PAYLOAD\n' >> "$S/collab/ask.sh"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+check "orphaned hash upgrades an older installed payload" "grep -q 'NEWER SOURCE PAYLOAD' '$T/collab/ask.sh'"
+check "orphaned hash migration restores the manifest" "grep -qx 'collab/ask.sh' '$T/collab/.install-manifest'"
+check "orphaned hash migration refreshes ownership metadata" "grep -q $'\\tcollab/ask.sh$' '$T/collab/.install-hashes'"
+rm -rf "$S" "$T"
+
+# --- explicit payload inventory excludes local/generated/arbitrary files ------
+S="$(mktemp -d)"
+cp -R "$repo_root/." "$S/"
+mkdir -p "$S/collab/logs/run"
+printf 'private\n' > "$S/collab/collab.conf.local"
+printf 'stale\n' > "$S/collab/.install-manifest"
+printf 'log\n' > "$S/collab/logs/run/calls.jsonl"
+printf 'arbitrary\n' > "$S/collab/not-payload.txt"
+T="$(newrepo)"
+bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
+check "payload excludes personal config" "[ ! -e '$T/collab/collab.conf.local' ]"
+check "payload excludes source logs" "[ ! -e '$T/collab/logs/run/calls.jsonl' ]"
+check "payload excludes arbitrary source files" "[ ! -e '$T/collab/not-payload.txt' ]"
+check "payload does not copy a stale source manifest" "! grep -q stale '$T/collab/.install-manifest'"
+expected="$T/.expected-payload"; actual="$T/.actual-payload"
+( cd "$repo_root" && {
+    find .claude/commands/collab .opencode/agent collab -type f \
+      ! -path 'collab/logs/*' \
+      ! -name '.install-manifest' ! -name '.install-hashes' ! -name '.install-state' \
+      ! -name 'collab.conf.local' ! -name 'models.policy.local' -print
+  } | sed 's|^\\./||' | sort ) > "$expected"
+sort "$T/collab/.install-manifest" > "$actual"
+check "explicit payload inventory includes every intended source file" "cmp -s '$expected' '$actual'"
+rm -rf "$S" "$T"
+
+# --- no-source/no-manifest uninstall refuses path-only deletion ---------------
+S="$(mktemp -d)"; cp "$installer" "$S/install.sh"
+T="$(newrepo)"; mkdir -p "$T/collab"; printf 'USER FILE\n' > "$T/collab/ask.sh"
+bash "$S/install.sh" --uninstall --dest "$T" >/dev/null 2>&1
+check "no-source uninstall preserves known-path user files" "grep -q 'USER FILE' '$T/collab/ask.sh'"
+rm -rf "$S" "$T"
+
+# --- symlink components and destination files are rejected -------------------
+for parent in collab .claude; do
+  T="$(newrepo)"; outside="$(mktemp -d)"
+  ln -s "$outside" "$T/$parent"
+  if bash "$installer" --dest "$T" >/dev/null 2>&1; then
+    no "install rejects symlinked $parent parent"
+  else
+    ok "install rejects symlinked $parent parent"
+  fi
+  check "symlinked $parent parent cannot write outside dest" "[ -z \"\$(ls -A '$outside')\" ]"
+  rm -rf "$T" "$outside"
+done
+
+# --- uninstall preserves pre-existing .gitignore identity and blank lines -----
+T="$(newrepo)"; : > "$T/.gitignore"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
+check "uninstall keeps a pre-existing empty .gitignore" "[ -f '$T/.gitignore' ] && [ ! -s '$T/.gitignore' ]"
+rm -rf "$T"
+
+T="$(newrepo)"
+printf 'keep-me\n\n\n' > "$T/.gitignore"
+cp "$T/.gitignore" "$T/.gitignore.before"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
+check "gitignore block removal preserves unrelated trailing blank lines" "cmp -s '$T/.gitignore.before' '$T/.gitignore'"
+rm -rf "$T"
+
+T="$(newrepo)"; outside="$(mktemp -d)"; target="$outside/target"
+mkdir -p "$T/collab"; printf 'OUTSIDE\n' > "$target"; ln -s "$target" "$T/collab/ask.sh"
+if bash "$installer" --dest "$T" >/dev/null 2>&1; then
+  no "install rejects a destination file symlink"
+else
+  ok "install rejects a destination file symlink"
+fi
+check "destination file symlink target is untouched" "grep -q OUTSIDE '$target'"
+rm -rf "$T" "$outside"
+
+# The old fixed .gitignore.cctmp name allowed a same-directory symlink escape.
+T="$(newrepo)"; outside="$(mktemp -d)"; target="$outside/target"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+printf 'OUTSIDE\n' > "$target"; ln -s "$target" "$T/.gitignore.cctmp"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+check "predictable gitignore temp symlink target is untouched" "grep -qx OUTSIDE '$target'"
+check "gitignore replacement remains valid with hostile old temp path" "grep -q 'ClaudeCollab >>>' '$T/.gitignore'"
+rm -rf "$T" "$outside"
+
+T="$(newrepo)"; outside="$(mktemp -d)"; target="$outside/target"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+rm -f "$T/collab/ask.sh"; printf 'OUTSIDE\n' > "$target"; ln -s "$target" "$T/collab/ask.sh"
+if bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1; then
+  no "uninstall rejects a destination file symlink"
+else
+  ok "uninstall rejects a destination file symlink"
+fi
+check "uninstall cannot remove a destination symlink target" "grep -q OUTSIDE '$target'"
+rm -rf "$T" "$outside"
+
+# Newlines are valid in Unix path components. Parsing only the first line used
+# to miss this symlink and let mkdir follow it outside the requested destination.
+base="$(mktemp -d)"; outside="$(mktemp -d)"; component=$'linked\ncomponent'
+ln -s "$outside" "$base/$component"
+T="$base/$component/project"
+if bash "$installer" --dest "$T" >/dev/null 2>&1; then
+  no "install rejects a newline-containing symlink destination component"
+else
+  ok "install rejects a newline-containing symlink destination component"
+fi
+check "newline-containing symlink cannot escape destination" "[ ! -e '$outside/project' ]"
+rm -rf "$base" "$outside"
 
 # --- dest path containing a space --------------------------------------------
 base="$(mktemp -d)"; T="$base/with space"; mkdir -p "$T"; ( cd "$T" && git init -q ) 2>/dev/null

@@ -32,6 +32,8 @@ pass() { printf '\033[32mok\033[0m   %s\n' "$*"; }
 bad()  { printf '\033[31mFAIL\033[0m %s — %s\n' "$1" "$2"; fail=1; }
 
 KNOWN_TOOLS="bash edit write patch grep glob task todowrite webfetch websearch lsp skill"
+# Canonical expected secret-read carve-outs for every non-scoped agent.
+SECRET_GLOBS='*.env *.env.* .env **/.env **/.env.* *.pem **/*.pem *.key **/*.key *.pfx *.p12 id_rsa id_ed25519 **/id_rsa **/id_ed25519 **/.ssh/** **/.aws/** **/.gnupg/** *credentials* **/credentials* **/.netrc **/.git-credentials'
 
 # frontmatter <file> : the YAML between the first `---` and the next `---`. Anything
 # in the markdown body (after the closing fence) is ignored — a look-alike block
@@ -137,6 +139,10 @@ EOF
         || bad "$label" "read map: '*' resolves to '$(effective "$rm" '*')', expected deny — this agent's scope is enforced BY CONSTRUCTION, and an allow floor silently hands it the whole repo"
       [ "$(effective "$rm" "$scope")" = "allow" ] \
         || bad "$label" "read map: scope '$scope' resolves to '$(effective "$rm" "$scope")', expected allow (the agent cannot read the only thing it exists to read)"
+      if [ "$scope" = "collab/logs/**" ]; then
+        [ "$(effective "$rm" "**/collab/logs/**")" = "allow" ] \
+          || bad "$label" "read map: absolute log scope '**/collab/logs/**' resolves to '$(effective "$rm" "**/collab/logs/**")', expected allow (/collab:witness passes an absolute path)"
+      fi
       ;;
     *)
       [ "$(effective "$rm" '*')" = "allow" ] \
@@ -144,7 +150,7 @@ EOF
       ;;
   esac
   local s
-  for s in '.env' '*.env' '*.key' '*.pem' '*credentials*'; do
+  for s in $SECRET_GLOBS; do
     [ "$(effective "$rm" "$s")" = "deny" ] \
       || bad "$label" "read map: secret '$s' resolves to '$(effective "$rm" "$s")', expected deny (last-match-wins — is a '\"*\": allow' after it?)"
   done
@@ -152,13 +158,13 @@ EOF
   [ "$fail" -eq "$f0" ] && pass "$label: allowlist invariants hold (frontmatter-bounded, effective/last-match-aware)"
 }
 
-echo "== collab-read (allowlist: read-only, no tool allowed) =="
-check_agent ".opencode/agent/collab-read.md" ""
+echo "== collab-read (allowlist: webfetch/websearch) =="
+check_agent ".opencode/agent/collab-read.md" "webfetch websearch"
 
 echo "== collab-build (allowlist: edit/write/patch/bash) =="
 check_agent ".opencode/agent/collab-build.md" "edit write patch bash"
 
-# collab-research is the /collab:research path: the ONLY agent allowed network egress.
+# collab-research is the source-backed /collab:research path.
 # `bash` must stay OUT of this allow-set — it's what keeps the secret-read and
 # grep/glob denies real on a path that can reach the network.
 echo "== collab-research (allowlist: webfetch/websearch) =="

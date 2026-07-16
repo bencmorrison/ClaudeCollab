@@ -1,7 +1,7 @@
 # Local, per-user Claude Code settings (personal permission grants, etc.)
 .claude/settings.local.json
 
-# Per-user config written by /configure-collab (personal deny/ask/allow rules and
+# Per-user config written by /collab:configure (personal deny/ask/allow rules and
 # preferred models; ask.sh/panel-models auto-prefer these). Never commit personal
 # prefs. The committed collab.conf.example is the template.
 collab/models.policy.local
@@ -29,9 +29,13 @@ node_modules/
 .collab-*-probe.*
 
 # The evidence layer (collab/log.sh): raw model calls, prompts and responses from
-# every /consult, /panel, /delegate … Local audit data for the watcher — it holds
+# every /collab:consult, /collab:panel, /collab:delegate, etc. Local audit data for the watcher — it holds
 # whatever repo context was pasted into a prompt, so it is never committed.
 collab/logs/
+
+# Host-side staging for selected devcontainer Claude config. Recreated before the
+# container starts; never commit personal config copied here.
+.devcontainer/.host-config/
 
 # Logs / temp
 *.log

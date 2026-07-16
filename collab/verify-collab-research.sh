@@ -41,10 +41,11 @@ model="${COLLAB_VERIFY_MODEL:-opencode/deepseek-v4-flash-free}"
 agent="collab-research"
 agent_file=".opencode/agent/collab-research.md"
 fail=0
+inconclusive=0
 
 pass() { printf '\033[32mPASS\033[0m %s\n' "$*"; }
 bad()  { printf '\033[31mFAIL\033[0m %s\n' "$*"; fail=1; }
-inc()  { printf '\033[33mINCONCLUSIVE\033[0m %s\n' "$*"; }
+inc()  { printf '\033[33mINCONCLUSIVE\033[0m %s\n' "$*"; inconclusive=1; }
 
 TIMEOUT=""
 if command -v timeout >/dev/null 2>&1; then TIMEOUT="timeout 120"
@@ -89,7 +90,8 @@ done
 
 # Secret reads denied at the read-tool layer. On THIS agent these actually bite
 # (no bash/grep/glob to bypass them) — unlike collab-build.
-for secret in "*.env" ".env" "*.pem" "*.key"; do
+SECRET_GLOBS='*.env *.env.* .env **/.env **/.env.* *.pem **/*.pem *.key **/*.key *.pfx *.p12 id_rsa id_ed25519 **/id_rsa **/id_ed25519 **/.ssh/** **/.aws/** **/.gnupg/** *credentials* **/credentials* **/.netrc **/.git-credentials'
+for secret in $SECRET_GLOBS; do
   a="$(last_action read "$secret")"
   if [ "$a" = "deny" ]; then pass "read '$secret' => deny (read-tool layer)"; else bad "read '$secret' => '${a:-<none>}' (secret readable AND this agent has egress!)"; fi
 done
@@ -126,13 +128,17 @@ rm -f "$probe"
 fi  # end runtime probe (skipped under --static)
 
 echo
-if [ "$fail" -eq 0 ]; then
+if [ "$fail" -eq 0 ] && [ "$inconclusive" -eq 0 ]; then
   if [ -n "$static_only" ]; then
     printf '\033[32mcollab-research VERIFIED (static)\033[0m — webfetch/websearch=allow; bash/edit/write/patch/grep/glob/task + secret READS=deny (resolved config). Runtime probe not run (--static). NOTE: read + egress coexist BY DESIGN — secrets-by-glob are contained (no bash/grep/glob), but non-secret private data can still leave. Not an exfiltration boundary.\n'
   else
     printf '\033[32mcollab-research VERIFIED\033[0m — web reachable; mutation/grep/glob/task and secret READS denied at the tool layer. NOTE: read + egress coexist BY DESIGN — secrets-by-glob are contained (no bash/grep/glob), but non-secret private data can still leave. Not an exfiltration boundary.\n'
   fi
-else
+elif [ "$fail" -ne 0 ]; then
   printf '\033[31mcollab-research NOT verified\033[0m — permission shape is wrong; check the agent def against verify-collab-read.sh conventions.\n'
+else
+  printf '\033[33mcollab-research INCONCLUSIVE\033[0m — static proof passed, but the runtime probe did not establish a result.\n'
 fi
-exit "$fail"
+[ "$fail" -eq 0 ] || exit 1
+[ "$inconclusive" -eq 0 ] || exit 6
+exit 0

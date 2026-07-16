@@ -24,14 +24,16 @@
 #   collab/logs/<run_id>/reports/       /collab:witness reports land here (Phase W2)
 #   collab/logs/latest                  symlink to the most recent run dir
 #
-# ENTRIES. Every model call writes TWO lines with a status flip: `started` before the
-# call and `completed` after. Integrity is defined as **every `started` has a matching
-# `completed`** — without the pair, a crash mid-call reads as a clean log, a silent
-# gap a watcher cannot detect. The two are paired by **`call_id`, never by
+# ENTRIES. Every model call writes THREE lines: `expected-call` before capture setup,
+# `started` before the call, and `completed` after. Integrity requires exactly one of
+# each for a call id. Without all
+# three, a crash or capture failure can read as a clean log. Entries are paired by
+# **`call_id`, never by
 # run_id+turn**: retries and parallel panel calls (a /collab:panel or /collab:workshop round fires
 # 2-3 concurrently) break turn-based pairing.
 #
 # Entry types:
+#   expected-call         durable intent to make a call, written before capture setup
 #   started / completed   a model call, written by ask.sh
 #   claude-final          Claude's final user-facing answer (W0.5). Without it a
 #                         watcher can audit dispositions but NOT the summary the
@@ -54,14 +56,16 @@
 #   log.sh path [run_id]                     print the calls.jsonl path
 #   log.sh started   --call-id <id> --command <c> --model <m> --agent <a> \
 #                    [--session <s>] [--prompt-file <f>]      prints the turn number
+#   log.sh expect    --call-id <id> --command <c> --model <m> --agent <a>
 #   log.sh completed --call-id <id> --exit <n> [--turn <n>] [--session <s>] \
-#                    [--command <c>] [--model <m>] [--agent <a>] [--response-file <f>]
+#                    [--command <c>] [--model <m>] [--agent <a>] \
+#                    --capture-state <complete|failed> [--response-file <f>]
 #   log.sh final [--run <id>]                claude-final; text on stdin
 #   log.sh disposition --model <m> --point <p> --verdict <Adopt|Adapt|Reject|Defer> \
 #                    [--why <text>]          claude-disposition (a claim, not a fact)
 #   log.sh diff --call-id <id> --patch-file <f> [--base <tree>] [--after <tree>]
 #                                            record what a delegated model changed
-#   log.sh verify [run_id]                   integrity: every started has a completed
+#   log.sh verify [run_id]                   integrity: exact expected/start/complete triples
 #   log.sh prune [--days <n>]                delete run dirs older than n days
 #
 # Config: every knob below resolves as env override > collab/collab.conf.local (the
@@ -224,15 +228,17 @@ _line_hash() { tr -d '\n' | _sha; }
 # with the turn count taken outside the lock all three read "0 so far" and every one
 # of them logged itself as turn 1.
 _append_locked() {
-  local file="$1" entry="$2" turn_out="${3:-}" prev="" turn=""
+  local file="$1" entry="$2" turn_out="${3:-}" prev="" turn="" final hash
   [ -f "$file" ] && prev="$(tail -n1 "$file" 2>/dev/null | _line_hash)"
   if [ -n "$turn_out" ]; then
     turn=$(( $(grep -c '"status":"started"' "$file" 2>/dev/null || true) + 1 ))
     printf '%s\n' "$turn" > "$turn_out"
-    jq -c --arg p "$prev" --argjson t "$turn" '. + {turn:$t, prev_hash:$p}' "$entry" >> "$file"
+    final="$(jq -cS --arg p "$prev" --argjson t "$turn" '. + {turn:$t, prev_hash:$p}' "$entry")"
   else
-    jq -c --arg p "$prev" '. + {prev_hash: $p}' "$entry" >> "$file"
+    final="$(jq -cS --arg p "$prev" '. + {prev_hash: $p}' "$entry")"
   fi
+  hash="$(printf '%s' "$final" | _sha)"
+  printf '%s' "$final" | jq -c --arg h "$hash" '. + {entry_hash:$h}' >> "$file"
 }
 
 # ---- entry construction -----------------------------------------------------
@@ -274,6 +280,30 @@ cmd_latest() {
 cmd_dir()  { printf '%s\n' "$(run_dir "$(resolve_run "${1:-}")")"; }
 cmd_path() { printf '%s\n' "$(run_dir "$(resolve_run "${1:-}")")/calls.jsonl"; }
 
+cmd_expect() {
+  local call_id="" command="" model="" agent="" run=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --call-id) call_id="${2-}"; shift 2 ;;
+      --command) command="${2-}"; shift 2 ;;
+      --model)   model="${2-}"; shift 2 ;;
+      --agent)   agent="${2-}"; shift 2 ;;
+      --run)     run="${2-}"; shift 2 ;;
+      *) echo "log.sh expect: unknown arg '$1'" >&2; exit 2 ;;
+    esac
+  done
+  [ -n "$call_id" ] || { echo "log.sh expect: --call-id is required" >&2; exit 2; }
+  disabled && return 0
+  have_jq || return 1
+  local rid rd file entry; rid="$(resolve_run "$run")"; rd="$(ensure_run "$rid")"; file="$rd/calls.jsonl"
+  entry="$(mktemp "$rd/.entry.XXXXXX")"
+  _entry "$rid" expected-call expected | jq -c \
+    --arg call_id "$call_id" --arg command "$command" --arg model "$model" --arg agent "$agent" \
+    '. + {call_id:$call_id, command:$command, model:(if $model=="" then null else $model end), agent:$agent}' > "$entry"
+  _with_lock "$file.lock" _append_locked "$file" "$entry"
+  rm -f "$entry"
+}
+
 cmd_started() {
   local call_id="" command="" model="" agent="" session="" prompt_file="" run=""
   while [ $# -gt 0 ]; do
@@ -296,11 +326,11 @@ cmd_started() {
   # called "off" that still fingerprints every prompt is a lie to the person who set
   # it. `hash` is the middle ground — proves the prompt didn't change, reveals none
   # of it.
-  local prompt_txt="" prompt_hash="" mode; mode="$(_prompt_mode)"
+  local prompt_hash="" mode pfile="$prompt_file" tmp_empty=""; mode="$(_prompt_mode)"
   if [ -n "$prompt_file" ] && [ -f "$prompt_file" ] && [ "$mode" != "off" ]; then
     prompt_hash="$(_sha < "$prompt_file")"
-    [ "$mode" = "full" ] && prompt_txt="$(cat "$prompt_file")"
   fi
+  if [ -z "$pfile" ] || [ ! -f "$pfile" ]; then tmp_empty="$(mktemp)"; pfile="$tmp_empty"; fi
   local entry turn_out; entry="$(mktemp)"; turn_out="$(mktemp)"
   # turn = position within the run. Recorded because it reads naturally in a report
   # ("turn 3 of the workshop"), NOT as the pairing key — call_id is (W0.3). It is
@@ -308,19 +338,20 @@ cmd_started() {
   _entry "$rid" call started | jq -c \
     --arg call_id "$call_id" --arg command "$command" --arg model "$model" \
     --arg agent "$agent" --arg session "$session" \
-    --arg pmode "$mode" --arg ptxt "$prompt_txt" --arg phash "$prompt_hash" \
+    --arg pmode "$mode" --rawfile ptxt "$pfile" --arg phash "$prompt_hash" \
     '. + {call_id:$call_id, command:$command, model:(if $model=="" then null else $model end),
           agent:$agent, session_id:(if $session=="" then null else $session end),
           prompt_mode:$pmode,
           prompt:(if $pmode=="full" then $ptxt else null end),
           prompt_hash:(if $phash=="" then null else $phash end)}' > "$entry"
+  [ -n "$tmp_empty" ] && rm -f "$tmp_empty"
   _with_lock "$file.lock" _append_locked "$file" "$entry" "$turn_out"
   cat "$turn_out"
   rm -f "$entry" "$turn_out"
 }
 
 cmd_completed() {
-  local call_id="" exit_code="0" turn="" session="" command="" model="" agent="" response_file="" run=""
+  local call_id="" exit_code="0" turn="" session="" command="" model="" agent="" response_file="" run="" capture_state=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --call-id) call_id="${2-}"; shift 2 ;;
@@ -331,12 +362,14 @@ cmd_completed() {
       --model)   model="${2-}";   shift 2 ;;
       --agent)   agent="${2-}";   shift 2 ;;
       --response-file) response_file="${2-}"; shift 2 ;;
+      --capture-state) capture_state="${2-}"; shift 2 ;;
       --run)     run="${2-}";     shift 2 ;;
       *) echo "log.sh completed: unknown arg '$1'" >&2; exit 2 ;;
     esac
   done
   disabled && return 0
   have_jq || return 0
+  case "$capture_state" in complete|failed) ;; *) echo "log.sh completed: --capture-state must be complete|failed" >&2; exit 2 ;; esac
   local rid rd file; rid="$(resolve_run "$run")"; rd="$(ensure_run "$rid")"; file="$rd/calls.jsonl"
 
   # raw_response is recorded in FULL, always. It is the evidence — a truncated
@@ -346,7 +379,10 @@ cmd_completed() {
   # AND hash the truncated value — so `verify` would happily confirm the copy it
   # already lost bytes from. An empty file stands in when there's no response.
   local rfile="$response_file" rhash="" tmp_empty=""
-  if [ -z "$rfile" ] || [ ! -f "$rfile" ]; then
+  if [ "$capture_state" = "complete" ] && { [ -z "$rfile" ] || [ ! -f "$rfile" ]; }; then
+    capture_state="failed"
+  fi
+  if [ "$capture_state" = "failed" ]; then
     tmp_empty="$(mktemp)"; rfile="$tmp_empty"
   else
     rhash="$(_sha < "$rfile")"
@@ -354,12 +390,12 @@ cmd_completed() {
   local entry; entry="$(mktemp)"
   _entry "$rid" call completed | jq -c \
     --arg call_id "$call_id" --arg command "$command" --arg model "$model" \
-    --arg agent "$agent" --arg session "$session" --arg turn "$turn" \
+    --arg agent "$agent" --arg session "$session" --arg turn "$turn" --arg capture "$capture_state" \
     --argjson exit_code "${exit_code:-0}" --rawfile resp "$rfile" --arg rhash "$rhash" \
     '. + {call_id:$call_id, command:$command, model:(if $model=="" then null else $model end),
           agent:$agent, session_id:(if $session=="" then null else $session end),
           turn:(if $turn=="" then null else ($turn|tonumber) end),
-          exit_code:$exit_code, raw_response:$resp,
+          exit_code:$exit_code, capture_state:$capture, raw_response:$resp,
           response_hash:(if $rhash=="" then null else $rhash end)}' > "$entry"
   [ -n "$tmp_empty" ] && rm -f "$tmp_empty"
   _with_lock "$file.lock" _append_locked "$file" "$entry"
@@ -429,29 +465,36 @@ cmd_disposition() {
 # should compare Claude's account against the PATCH, not against the model's report of
 # what it did.
 cmd_diff() {
-  local call_id="" patch_file="" base="" after="" run=""
+  local call_id="" patch_file="" base="" after="" run="" complete="true" reason=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --call-id) call_id="${2-}"; shift 2 ;;
       --patch-file) patch_file="${2-}"; shift 2 ;;
       --base) base="${2-}"; shift 2 ;;
       --after) after="${2-}"; shift 2 ;;
+      --complete) complete="${2-}"; shift 2 ;;
+      --reason) reason="${2-}"; shift 2 ;;
       --run) run="${2-}"; shift 2 ;;
       *) echo "log.sh diff: unknown arg '$1'" >&2; exit 2 ;;
     esac
   done
   [ -n "$patch_file" ] && [ -f "$patch_file" ] || { echo "log.sh diff: --patch-file must exist" >&2; exit 2; }
+  case "$complete" in true|false) ;; *) echo "log.sh diff: --complete must be true|false" >&2; exit 2 ;; esac
   disabled && return 0
   have_jq || return 0
   local rid rd file; rid="$(resolve_run "$run")"; rd="$(ensure_run "$rid")"; file="$rd/calls.jsonl"
-  local entry; entry="$(mktemp)"
+  local entry files; entry="$(mktemp)"
+  files="$(grep -c '^diff --git ' "$patch_file" 2>/dev/null || true)"
+  [ -n "$files" ] || files=0
   _entry "$rid" delegate-diff "" | jq -c \
     --arg call_id "$call_id" --arg patch "$(basename "$patch_file")" \
-    --arg base "$base" --arg after "$after" --arg h "$(_sha < "$patch_file")" \
+    --arg base "$base" --arg after "$after" --arg h "$(_sha < "$patch_file")" --arg reason "$reason" \
+    --argjson complete "$complete" \
     --argjson bytes "$(wc -c < "$patch_file" | tr -d ' ')" \
-    --argjson files "$(grep -c '^diff --git ' "$patch_file" 2>/dev/null || echo 0)" \
+    --argjson files "$files" \
     '. + {call_id:$call_id, patch:$patch, base_tree:$base, after_tree:$after,
-          files_changed:$files, patch_bytes:$bytes, claim:false,
+          files_changed:$files, patch_bytes:$bytes, claim:false, capture_complete:$complete,
+          incomplete_reason:(if $reason=="" then null else $reason end),
           response_hash:(if $h=="" then null else $h end)}' > "$entry"
   _with_lock "$file.lock" _append_locked "$file" "$entry"
   rm -f "$entry"
@@ -473,34 +516,33 @@ cmd_verify() {
     echo "INTEGRITY FAIL: $file is not clean JSONL ($n_lines lines, $n_json parsed)." >&2
     bad=1
   else
-    # 2. Unpaired entries, by call_id — checked in BOTH directions.
-    #
-    #    A `started` with no `completed` is the obvious gap: the call died mid-flight
-    #    and its response never reached the log. But the inverse is just as much a
-    #    silent loss and was missed at first: if the `started` write fails while the
-    #    call itself succeeds, the log keeps the answer and loses the PROMPT and the
-    #    turn — and a one-directional check prints "every started has a completed"
-    #    over it, which is precisely the reassuring-but-false verdict this contract
-    #    exists to prevent. Integrity is a *pairing* property, so verify the pair.
-    local orphan_started orphan_completed
-    orphan_started="$(jq -rs '
-      [.[] | select(.type=="call")] as $c
-      | ($c | map(select(.status=="started")   | .call_id)) as $s
-      | ($c | map(select(.status=="completed") | .call_id)) as $d
-      | $s - $d | .[]' "$file")"
-    orphan_completed="$(jq -rs '
-      [.[] | select(.type=="call")] as $c
-      | ($c | map(select(.status=="started")   | .call_id)) as $s
-      | ($c | map(select(.status=="completed") | .call_id)) as $d
-      | $d - $s | .[]' "$file")"
-    if [ -n "$orphan_started" ]; then
-      echo "INTEGRITY FAIL: started with no completed (the call died mid-flight; its response is NOT in this log):" >&2
-      printf '  call_id %s\n' $orphan_started >&2
+    # 2. Every call id must have exactly one durable expectation and one pair.
+    local bad_cardinality bad_expected_ids n_expected
+    n_expected="$(jq -rs '[.[] | select(.type=="expected-call" and (.call_id | type)=="string" and .call_id!="")] | length' "$file")"
+    bad_expected_ids="$(jq -rs '
+      [.[] | select(.type=="expected-call")] as $expected
+      | ($expected[] | select((.call_id | type)!="string" or .call_id=="") | "missing or invalid call_id"),
+        ([$expected[] | select((.call_id | type)=="string" and .call_id!="") | .call_id]
+         | group_by(.)[] | select(length > 1) | "duplicate call_id \(.[0])")' "$file")"
+    if [ -n "$bad_expected_ids" ]; then
+      echo "INTEGRITY FAIL: expected-call entries require unique, non-empty string call_id values:" >&2
+      printf '  %s\n' $bad_expected_ids >&2
       bad=1
     fi
-    if [ -n "$orphan_completed" ]; then
-      echo "INTEGRITY FAIL: completed with no started (the pre-call entry was lost; this call's PROMPT and turn are NOT in this log):" >&2
-      printf '  call_id %s\n' $orphan_completed >&2
+    if [ "$n_expected" -eq 0 ]; then
+      echo "INTEGRITY FAIL: run contains no expected/model lifecycle calls." >&2
+      bad=1
+    fi
+    bad_cardinality="$(jq -rs '
+      . as $all | [$all[].call_id | select(. != null)] | unique[] as $id
+      | ([$all[] | select(.type=="expected-call" and .call_id==$id)] | length) as $e
+      | ([$all[] | select(.type=="call" and .status=="started" and .call_id==$id)] | length) as $s
+      | ([$all[] | select(.type=="call" and .status=="completed" and .call_id==$id)] | length) as $c
+      | select($e != 1 or $s != 1 or $c != 1)
+      | "\($id)|expected=\($e),started=\($s),completed=\($c)"' "$file")"
+    if [ -n "$bad_cardinality" ]; then
+      echo "INTEGRITY FAIL: every call_id requires exactly one expected, started, and completed entry:" >&2
+      printf '  %s\n' $bad_cardinality >&2
       bad=1
     fi
     # 3. Hash chain + per-entry self-check — accidental corruption only; this is not
@@ -512,7 +554,7 @@ cmd_verify() {
     #    half-flushed final write is the single most likely accidental corruption
     #    here. So each entry ALSO carries response_hash over its own payload, which
     #    is verifiable standalone and covers the tail.
-    local i=0 prev="" line got rh etype pf
+    local i=0 prev="" line got rh etype pf entry_hash computed capture pmode ph
     while IFS= read -r line; do
       i=$((i+1))
       got="$(printf '%s' "$line" | jq -r '.prev_hash // ""')"
@@ -520,6 +562,34 @@ cmd_verify() {
         echo "INTEGRITY FAIL: prev_hash mismatch at line $i (log corrupted or rewritten)." >&2
         bad=1; break
       fi
+      entry_hash="$(printf '%s' "$line" | jq -r '.entry_hash // ""')"
+      computed="$(printf '%s' "$line" | jq -cjS 'del(.entry_hash)' | _sha)"
+      if [ -z "$entry_hash" ] || [ "$entry_hash" != "$computed" ]; then
+        echo "INTEGRITY FAIL: entry_hash mismatch at line $i (entry payload altered or unprotected)." >&2
+        bad=1; break
+      fi
+      capture="$(printf '%s' "$line" | jq -r 'if .type=="call" and .status=="completed" then (.capture_state // "missing") elif .type=="delegate-diff" then (if .capture_complete then "complete" else "failed" end) else "complete" end')"
+      if [ "$capture" != "complete" ]; then
+        echo "INTEGRITY FAIL: line $i records incomplete evidence capture ($capture)." >&2
+        bad=1; break
+      fi
+      pmode="$(printf '%s' "$line" | jq -r 'if .type=="call" and .status=="started" then (.prompt_mode // "missing") else "none" end')"
+      ph="$(printf '%s' "$line" | jq -r '.prompt_hash // ""')"
+      case "$pmode" in
+        full)
+          if [ -z "$ph" ] || [ "$(printf '%s' "$line" | jq -j '.prompt // ""' | _sha)" != "$ph" ]; then
+            echo "INTEGRITY FAIL: prompt_hash mismatch at line $i (the recorded prompt does not match its digest)." >&2
+            bad=1; break
+          fi ;;
+        hash)
+          case "$ph" in ''|*[!0-9a-f]* )
+            echo "INTEGRITY FAIL: invalid prompt_hash at line $i." >&2; bad=1; break ;;
+          esac
+          [ "${#ph}" -eq 64 ] || { echo "INTEGRITY FAIL: invalid prompt_hash at line $i." >&2; bad=1; break; } ;;
+        off) [ -z "$ph" ] || { echo "INTEGRITY FAIL: prompt hashing is present despite off mode at line $i." >&2; bad=1; break; } ;;
+        none) : ;;
+        *) echo "INTEGRITY FAIL: invalid prompt_mode at line $i." >&2; bad=1; break ;;
+      esac
       rh="$(printf '%s' "$line" | jq -r '.response_hash // ""')"
       if [ -n "$rh" ]; then
         etype="$(printf '%s' "$line" | jq -r '.type // ""')"
@@ -547,7 +617,7 @@ cmd_verify() {
     done < "$file"
   fi
   [ "$bad" -eq 0 ] || exit 7
-  echo "ok: $file — $n_lines entries, every call paired (started↔completed), hashes intact."
+  echo "ok: $file — $n_lines entries, every expected call has exactly one started/completed pair, captures and hashes intact."
 }
 
 cmd_prune() {
@@ -574,6 +644,7 @@ case "$sub" in
   latest)      cmd_latest "$@" ;;
   dir)         cmd_dir "$@" ;;
   path)        cmd_path "$@" ;;
+  expect)      cmd_expect "$@" ;;
   started)     cmd_started "$@" ;;
   completed)   cmd_completed "$@" ;;
   final)       cmd_final "$@" ;;

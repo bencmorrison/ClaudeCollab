@@ -13,8 +13,10 @@ set -uo pipefail
 # this suite, would cry wolf in the exact config the docs tell people to set up. Cases
 # that need these vars set them inline as command-prefixes, so clearing the ambient
 # values here is safe and correct.
-unset COLLAB_MODEL COLLAB_CONFIRMED COLLAB_TIMEOUT COLLAB_POLICY
-unset COLLAB_LOG COLLAB_LOG_PROMPTS COLLAB_RUN_ID COLLAB_COMMAND COLLAB_LOG_RETENTION_DAYS
+unset COLLAB_CONF COLLAB_MODEL COLLAB_MODELS COLLAB_WATCH_MODEL COLLAB_CONFIRMED
+unset COLLAB_TIMEOUT COLLAB_POLICY COLLAB_REQUIRE_HARDENED COLLAB_VERIFY_MODEL
+unset COLLAB_LOG COLLAB_LOG_DIR COLLAB_LOG_PROMPTS COLLAB_RUN_ID COLLAB_COMMAND COLLAB_LOG_RETENTION_DAYS
+unset FAKE_OPENCODE_ARGS FAKE_OPENCODE_STDIN FAKE_OPENCODE_EXIT FAKE_OPENCODE_TEXT FAKE_OPENCODE_SID
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
@@ -38,9 +40,23 @@ allow_pol="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"; printf 'allow *\n' > "$al
 argsfile="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"; stdinfile="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"
 export FAKE_OPENCODE_ARGS="$argsfile" FAKE_OPENCODE_STDIN="$stdinfile"
 
-pass=0; fail=0
+pass=0; fail=0; inconclusive=0
 ok()  { printf '\033[32mPASS\033[0m %s\n' "$*"; pass=$((pass+1)); }
 no()  { printf '\033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail+1)); }
+inc() { printf '\033[33mINCONCLUSIVE\033[0m %s\n' "$*"; inconclusive=$((inconclusive+1)); }
+
+test_timeout_bin=""
+if command -v timeout >/dev/null 2>&1; then test_timeout_bin="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then test_timeout_bin="gtimeout"; fi
+run_with_optional_timeout() {
+  local seconds="$1"; shift
+  if [ -n "$test_timeout_bin" ]; then "$test_timeout_bin" "$seconds" "$@"; else "$@"; fi
+}
+run_bounded() {
+  local seconds="$1"; shift
+  [ -n "$test_timeout_bin" ] || return 125
+  "$test_timeout_bin" "$seconds" "$@"
+}
 
 cleanup() { rm -rf "$fakedir" "$allow_pol" "$argsfile" "$stdinfile"; }
 trap cleanup EXIT
@@ -103,7 +119,7 @@ rm -rf "$dirty_repo"
 
 # 3d. --watch selects the collab-watch oversight agent. (-m is required on this path
 #     now — an unpinned watcher is refused; see 3e2.)
-run_ask --watch -m openai/gpt-5.5 "audit the log"
+COLLAB_LOG_DIR="$repo_root/collab/logs" run_ask --watch -m openai/gpt-5.5 "audit the log"
 args_has 'collab-watch' && ! args_has 'collab-read' \
   && ok "--watch -> --agent collab-watch" \
   || no "--watch did not select collab-watch (got: $(tr '\n' ' ' <"$argsfile"))"
@@ -113,12 +129,12 @@ args_has 'collab-watch' && ! args_has 'collab-read' \
 #     /collab:witness reports itself to be — and the developer can't tell from the report.
 for m in anthropic/claude-opus-4-5 some-provider/claude-3; do
   : > "$argsfile"
-  COLLAB_POLICY="$allow_pol" bash "$ask" --watch --dry-run -m "$m" "audit" >/dev/null 2>&1; RC=$?
+  COLLAB_LOG_DIR="$repo_root/collab/logs" COLLAB_POLICY="$allow_pol" bash "$ask" --watch --dry-run -m "$m" "audit" >/dev/null 2>&1; RC=$?
   { [ "$RC" -eq 8 ] && ! [ -s "$argsfile" ]; } \
     && ok "--watch refuses Claude model '$m' (exit 8, never invoked)" \
     || no "--watch ran a Claude watcher '$m' (rc=$RC) — Claude auditing Claude"
 done
-COLLAB_POLICY="$allow_pol" COLLAB_CONFIRMED=1 bash "$ask" --watch --dry-run -m anthropic/claude-opus-4-5 "audit" >/dev/null 2>&1 \
+COLLAB_LOG_DIR="$repo_root/collab/logs" COLLAB_POLICY="$allow_pol" COLLAB_CONFIRMED=1 bash "$ask" --watch --dry-run -m anthropic/claude-opus-4-5 "audit" >/dev/null 2>&1 \
   && ok "--watch allows a Claude model once COLLAB_CONFIRMED=1 (user's call, not ours)" \
   || no "--watch still refused a Claude model after explicit confirmation"
 
@@ -129,7 +145,7 @@ COLLAB_POLICY="$allow_pol" COLLAB_CONFIRMED=1 bash "$ask" --watch --dry-run -m a
 #      Claude audits Claude in silence. (Found by dogfooding /collab:review, 2026-07-15.)
 : > "$argsfile"
 ( unset COLLAB_MODEL COLLAB_WATCH_MODEL
-  COLLAB_POLICY="$allow_pol" bash "$ask" --watch --dry-run "audit" >/dev/null 2>&1 ); RC=$?
+  COLLAB_LOG_DIR="$repo_root/collab/logs" COLLAB_POLICY="$allow_pol" bash "$ask" --watch --dry-run "audit" >/dev/null 2>&1 ); RC=$?
 { [ "$RC" -eq 8 ] && ! [ -s "$argsfile" ]; } \
   && ok "--watch refuses an UNPINNED model (exit 8) — opencode's own default may be Claude" \
   || no "--watch ran with no model id (rc=$RC) — opencode's default could be Claude, unchecked"
@@ -137,14 +153,14 @@ COLLAB_POLICY="$allow_pol" COLLAB_CONFIRMED=1 bash "$ask" --watch --dry-run -m a
 # 3f. $COLLAB_WATCH_MODEL is preferred over the general default, but an explicit -m
 #     still wins — the watcher is pinned separately from the model doing the work.
 : > "$argsfile"
-COLLAB_POLICY="$allow_pol" COLLAB_MODEL=openai/gpt-5.4 COLLAB_WATCH_MODEL=openai/gpt-5.5 \
+COLLAB_LOG_DIR="$repo_root/collab/logs" COLLAB_POLICY="$allow_pol" COLLAB_MODEL=openai/gpt-5.4 COLLAB_WATCH_MODEL=openai/gpt-5.5 \
   bash "$ask" --watch --dry-run "audit" >/dev/null 2>&1
-OUT="$(COLLAB_POLICY="$allow_pol" COLLAB_MODEL=openai/gpt-5.4 COLLAB_WATCH_MODEL=openai/gpt-5.5 \
+OUT="$(COLLAB_LOG_DIR="$repo_root/collab/logs" COLLAB_POLICY="$allow_pol" COLLAB_MODEL=openai/gpt-5.4 COLLAB_WATCH_MODEL=openai/gpt-5.5 \
   bash "$ask" --watch --dry-run "audit" 2>/dev/null)"
 printf '%s' "$OUT" | grep -q 'gpt-5.5' \
   && ok "--watch prefers \$COLLAB_WATCH_MODEL over \$COLLAB_MODEL" \
   || no "--watch ignored \$COLLAB_WATCH_MODEL (got: $OUT)"
-OUT="$(COLLAB_POLICY="$allow_pol" COLLAB_WATCH_MODEL=openai/gpt-5.5 \
+OUT="$(COLLAB_LOG_DIR="$repo_root/collab/logs" COLLAB_POLICY="$allow_pol" COLLAB_WATCH_MODEL=openai/gpt-5.5 \
   bash "$ask" --watch --dry-run -m openai/gpt-5.4 "audit" 2>/dev/null)"
 printf '%s' "$OUT" | grep -q 'gpt-5.4' \
   && ok "--watch: an explicit -m beats \$COLLAB_WATCH_MODEL" \
@@ -169,6 +185,35 @@ cp "$ask" "$watchdir/collab/"; printf 'allow *\n' > "$watchdir/collab/models.pol
   && ok "--watch reports the missing def (5) ahead of the model refusal (8)" \
   || no "--watch reported the model complaint over the missing def (rc=$RC)"
 rm -rf "$watchdir"
+
+# 3h. Validate the effective evidence root, with env > config precedence. Prompt
+# wording cannot widen collab-watch's mechanical collab/logs/** read scope.
+: > "$argsfile"
+COLLAB_LOG_DIR="$fakedir/outside-watch-scope" COLLAB_POLICY="$allow_pol" \
+  bash "$ask" --watch --dry-run -m openai/gpt-5.5 "audit" >/dev/null 2>&1; RC=$?
+{ [ "$RC" -eq 5 ] && ! [ -s "$argsfile" ]; } \
+  && ok "--watch rejects an env COLLAB_LOG_DIR outside collab/logs/**" \
+  || no "--watch accepted unreadable evidence root from env (rc=$RC)"
+watchconf="$fakedir/watch.conf"
+printf 'COLLAB_LOG_DIR=%s\n' "$fakedir/outside-from-config" > "$watchconf"
+COLLAB_CONF="$watchconf" COLLAB_POLICY="$allow_pol" \
+  bash "$ask" --watch --dry-run -m openai/gpt-5.5 "audit" >/dev/null 2>&1; RC=$?
+[ "$RC" -eq 5 ] \
+  && ok "--watch rejects an outside COLLAB_LOG_DIR from config" \
+  || no "--watch ignored configured evidence root (rc=$RC)"
+COLLAB_CONF="$watchconf" COLLAB_LOG_DIR="$repo_root/collab/logs/nested" COLLAB_POLICY="$allow_pol" \
+  bash "$ask" --watch --dry-run -m openai/gpt-5.5 "audit" >/dev/null 2>&1 \
+  && ok "--watch accepts an in-scope env root and env overrides config" \
+  || no "--watch log-root env > config precedence is wrong"
+# GNU realpath is intentionally unavailable on stock macOS. A failing fixture at the
+# front of PATH proves watch validation does not call it, and the spaced suffix proves
+# canonicalization does not split paths.
+printf '#!/usr/bin/env bash\nexit 99\n' > "$fakedir/realpath"; chmod +x "$fakedir/realpath"
+COLLAB_LOG_DIR="$repo_root/collab/logs/path with spaces/../audits" COLLAB_POLICY="$allow_pol" \
+  bash "$ask" --watch --dry-run -m openai/gpt-5.5 "audit" >/dev/null 2>&1 \
+  && ok "--watch canonicalizes in-scope paths with spaces without realpath" \
+  || no "--watch still depends on realpath or mishandles a spaced path"
+rm -f "$fakedir/realpath"
 
 # 4. -a plan honoured.
 run_ask -a plan "q"
@@ -317,11 +362,13 @@ if [ -d "$guard_repo/.git" ]; then
     && ok "write path: prints how to restore clobbered work from the snapshot" \
     || no "write path did not print a recovery instruction on a dirty tree"
 
-  # --allow-dirty is GONE: it only ever existed to override the refusal.
+  # --allow-dirty is a legacy no-op: old scripts may still pass it, but dirty trees
+  # are allowed regardless.
+  : > "$argsfile"
   ( cd "$guard_repo" && COLLAB_POLICY="$allow_pol" COLLAB_LOG=off bash "$ask" --edit --allow-dirty -m m/x "q" ) >/dev/null 2>&1; RCG=$?
-  [ "$RCG" -ne 0 ] \
-    && ok "--allow-dirty removed (it only overrode a guard that no longer exists)" \
-    || no "--allow-dirty still accepted — dead flag"
+  { [ "$RCG" -eq 0 ] && args_has 'collab-build'; } \
+    && ok "--allow-dirty accepted as a legacy no-op" \
+    || no "--allow-dirty should be a no-op compatibility flag (rc=$RCG)"
 
   # The read-only path never touched any of this and still must not.
   : > "$argsfile"
@@ -391,6 +438,19 @@ bash "$presol/collab/ask.sh" -m openai/gpt-5.5 "q" >/dev/null 2>&1; RC=$?
 [ "$RC" -eq 3 ] \
   && ok "policy: empty/comment-only .local doesn't void the committed deny (fail-closed)" \
   || no "empty .local shadowed the committed policy (rc=$RC, expected 3)"
+# A tier with no pattern is malformed, not a rule, and likewise cannot shadow the
+# committed deny. If explicitly selected, malformed policy must be loud and fail closed.
+printf 'deny\n' > "$presol/collab/models.policy.local"
+errp="$presol/policy.err"
+bash "$presol/collab/ask.sh" -m openai/gpt-5.5 "q" >/dev/null 2>"$errp"; RC=$?
+[ "$RC" -eq 3 ] \
+  && ok "policy: local bare deny cannot override the committed deny policy" \
+  || no "malformed local bare deny shadowed the committed policy (rc=$RC)"
+COLLAB_POLICY="$presol/collab/models.policy.local" bash "$presol/collab/ask.sh" \
+  -m openai/other "q" >/dev/null 2>"$errp"; RC=$?
+{ [ "$RC" -eq 3 ] && grep -q 'malformed model policy rule' "$errp"; } \
+  && ok "policy: selected malformed active line is reported and fails closed" \
+  || no "selected malformed policy silently failed open (rc=$RC)"
 rm -rf "$presol"
 
 # 20c. Unreadable policy file fails CLOSED (deny), not open (allow). Root ignores
@@ -438,6 +498,31 @@ COLLAB_POLICY="$allow_pol" bash "$confrepo/collab/ask.sh" "q" >/dev/null 2>&1; R
   && ok "config: leading-dash model id refused (exit 2, no opencode call)" \
   || no "leading-dash config model not refused (rc=$RC)"
 rm -rf "$confrepo"
+
+# 21e. Doctor's evidence display uses the same env > config > default precedence as
+# the logger, rather than reporting defaults while log.sh applies file settings.
+dcfg="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$dcfg/collab"
+cp "$repo_root/collab/doctor.sh" "$repo_root/collab/log.sh" "$dcfg/collab/"
+printf 'COLLAB_LOG=off\nCOLLAB_LOG_DIR=/from-config\nCOLLAB_LOG_PROMPTS=hash\nCOLLAB_LOG_RETENTION_DAYS=31\n' > "$dcfg/conf"
+dout="$(COLLAB_CONF="$dcfg/conf" run_with_optional_timeout 60 bash "$dcfg/collab/doctor.sh" 2>&1)"
+printf '%s' "$dout" | sed -n '/== Evidence layer/,/^$/p' | grep -q 'logging is OFF' \
+  && ok "doctor/evidence: COLLAB_LOG is read from the config file" \
+  || no "doctor/evidence: ignored config-file COLLAB_LOG"
+dout="$(COLLAB_CONF="$dcfg/conf" COLLAB_LOG=on COLLAB_LOG_DIR=/from-env COLLAB_LOG_PROMPTS=off \
+  COLLAB_LOG_RETENTION_DAYS=7 run_with_optional_timeout 60 bash "$dcfg/collab/doctor.sh" 2>&1)"
+dsec="$(printf '%s' "$dout" | sed -n '/== Evidence layer/,/^$/p')"
+{ printf '%s' "$dsec" | grep -q 'prompts=off' && printf '%s' "$dsec" | grep -q 'retention=7d' \
+  && printf '%s' "$dsec" | grep -q 'dir=/from-env'; } \
+  && ok "doctor/evidence: env overrides config for every logging knob" \
+  || no "doctor/evidence: env > config > default precedence drifted: $dsec"
+printf 'deny openai/blocked\nallow *\n' > "$dcfg/collab/models.policy"
+printf 'deny\n' > "$dcfg/collab/models.policy.local"
+dout="$(COLLAB_LOG=off run_with_optional_timeout 60 bash "$dcfg/collab/doctor.sh" 2>&1)"
+dsec="$(printf '%s' "$dout" | sed -n '/== Model policy ==/,/^$/p')"
+{ printf '%s' "$dsec" | grep -q 'FAIL.*malformed' && printf '%s' "$dsec" | grep -q 'models.policy.local'; } \
+  && ok "doctor/policy: malformed active-looking local line is flagged" \
+  || no "doctor/policy: malformed local policy was silently ignored: $dsec"
+rm -rf "$dcfg"
 
 # 21d. conf_get is byte-identical across ask.sh / panel-models.sh / doctor.sh — the
 #      parser is duplicated (standalone by design for this copy-based harness), so
@@ -553,7 +638,165 @@ printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  "*": deny' '  
   > "$lintdir/.opencode/agent/collab-watch.md"
 run_lint && no "lint MISSED bash re-allowed on collab-watch (read scope bypassable via shell)" \
          || ok "lint: catches bash re-allowed on collab-watch"
+
+# L7. Every intended secret glob is guarded from one canonical set in the lint.
+reset_agents
+grep -v '"\*\*/\.gnupg/\*\*": deny' "$repo_root/.opencode/agent/collab-read.md" > "$lintdir/.opencode/agent/collab-read.md"
+run_lint && no "lint MISSED a removed secret glob from the canonical set" \
+         || ok "lint: guards the full canonical secret-glob set"
 rm -rf "$lintdir"
+
+# --- doctor.sh "Agent guide" meta-tests ----------------------------------------
+# doctor.sh's CLAUDE.md check is the only thing standing between "the anti-bias
+# guardrails are in CLAUDE.md" and "they quietly aren't". These tests RUN it against
+# fixture guides and assert on its verdict.
+#
+# The first version of this block grep'd doctor.sh for the eight guardrail strings —
+# i.e. it asserted that doctor.sh contains the literals that doctor.sh's own heredoc
+# contains. It passed with the check neutered (`bad …` -> `pass "neutered"`), which is
+# the whole point of a lint meta-test defeated. Per the note under check-shebangs
+# below: a lint nobody proved can fail is decoration. Assert BEHAVIOUR, not text.
+#
+# Two hazards shape the fixture, both load-bearing:
+#   1. doctor.sh RUNS THIS SUITE (its "ask.sh unit suite" check). A fixture carrying
+#      collab/tests/ would recurse: tests -> doctor -> tests -> ... The fixture omits
+#      collab/tests/ so that check just fails, harmlessly, without re-entering.
+#   2. doctor.sh pins repo_root to ITS OWN location and cds there, so it cannot be
+#      aimed at a fixture from outside — the copy under test must live IN the fixture.
+# Other checks fail in a bare fixture, so the exit code is not assertable. We assert on
+# the Agent-guide section instead, keying on the FAIL/PASS prefix: `FAIL` is printed
+# ONLY by doctor's bad(), which is also the only thing that sets fail=1. So asserting
+# the FAIL line is equivalent to asserting the check contributes a non-zero exit — and
+# it catches bad()->warn(), an unreachable branch, and a broken loop, which the old
+# text-grep could not.
+# These need the ClaudeCollab repo's OWN CLAUDE.md/AGENTS.md as source material — and
+# run-tests.sh SHIPS IN THE PAYLOAD, with doctor.sh running it, so in an installed
+# project neither file exists. That is the same trap the check under test exists to
+# fix (payload code assuming it runs in the ClaudeCollab repo), and it bites here in a
+# nastier way: a fixture built by `grep -v` from a MISSING file is empty, doctor FAILs
+# on the empty file, and the assertion goes green having proved nothing. A false pass
+# is worse than the false failure beside it. Gate on the source files, like doctor does.
+if [ ! -f "$repo_root/CLAUDE.md" ] || [ ! -f "$repo_root/AGENTS.md" ]; then
+  ok "doctor/guide meta-tests (skipped: no CLAUDE.md/AGENTS.md — not the ClaudeCollab repo)"
+else
+docdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+mkdir -p "$docdir/collab"
+cp "$repo_root/collab/doctor.sh" "$docdir/collab/doctor.sh"
+printf '%s\n' '# ClaudeCollab — agent guide' 'shared source of truth' > "$docdir/AGENTS.md"
+
+# Print doctor's "Agent guide" section only. Colour codes survive; we grep plain words.
+guide_section() { ( cd "$docdir" && run_with_optional_timeout 60 bash collab/doctor.sh 2>&1 ) | sed -n '/== Agent guide ==/,/^$/p'; }
+
+# D1. The real CLAUDE.md must PASS — if the check false-positives on the shipping
+#     file, every later assertion here is meaningless and doctor cries wolf.
+cp "$repo_root/CLAUDE.md" "$docdir/CLAUDE.md"
+sec="$(guide_section)"
+{ printf '%s' "$sec" | grep -q 'PASS' && ! printf '%s' "$sec" | grep -q 'FAIL'; } \
+  && ok "doctor/guide: the real CLAUDE.md passes" \
+  || no "doctor/guide: REJECTS the real CLAUDE.md (false positive): $sec"
+
+# D2. A guardrail dropped from CLAUDE.md must FAIL, and must name the one that went
+#     missing. This is the drift the check exists for: an edit that quietly removes the
+#     Bias Audit leaves Claude with no instruction to run one. Note the pattern set is
+#     ONLY rules unique to CLAUDE.md — the parity/vendor/provenance rules live in
+#     AGENTS.md and are read via the @import, so CLAUDE.md must not restate them and
+#     doctor must not demand it (that would mandate the fork D7 exists to catch).
+grep -v 'Prefer evidence over intuition' "$repo_root/CLAUDE.md" > "$docdir/CLAUDE.md"
+sec="$(guide_section)"
+{ printf '%s' "$sec" | grep -q 'FAIL' && printf '%s' "$sec" | grep -q 'Prefer evidence over intuition'; } \
+  && ok "doctor/guide: catches a guardrail dropped from CLAUDE.md, and names it" \
+  || no "doctor/guide: MISSED a dropped guardrail (drift goes unreported): $sec"
+
+# D3. Losing the AGENTS.md top-reference must FAIL: the @import is what makes CLAUDE.md
+#     a pointer rather than a fork, so without it Claude never reads the shared guide.
+{ echo '# Claude notes'; grep -v '^@AGENTS.md' "$repo_root/CLAUDE.md"; } > "$docdir/CLAUDE.md"
+sec="$(guide_section)"
+printf '%s' "$sec" | grep -q 'FAIL' \
+  && ok "doctor/guide: catches CLAUDE.md not referencing AGENTS.md up top" \
+  || no "doctor/guide: MISSED a CLAUDE.md that never points at AGENTS.md: $sec"
+
+# D4. A symlinked CLAUDE.md must FAIL. This was the OLD invariant (CLAUDE.md -> AGENTS.md);
+#     it is now wrong, and a stale symlink left by an old checkout must be reported, not
+#     silently accepted — under it Claude would read AGENTS.md and get NO Claude-specific
+#     bias checks at all, which is the failure this whole section exists to prevent.
+rm -f "$docdir/CLAUDE.md"; ln -s AGENTS.md "$docdir/CLAUDE.md"
+sec="$(guide_section)"
+printf '%s' "$sec" | grep -q 'FAIL' \
+  && ok "doctor/guide: catches a stale CLAUDE.md -> AGENTS.md symlink" \
+  || no "doctor/guide: ACCEPTED a symlinked CLAUDE.md (Claude gets no bias checks): $sec"
+rm -f "$docdir/CLAUDE.md"
+
+# D7. THE FORK. A CLAUDE.md carrying the whole of AGENTS.md inline must FAIL. This is
+#     the case the guardrail greps CANNOT catch — a fork passes every pattern, because
+#     the patterns are present; they're just surrounded by a copy of the shared guide.
+#     The old symlink made this impossible by construction (nothing drifts from itself);
+#     the ceiling only makes it loud. Without this test the ceiling is a magic number
+#     nobody proved fires.
+{ cat "$repo_root/CLAUDE.md"; cat "$repo_root/AGENTS.md"; } > "$docdir/CLAUDE.md"
+sec="$(guide_section)"
+{ printf '%s' "$sec" | grep -q 'FAIL' && printf '%s' "$sec" | grep -q 'fork of AGENTS.md\|ceiling'; } \
+  && ok "doctor/guide: catches CLAUDE.md forking AGENTS.md inline (greps alone can't)" \
+  || no "doctor/guide: ACCEPTED a CLAUDE.md with AGENTS.md copied into it: $sec"
+
+# D8. The ceiling must not fire on the real file, with room to add a Claude-only rule.
+#     A ceiling that bites honest edits gets raised until it means nothing.
+cp "$repo_root/CLAUDE.md" "$docdir/CLAUDE.md"
+real_lines="$(wc -l < "$repo_root/CLAUDE.md")"
+[ "$real_lines" -le 40 ] \
+  && ok "doctor/guide: real CLAUDE.md is ${real_lines} lines — well inside the 60 ceiling" \
+  || no "doctor/guide: real CLAUDE.md is ${real_lines} lines — near the 60 ceiling; it is drifting toward a fork"
+
+# D5. THE INSTALLED-PROJECT REGRESSION. doctor.sh ships in the payload but CLAUDE.md /
+#     AGENTS.md do not, so in a user's project CLAUDE.md is THEIR file about THEIR
+#     project. Policing it hard-failed doctor for every user who ran the documented
+#     preflight: a fresh install + an ordinary CLAUDE.md exited 1 with nine FAILs telling
+#     them to restructure their guide around our internal conventions. The manifest is
+#     the discriminator. This asserts the section does not run at all in an install.
+printf '# My Project\n\nRun tests with npm test.\n' > "$docdir/CLAUDE.md"
+printf 'collab/doctor.sh\n' > "$docdir/collab/.install-manifest"
+sec="$(guide_section)"
+[ -z "$sec" ] \
+  && ok "doctor/guide: silent in an installed project (user's CLAUDE.md is not ours to police)" \
+  || no "doctor/guide: POLICES the user's own CLAUDE.md in an install (hard-fails their preflight): $sec"
+rm -f "$docdir/collab/.install-manifest"
+
+# D6. No AGENTS.md => not the ClaudeCollab repo => nothing to point at, so stay silent
+#     rather than demand a reference to a file that does not exist. (The pre-fix check
+#     told installed users to `ln -s AGENTS.md CLAUDE.md` — a file they don't have.)
+rm -f "$docdir/AGENTS.md"
+sec="$(guide_section)"
+[ -z "$sec" ] \
+  && ok "doctor/guide: silent when there is no AGENTS.md to reference" \
+  || no "doctor/guide: demands an AGENTS.md reference where no AGENTS.md exists: $sec"
+rm -rf "$docdir"
+fi
+
+# Doctor --full must not turn a runtime probe's explicit inconclusive exit into PASS.
+incdoc="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$incdoc/collab"
+cp "$repo_root/collab/doctor.sh" "$incdoc/collab/doctor.sh"
+for role in read build research watch; do
+  printf '#!/usr/bin/env bash\n[ "${1:-}" = "--static" ] && exit 0\nexit 6\n' > "$incdoc/collab/verify-collab-$role.sh"
+done
+iout="$(run_with_optional_timeout 60 bash "$incdoc/collab/doctor.sh" --full 2>&1)"
+isec="$(printf '%s' "$iout" | sed -n '/== Agent permission proof (runtime, --full) ==/,/^$/p')"
+{ [ "$(printf '%s' "$isec" | grep -c 'INCONCLUSIVE')" -eq 4 ] && ! printf '%s' "$isec" | grep -q 'PASS'; } \
+  && ok "doctor/full: exit 6 is reported INCONCLUSIVE, never PASS" \
+  || no "doctor/full: inconclusive runtime probes were misreported: $isec"
+rm -rf "$incdoc"
+
+# A hard runtime contradiction is a required doctor failure, not a warning.
+harddoc="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$harddoc/collab"
+cp "$repo_root/collab/doctor.sh" "$harddoc/collab/doctor.sh"
+for role in read build research watch; do
+  if [ "$role" = read ]; then vrc=1; else vrc=6; fi
+  printf '#!/usr/bin/env bash\n[ "${1:-}" = "--static" ] && exit 0\nexit %s\n' "$vrc" > "$harddoc/collab/verify-collab-$role.sh"
+done
+houtf="$harddoc/out"; run_with_optional_timeout 60 bash "$harddoc/collab/doctor.sh" --full > "$houtf" 2>&1; hrc=$?
+hsec="$(sed -n '/== Agent permission proof (runtime, --full) ==/,/^$/p' "$houtf")"
+{ [ "$hrc" -ne 0 ] && printf '%s' "$hsec" | grep -q 'FAIL.*collab-read runtime verification'; } \
+  && ok "doctor/full: exit 1 is a hard FAIL and sets doctor non-zero" \
+  || no "doctor/full: hard runtime contradiction was downgraded (rc=$hrc): $hsec"
+rm -rf "$harddoc"
 
 # --- check-shebangs.sh meta-tests ----------------------------------------------
 # A lint nobody proved can fail is decoration. Assert it accepts the conforming
@@ -615,14 +858,16 @@ run_logged() {
 newrun() { bash "$logsh" new-run /collab:consult; }
 entries() { cat "$COLLAB_LOG_DIR/$1/calls.jsonl" 2>/dev/null; }
 
-# A call writes BOTH halves of the pair, keyed by one call_id.
+# A call writes exactly one complete lifecycle, keyed by one call_id.
 r="$(newrun)"; run_logged "$r" -m openai/gpt-5 "hello"
+n_expected="$(entries "$r" | jq -rs '[.[]|select(.type=="expected-call")]|length')"
 n_start="$(entries "$r" | jq -rs '[.[]|select(.status=="started")]|length')"
 n_done="$(entries "$r"  | jq -rs '[.[]|select(.status=="completed")]|length')"
 same_id="$(entries "$r" | jq -rs '[.[]|select(.type=="call").call_id]|unique|length')"
-{ [ "$n_start" = 1 ] && [ "$n_done" = 1 ] && [ "$same_id" = 1 ]; } \
-  && ok "log: one call = started+completed sharing one call_id" \
-  || no "log: expected 1 started + 1 completed with a shared call_id (got $n_start/$n_done/$same_id ids)"
+{ [ "$n_expected" = 1 ] && [ "$n_start" = 1 ] && [ "$n_done" = 1 ] && [ "$same_id" = 1 ] \
+  && bash "$logsh" verify "$r" >/dev/null 2>&1; } \
+  && ok "log: one call = exactly one expected+started+completed lifecycle that verifies" \
+  || no "log: expected one intact lifecycle (got $n_expected/$n_start/$n_done/$same_id ids)"
 
 # The response is recorded VERBATIM — a truncated/paraphrased log would let "the
 # model only said X" survive contact with the evidence.
@@ -652,12 +897,28 @@ bash "$logsh" verify "$r" >/dev/null 2>&1 \
   || no "log: verify disagrees with its own writer on trailing bytes"
 
 # Logging must NEVER fail the call it records: a broken log write costs the entry,
-# never the answer. Simulated by making the response temp file unwritable via TMPDIR.
-out="$(COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$(newrun)" COLLAB_COMMAND=/collab:consult \
+# never the answer. A durable expected-call remains even when temp initialization fails.
+initrun="$(newrun)"
+out="$(COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$initrun" COLLAB_COMMAND=/collab:consult \
         TMPDIR=/nonexistent-dir-for-tmp bash "$ask" -m m/x "q" 2>/dev/null)"; rc=$?
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'canned answer'; } \
   && ok "log: a failing log write does not fail the model call (answer still returned, rc=0)" \
   || no "log: broken logging broke the call it exists to record (rc=$rc)"
+run_logged "$initrun" -m m/x "second call succeeds"
+bash "$logsh" verify "$initrun" >/dev/null 2>&1 \
+  && no "log: verify PASSED a multi-call run whose first call failed capture initialization" \
+  || ok "log: expected-call exposes initialization failure in a multi-call run"
+
+# Response tee failure is distinct from initialization failure: completed is present,
+# but capture_state=failed must make integrity fail rather than treating empty as valid.
+r="$(newrun)"
+printf '#!/usr/bin/env bash\n/bin/cat\nexit 1\n' > "$fakedir/tee"; chmod +x "$fakedir/tee"
+run_logged "$r" -m m/x "capture fails"
+rm -f "$fakedir/tee"
+[ "$(entries "$r" | jq -rs '[.[]|select(.status=="completed")][0].capture_state')" = "failed" ] \
+  && ! bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && ok "log: response-capture failure is durable and cannot verify clean" \
+  || no "log: response-capture failure was lost or verified clean"
 
 # THE call with no model pinned must still log. log.sh parsed args with ${2:?}, which
 # aborts on an EMPTY value — and ask.sh legitimately passes `--model ''` when nothing is
@@ -669,9 +930,13 @@ r="$(newrun)"
   COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$r" COLLAB_COMMAND=/collab:consult \
     bash "$ask" "no model pinned" >/dev/null 2>&1 || true )
 n="$(entries "$r" | jq -rs 'length' 2>/dev/null || echo 0)"
-[ "${n:-0}" -ge 2 ] \
-  && ok "log: a call with NO -m still logs (empty model must not abort the logger)" \
-  || no "log: a call without -m logged NOTHING ($n entries) — the evidence layer is silently off by default"
+n_expected="$(entries "$r" | jq -rs '[.[]|select(.type=="expected-call")]|length' 2>/dev/null || echo 0)"
+n_start="$(entries "$r" | jq -rs '[.[]|select(.status=="started")]|length' 2>/dev/null || echo 0)"
+n_done="$(entries "$r" | jq -rs '[.[]|select(.status=="completed")]|length' 2>/dev/null || echo 0)"
+{ [ "$n_expected" = 1 ] && [ "$n_start" = 1 ] && [ "$n_done" = 1 ] \
+  && bash "$logsh" verify "$r" >/dev/null 2>&1; } \
+  && ok "log: a call with NO -m writes exactly one complete lifecycle that verifies" \
+  || no "log: unpinned model lifecycle is incomplete ($n entries; $n_expected/$n_start/$n_done)"
 
 # ask.sh must record the selection a watcher needs to judge the call.
 r="$(newrun)"; run_logged "$r" -m openai/gpt-5 --research "q"
@@ -692,17 +957,77 @@ r="$(newrun)"; FAKE_OPENCODE_EXIT=3 run_logged "$r" -m m/x "boom"
 # gap; a completed with no started is the same silent loss wearing a disguise (the
 # prompt and turn are gone) and a one-way check reports "all paired" over it.
 r="$(newrun)"
-bash "$logsh" started --call-id c-orphan --command /collab:consult --model m/x --agent collab-read >/dev/null 2>&1
+COLLAB_RUN_ID="$r" bash "$logsh" expect --call-id c-orphan --command /collab:consult --model m/x --agent collab-read >/dev/null 2>&1
+COLLAB_RUN_ID="$r" bash "$logsh" started --call-id c-orphan --command /collab:consult --model m/x --agent collab-read >/dev/null 2>&1
 bash "$logsh" verify "$r" >/dev/null 2>&1 \
   && no "log: verify PASSED a started with no completed (a silent gap would read as clean)" \
   || ok "log: verify fails an unpaired started (exit 7)"
 
 r="$(newrun)"; printf 'an answer' > "$fakedir/resp.txt"
+COLLAB_RUN_ID="$r" bash "$logsh" expect --call-id c-lonely --command /collab:consult --model m/x --agent collab-read >/dev/null 2>&1
 COLLAB_RUN_ID="$r" bash "$logsh" completed --call-id c-lonely --exit 0 --model m/x \
-  --agent collab-read --response-file "$fakedir/resp.txt" >/dev/null 2>&1
+  --agent collab-read --capture-state complete --response-file "$fakedir/resp.txt" >/dev/null 2>&1
 bash "$logsh" verify "$r" >/dev/null 2>&1 \
   && no "log: verify PASSED a completed with no started (the prompt vanished and it reported 'all paired')" \
   || ok "log: verify fails an unpaired completed (the lost prompt is a gap too)"
+
+# Set membership is insufficient: duplicate starts or completions must fail exact
+# cardinality even though every call_id appears on both sides.
+r="$(newrun)"; run_logged "$r" -m m/x "q"
+cid="$(entries "$r" | jq -rs '[.[]|select(.type=="call")][0].call_id')"
+COLLAB_RUN_ID="$r" bash "$logsh" started --call-id "$cid" --command /collab:consult --model m/x --agent collab-read >/dev/null 2>&1
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED duplicate started cardinality" \
+  || ok "log: verify requires exactly one started entry per call_id"
+r="$(newrun)"; run_logged "$r" -m m/x "q"
+cid="$(entries "$r" | jq -rs '[.[]|select(.type=="call")][0].call_id')"
+COLLAB_RUN_ID="$r" bash "$logsh" completed --call-id "$cid" --exit 0 --command /collab:consult \
+  --model m/x --agent collab-read --capture-state complete --response-file "$fakedir/resp.txt" >/dev/null 2>&1
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED duplicate completed cardinality" \
+  || ok "log: verify requires exactly one completed entry per call_id"
+
+# Malformed IDs can be internally hash-consistent, so the structural check must not
+# count them as non-vacuous evidence. Rebuild both self-hashes and the chain after
+# mutation to prove rejection is about call_id validity rather than stale digests.
+rehash_log() {
+  local file="$1" source output
+  local prev="" line payload hash final
+  source="$file.unhashed"; output="$file.rehashed"
+  mv "$file" "$source"; : > "$output"
+  while IFS= read -r line; do
+    payload="$(printf '%s' "$line" | jq -cS --arg prev "$prev" 'del(.entry_hash) | .prev_hash=$prev')"
+    hash="$(printf '%s' "$payload" | sha256sum | awk '{print $1}')"
+    final="$(printf '%s' "$payload" | jq -c --arg hash "$hash" '. + {entry_hash:$hash}')"
+    printf '%s\n' "$final" >> "$output"
+    prev="$(printf '%s' "$final" | sha256sum | awk '{print $1}')"
+  done < "$source"
+  mv "$output" "$file"; rm -f "$source"
+}
+
+for malformed_id in null empty; do
+  r="$(newrun)"; run_logged "$r" -m m/x "q"
+  logfile="$COLLAB_LOG_DIR/$r/calls.jsonl"
+  if [ "$malformed_id" = null ]; then
+    jq -c 'if .type=="expected-call" or .type=="call" then .call_id=null else . end' "$logfile" > "$logfile.tmp"
+  else
+    jq -c 'if .type=="expected-call" or .type=="call" then .call_id="" else . end' "$logfile" > "$logfile.tmp"
+  fi
+  mv "$logfile.tmp" "$logfile"; rehash_log "$logfile"
+  bash "$logsh" verify "$r" >/dev/null 2>&1 \
+    && no "log: verify PASSED a self-consistent $malformed_id call_id lifecycle" \
+    || ok "log: verify rejects self-consistent $malformed_id expected-call IDs"
+done
+
+r="$(newrun)"; run_logged "$r" -m m/x "q1"; run_logged "$r" -m m/x "q2"
+logfile="$COLLAB_LOG_DIR/$r/calls.jsonl"
+cid="$(jq -rs '[.[]|select(.type=="expected-call")][0].call_id' "$logfile")"
+jq -c --arg cid "$cid" 'if .type=="expected-call" or .type=="call" then .call_id=$cid else . end' \
+  "$logfile" > "$logfile.tmp"
+mv "$logfile.tmp" "$logfile"; rehash_log "$logfile"
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED self-consistent duplicate expected-call IDs" \
+  || ok "log: verify rejects self-consistent duplicate expected-call IDs"
 
 # A rewritten entry must fail (accidental corruption; not a tamper-proofing claim).
 # Two cases, because the chain and the self-check cover different lines: editing a
@@ -715,7 +1040,7 @@ rewrite_line() {  # rewrite_line <file> <line-no|$> <old> <new>
       c="$(wc -l < "$1")" "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 r="$(newrun)"; run_logged "$r" -m m/x "q"; run_logged "$r" -m m/x "q2"
-rewrite_line "$COLLAB_LOG_DIR/$r/calls.jsonl" 2 "canned answer" "SOMETHING ELSE"
+rewrite_line "$COLLAB_LOG_DIR/$r/calls.jsonl" 3 "canned answer" "SOMETHING ELSE"
 bash "$logsh" verify "$r" >/dev/null 2>&1 \
   && no "log: verify PASSED an edited middle entry (prev_hash chain not checked)" \
   || ok "log: verify fails an edited middle entry (prev_hash mismatch)"
@@ -733,8 +1058,8 @@ r="$(newrun)"
 for m in a/1 b/2 c/3; do run_logged "$r" -m "$m" "concurrent q" & done; wait
 n="$(entries "$r" | wc -l | tr -d ' ')"; valid="$(entries "$r" | jq -s 'length' 2>/dev/null || echo -1)"
 turns="$(entries "$r" | jq -rs '[.[]|select(.status=="started").turn]|unique|length')"
-{ [ "$n" = 6 ] && [ "$valid" = 6 ] && [ "$turns" = 3 ]; } \
-  && ok "log: 3 concurrent calls -> 6 intact JSONL lines with distinct turns" \
+{ [ "$n" = 9 ] && [ "$valid" = 9 ] && [ "$turns" = 3 ]; } \
+  && ok "log: 3 concurrent calls -> 9 intact JSONL lines with distinct turns" \
   || no "log: concurrent append corrupted (lines=$n valid=$valid distinct turns=$turns)"
 
 # Prompt privacy (W0.6). `full` is the default (the brief Claude wrote is itself audit
@@ -756,6 +1081,24 @@ r="$(newrun)"; COLLAB_LOG_PROMPTS=off run_logged "$r" -m m/x "SENTINEL-abc123"
   && [ "$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].prompt_hash')" = "null" ] \
   && ok "log: COLLAB_LOG_PROMPTS=off records neither text nor digest" \
   || no "log: off mode still recorded prompt text or a digest"
+
+# Pin prompt/hash semantics directly, including trailing newlines that command
+# substitution would strip before both storage and hashing.
+r="$(newrun)"; pf="$fakedir/prompt-exact"; rf="$fakedir/prompt-response"
+printf 'prompt with trailing bytes\n\n' > "$pf"; : > "$rf"
+COLLAB_RUN_ID="$r" bash "$logsh" expect --call-id c-prompt --command /collab:consult --model m/x --agent collab-read >/dev/null
+turn="$(COLLAB_RUN_ID="$r" COLLAB_LOG_PROMPTS=full bash "$logsh" started --call-id c-prompt \
+  --command /collab:consult --model m/x --agent collab-read --prompt-file "$pf")"
+COLLAB_RUN_ID="$r" bash "$logsh" completed --call-id c-prompt --exit 0 --turn "$turn" \
+  --command /collab:consult --model m/x --agent collab-read --capture-state complete --response-file "$rf" >/dev/null
+expected_prompt_hash="$(sha256sum "$pf" | awk '{print $1}')"
+prompt_json="$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].prompt|@json')"
+logged_prompt_hash="$(entries "$r" | jq -rs '[.[]|select(.status=="started")][0].prompt_hash')"
+{ [ "$prompt_json" = '"prompt with trailing bytes\n\n"' ] \
+  && [ "$logged_prompt_hash" = "$expected_prompt_hash" ] \
+  && bash "$logsh" verify "$r" >/dev/null 2>&1; } \
+  && ok "log: prompt and prompt_hash cover exact bytes including trailing newlines" \
+  || no "log: prompt bytes/hash semantics drifted (prompt=$prompt_json hash=$logged_prompt_hash)"
 
 # The knobs must work from the CONFIG FILE, not just env — that's the project's
 # convention, and env-only would be a trap: a Claude-driven session runs each command
@@ -779,6 +1122,37 @@ COLLAB_POLICY="$allow_pol" bash "$ask" --dry-run -m m/x "dry" >/dev/null 2>&1
   && ok "log: --dry-run calls no model and logs nothing" \
   || no "log: --dry-run created a log entry despite calling no model"
 
+# A mutation is a hard runtime contradiction even when opencode itself exits nonzero.
+# This fixture supplies resolved permissions and simulates that exact failure without
+# contacting a model.
+vfix="$fakedir/read-verifier"; mkdir -p "$vfix/collab" "$vfix/.opencode/agent" "$vfix/bin"
+cp "$repo_root/collab/verify-collab-read.sh" "$vfix/collab/"
+cp "$repo_root/.opencode/agent/collab-read.md" "$vfix/.opencode/agent/"
+cat > "$vfix/bin/opencode" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = agent ] && [ "${2:-}" = list ]; then
+  set -f
+  globs='*.env *.env.* .env **/.env **/.env.* *.pem **/*.pem *.key **/*.key *.pfx *.p12 id_rsa id_ed25519 **/id_rsa **/id_ed25519 **/.ssh/** **/.aws/** **/.gnupg/** *credentials* **/credentials* **/.netrc **/.git-credentials'
+  # shellcheck disable=SC2086 # Deliberately split the fixed fixture glob list.
+  set -- $globs
+  printf 'collab-read (all)\n'
+  jq -nc --args '$ARGS.positional as $g | [{permission:"*",pattern:"*",action:"deny"},{permission:"read",pattern:"*",action:"allow"},{permission:"webfetch",pattern:"*",action:"allow"},{permission:"websearch",pattern:"*",action:"allow"}] + ($g | map({permission:"read",pattern:.,action:"deny"}))' "$@"
+  exit 0
+fi
+prompt="${!#}"
+if [[ "$prompt" = *'.collab-read-deny-probe.txt'* ]]; then
+  probe="${prompt#*PWNED > }"; probe="${probe%% *}"
+  printf 'PWNED\n' > "$probe"
+fi
+exit 9
+EOF
+chmod +x "$vfix/bin/opencode"
+( cd "$vfix" && PATH="$vfix/bin:$PATH" bash collab/verify-collab-read.sh > verifier.out 2>&1 ); vrc=$?
+{ [ "$vrc" -eq 1 ] && grep -q 'mutation DENY FAILED' "$vfix/verifier.out" \
+  && grep -q 'collab-read NOT verified' "$vfix/verifier.out"; } \
+  && ok "verify/read: created mutation is FAIL even when opencode exits nonzero" \
+  || no "verify/read: nonzero opencode status hid a created mutation (rc=$vrc)"
+
 # --- the delegate diff: what the model ACTUALLY changed ------------------------
 # Without this in the log, /collab:witness can only audit the model's REPORT of its work,
 # never the work — on the command PLAN calls the highest-value watcher target.
@@ -795,6 +1169,7 @@ dele="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
   cp "$ask" "$logsh" collab/
   cp "$repo_root/.opencode/agent/collab-build.md" .opencode/agent/
   printf 'allow *\n' > collab/models.policy
+  printf 'ignored-secret.bin\ncollab/logs/\n' > .gitignore
   printf 'orig\n' > a.txt && git add -A && git commit -qm init
   # A fake opencode that behaves like a model doing real work: edits a tracked file
   # AND creates a new one (the case a plain `git diff <sha>` cannot see).
@@ -802,12 +1177,16 @@ dele="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
 #!/usr/bin/env bash
 printf 'orig\nCLAUDE-WIP\nMODEL-EDIT\n' > a.txt
 printf 'new file from the model\n' > model-added.txt
+printf '\000\001MODEL-BINARY\377' > model-binary.bin
 echo "did the work"
 EOF
   chmod +x oc && mkdir -p bin && mv oc bin/opencode && export PATH="$PWD/bin:$PATH"
   # Claude is MID-WORK: dirty tree + an untracked scratch file of its own.
   printf 'orig\nCLAUDE-WIP\n' > a.txt && printf 'claude notes\n' > claude-scratch.txt
-  export COLLAB_RUN_ID="$(bash collab/log.sh new-run /collab:delegate)"
+  # Assign, then export: `export X="$(cmd)"` makes export's status the statement's,
+  # masking a failing new-run (SC2155). Split so the assignment carries cmd's status.
+  COLLAB_RUN_ID="$(bash collab/log.sh new-run /collab:delegate)"
+  export COLLAB_RUN_ID
   COLLAB_COMMAND=/collab:delegate bash collab/ask.sh --edit "work" >/dev/null 2>&1
   printf '%s' "$COLLAB_RUN_ID" > .runid ) 2>/dev/null
 drun="$(cat "$dele/.runid" 2>/dev/null || true)"
@@ -826,6 +1205,12 @@ if [ -n "$dpatch" ]; then
   grep -q 'model-added.txt' "$dpatch" \
     && ok "delegate: patch captures a CREATED file (git diff <sha> is blind to these)" \
     || no "delegate: patch missing the model's NEW file — the review would not show it"
+  grep -q 'GIT binary patch' "$dpatch" \
+    && ok "delegate: patch includes applicable binary contents (--binary)" \
+    || no "delegate: binary change is only summarized, not reviewable/applicable"
+  ( cd "$dele" && git apply --reverse --check "$dpatch" ) >/dev/null 2>&1 \
+    && ok "delegate: recorded binary patch is mechanically applicable" \
+    || no "delegate: recorded patch cannot be applied in reverse to the captured after-state"
   { ! grep -q 'claude notes' "$dpatch"; } \
     && ok "delegate: Claude's own uncommitted work is NOT attributed to the model" \
     || no "delegate: the patch blames the model for Claude's in-progress work"
@@ -847,7 +1232,122 @@ printf 'tampered\n' >> "$dpatch" 2>/dev/null
 ( cd "$dele" && unset COLLAB_LOG_DIR && bash collab/log.sh verify "$drun" >/dev/null 2>&1 ) \
   && no "delegate: verify PASSED a tampered patch — the diff is outside the integrity contract" \
   || ok "delegate: verify catches a tampered patch (the diff is covered by the hashes)"
+
+# Ignored changes cannot be represented without copying potentially secret bytes into
+# Git objects/logs. Detect them by ephemeral aggregate fingerprint and fail completeness.
+( cd "$dele" || exit
+  cat > bin/opencode <<'EOF'
+#!/usr/bin/env bash
+printf 'TOP-SECRET-IGNORED-BYTES\000' > ignored-secret.bin
+echo "changed ignored state"
+EOF
+  chmod +x bin/opencode
+  export PATH="$PWD/bin:$PATH"
+  unset COLLAB_LOG_DIR
+  COLLAB_RUN_ID="$(bash collab/log.sh new-run /collab:delegate)"; export COLLAB_RUN_ID
+  COLLAB_COMMAND=/collab:delegate bash collab/ask.sh --edit "ignored work" >/dev/null 2>.ignored-err
+  printf '%s' "$COLLAB_RUN_ID" > .ignored-runid )
+irun="$(cat "$dele/.ignored-runid")"
+ilog="$dele/collab/logs/$irun/calls.jsonl"
+{ [ "$(jq -rs '[.[]|select(.type=="delegate-diff")][0].capture_complete' "$ilog")" = "false" ] \
+  && grep -q 'INCOMPLETE' "$dele/.ignored-err"; } \
+  && ok "delegate: ignored-path activity is detected and explicitly marks the patch incomplete" \
+  || no "delegate: ignored change was silently presented as a complete patch"
+{ ! grep -R -a -q 'TOP-SECRET-IGNORED-BYTES\|ignored-secret.bin' "$dele/collab/logs/$irun" 2>/dev/null; } \
+  && ok "delegate: ignored path names and bytes are not copied into evidence logs" \
+  || no "delegate: ignored secret path/content leaked into the evidence log"
+ignored_oid="$(cd "$dele" && git hash-object --no-filters ignored-secret.bin)"
+( cd "$dele" && ! git cat-file -e "$ignored_oid" 2>/dev/null ) \
+  && ok "delegate: ignored content is fingerprinted without writing it to Git objects" \
+  || no "delegate: ignored secret content was copied into the Git object database"
+( cd "$dele" && unset COLLAB_LOG_DIR && ! bash collab/log.sh verify "$irun" >/dev/null 2>&1 ) \
+  && ok "delegate: incomplete ignored-path capture cannot verify clean" \
+  || no "delegate: ignored-path omission still produced a clean integrity verdict"
+
+# Git omits a top-level ignored FIFO from its ignored-file enumeration. The
+# metadata-only fallback must still make the delegation evidence incomplete.
+( cd "$dele" || exit
+  rm -rf ignored-secret.bin ignored-fixture ignored-pipe
+  mkfifo ignored-pipe
+  printf 'ignored-pipe\ncollab/logs/\n' > .gitignore
+  cat > bin/opencode <<'EOF'
+#!/usr/bin/env bash
+echo "no represented changes"
+EOF
+  chmod +x bin/opencode; export PATH="$PWD/bin:$PATH"; unset COLLAB_LOG_DIR
+  COLLAB_RUN_ID="$(bash collab/log.sh new-run /collab:delegate)"; export COLLAB_RUN_ID
+  run_bounded 10 bash collab/ask.sh --edit "top-level FIFO" >/dev/null 2>.top-fifo-err; frc=$?
+  printf '%s\n%s' "$frc" "$COLLAB_RUN_ID" > .top-fifo-result )
+tfrc="$(sed -n '1p' "$dele/.top-fifo-result")"; tfrun="$(sed -n '2p' "$dele/.top-fifo-result")"
+tflog="$dele/collab/logs/$tfrun/calls.jsonl"
+{ [ "$tfrc" -ne 124 ] && [ "$tfrc" -ne 125 ] \
+  && [ "$(jq -rs '[.[]|select(.type=="delegate-diff")][0].capture_complete' "$tflog")" = false ] \
+  && ( cd "$dele" && unset COLLAB_LOG_DIR && ! bash collab/log.sh verify "$tfrun" >/dev/null 2>&1 ); } \
+  && ok "delegate: top-level ignored FIFO is nonblocking and forces incomplete evidence" \
+  || { [ "$tfrc" -eq 125 ] && inc "delegate: top-level ignored FIFO fixture needs timeout/gtimeout" \
+    || no "delegate: top-level ignored FIFO was omitted or blocked (rc=$tfrc)"; }
+
+# Unsupported ignored entries are never opened. FIFO coverage is the deadlock
+# regression; symlink-to-device covers device-like input without requiring mknod.
+for kind in fifo device unreadable large-directory; do
+  ( cd "$dele" || exit
+    rm -rf ignored-secret.bin ignored-fixture
+    mkdir ignored-fixture
+    case "$kind" in
+      fifo) mkfifo ignored-fixture/input ;;
+      device) ln -s /dev/null ignored-fixture/input ;;
+      unreadable) printf 'private\n' > ignored-fixture/input; chmod 000 ignored-fixture/input ;;
+      large-directory) i=0; while [ "$i" -lt 1025 ]; do : > "ignored-fixture/f-$i"; i=$((i+1)); done ;;
+    esac
+    printf 'ignored-fixture/\nignored-secret.bin\ncollab/logs/\n' > .gitignore
+    cat > bin/opencode <<'EOF'
+#!/usr/bin/env bash
+echo "no represented changes"
+EOF
+    chmod +x bin/opencode; export PATH="$PWD/bin:$PATH"; unset COLLAB_LOG_DIR
+    COLLAB_RUN_ID="$(bash collab/log.sh new-run /collab:delegate)"; export COLLAB_RUN_ID
+    run_bounded 10 bash collab/ask.sh --edit "ignored fixture" >/dev/null 2>.fixture-err; frc=$?
+    printf '%s\n%s' "$frc" "$COLLAB_RUN_ID" > ".fixture-$kind" )
+  frc="$(sed -n '1p' "$dele/.fixture-$kind")"; frun="$(sed -n '2p' "$dele/.fixture-$kind")"
+  flog="$dele/collab/logs/$frun/calls.jsonl"
+  { [ "$frc" -ne 124 ] && [ "$frc" -ne 125 ] && [ "$(jq -rs '[.[]|select(.type=="delegate-diff")][0].capture_complete' "$flog")" = false ]; } \
+    && ok "delegate: ignored $kind is nonblocking/bounded and explicitly incomplete" \
+    || { [ "$frc" -eq 125 ] && inc "delegate: ignored $kind fixture needs timeout/gtimeout" \
+      || no "delegate: ignored $kind blocked or claimed complete (rc=$frc)"; }
+done
 rm -rf "$dele"
+
+# A Git tree stores only a submodule gitlink, not dirty files inside its worktree.
+# If local Git permits file:// fixtures, a dirty submodule must therefore force an
+# incomplete delegation artifact even when the parent tree itself is unchanged.
+subfix="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; subsrc="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+if ( cd "$subsrc" && git init -q && git config user.email t@t && git config user.name t \
+     && git config commit.gpgsign false && printf 'base\n' > inner.txt && git add inner.txt && git commit -qm init ) \
+   && ( cd "$subfix" && git init -q && git config user.email t@t && git config user.name t \
+     && git config commit.gpgsign false && git -c protocol.file.allow=always submodule add -q "$subsrc" module \
+     && mkdir -p collab .opencode/agent bin && cp "$ask" "$logsh" collab/ \
+     && cp "$repo_root/.opencode/agent/collab-build.md" .opencode/agent/ \
+     && printf 'allow *\n' > collab/models.policy && printf 'collab/logs/\n' > .gitignore \
+     && git add -A && git commit -qm parent ); then
+  ( cd "$subfix" || exit
+    cat > bin/opencode <<'EOF'
+#!/usr/bin/env bash
+printf 'model dirtied submodule\n' >> module/inner.txt
+echo done
+EOF
+    chmod +x bin/opencode; export PATH="$PWD/bin:$PATH"; unset COLLAB_LOG_DIR
+    COLLAB_RUN_ID="$(bash collab/log.sh new-run /collab:delegate)"; export COLLAB_RUN_ID
+    bash collab/ask.sh --edit "dirty submodule" >/dev/null 2>&1
+    printf '%s' "$COLLAB_RUN_ID" > .runid )
+  srun="$(cat "$subfix/.runid")"; slog="$subfix/collab/logs/$srun/calls.jsonl"
+  { [ "$(jq -rs '[.[]|select(.type=="delegate-diff")][0].capture_complete' "$slog")" = false ] \
+    && [ "$(jq -rs '[.[]|select(.type=="delegate-diff")][0].incomplete_reason' "$slog")" = submodule-worktree-unrepresentable ]; } \
+    && ok "delegate: dirty submodule worktree cannot produce complete/no-change evidence" \
+    || no "delegate: dirty submodule was invisible to the parent-tree artifact"
+else
+  inc "delegate: dirty-submodule fixture unavailable (local Git file transport or fixture setup failed)"
+fi
+rm -rf "$subfix" "$subsrc"
 
 # claude-final (W0.5) — without it a watcher can audit dispositions but not the
 # summary the developer actually read.
@@ -856,6 +1356,9 @@ printf 'the summary the user saw' | COLLAB_RUN_ID="$r" bash "$logsh" final >/dev
 [ "$(entries "$r" | jq -rs '[.[]|select(.type=="claude-final")][0].text')" = "the summary the user saw" ] \
   && ok "log: claude-final records Claude's user-facing answer" \
   || no "log: claude-final entry missing or wrong"
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED a claude-final-only run with zero model lifecycle calls" \
+  || ok "log: verify rejects a run with zero expected/model lifecycle calls"
 
 # claude-disposition (W0.8) — must be marked as a CLAIM, and the verdict vocabulary
 # is fixed so a report can't invent a flattering one.
@@ -864,9 +1367,18 @@ COLLAB_RUN_ID="$r" bash "$logsh" disposition --model m/x --point "p" --verdict A
 [ "$(entries "$r" | jq -rs '[.[]|select(.type=="claude-disposition")][0].claim')" = "true" ] \
   && ok "log: claude-disposition is flagged claim:true (a claim to audit, not a fact)" \
   || no "log: claude-disposition not flagged as a claim"
+entries "$r" | jq -e 'select(.type=="claude-disposition") | has("payload_hash") | not' >/dev/null \
+  && ok "log: disposition relies on generic entry integrity, with no redundant payload_hash" \
+  || no "log: disposition still carries an unvalidated payload_hash"
 COLLAB_RUN_ID="$r" bash "$logsh" disposition --model m/x --point "p" --verdict Maybe >/dev/null 2>&1 \
   && no "log: disposition accepted a bogus verdict 'Maybe'" \
   || ok "log: disposition rejects a verdict outside Adopt|Adapt|Reject|Defer"
+# A disposition can be the final line, so the chain has no successor to protect it.
+# Generic entry_hash must cover its full payload directly.
+rewrite_line "$COLLAB_LOG_DIR/$r/calls.jsonl" '$' '"Adopt"' '"Reject"'
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED a modified final disposition payload" \
+  || ok "log: entry_hash protects final disposition payloads"
 
 # new-run must MINT a run, never hand back an ambient one — that would silently merge
 # two workflows into a single audit unit.
@@ -890,5 +1402,5 @@ bash "$logsh" prune --days 14 >/dev/null 2>&1
                    || no "log: prune left a 60-day-old run in place"
 
 echo
-printf 'wrapper + panel + lint + log tests: %d passed, %d failed\n' "$pass" "$fail"
+printf 'wrapper + panel + lint + log tests: %d passed, %d failed, %d inconclusive\n' "$pass" "$fail" "$inconclusive"
 [ "$fail" -eq 0 ]

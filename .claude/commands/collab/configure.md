@@ -23,7 +23,7 @@ $ARGUMENTS
 4. **Draft and confirm.** Show the exact policy file you'll write and get a yes before writing. Ordering matters (first-match-wins): put `deny` lines above `ask` lines above any broad rule, so a specific rule beats a broad one. Keep the shipped comment header if editing the committed file. Comments start with `#`.
 
 5. **Write it.**
-   - Personal → write `collab/models.policy.local` (git-ignored; `ask.sh` auto-prefers it over the committed default, and `$COLLAB_POLICY` still overrides both).
+   - Personal → write `collab/models.policy.local` (git-ignored). Effective resolution is `$COLLAB_POLICY` when set, otherwise this local file when it has at least one rule, otherwise committed `collab/models.policy`.
    - Shared → edit `collab/models.policy` (and remind them it's committed — everyone gets it).
    - **Preferred models** → write them to `collab/collab.conf.local` (git-ignored; `ask.sh`/`panel-models.sh` read it). Use `collab/collab.conf.example` as the template. Two lines (omit either if the user didn't pick one):
      ```
