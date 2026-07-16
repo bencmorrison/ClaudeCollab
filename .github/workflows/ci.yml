@@ -163,7 +163,9 @@ jobs:
       - name: PROBE installer stderr on macOS
         continue-on-error: true
         run: |
-          T="$(mktemp -d)"; (cd "$T" && git init -q)
+          # Canonicalized: macOS mktemp -d yields /var/folders/… and /var is a
+          # symlink, which install.sh refuses outright.
+          T="$(cd "$(mktemp -d)" && pwd -P)"; (cd "$T" && git init -q)
           echo "--- install.sh --dest (stderr shown) ---"
           bash install.sh --dest "$T"; echo "rc=$?"
           echo "--- what landed ---"

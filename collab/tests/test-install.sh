@@ -13,7 +13,14 @@ pass=0; fail=0
 ok()  { printf '\033[32mok\033[0m   %s\n' "$*"; pass=$((pass+1)); }
 no()  { printf '\033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail+1)); }
 check(){ if eval "$2"; then ok "$1"; else no "$1 -- ($2)"; fi; }
-newrepo(){ local d; d="$(mktemp -d)"; ( cd "$d" && git init -q ) 2>/dev/null; printf '%s' "$d"; }
+# macOS `mktemp -d` returns a path under /var/folders, and /var is an OS-level
+# symlink to /private/var (as /tmp is to /private/tmp). install.sh refuses any
+# destination with a symlink path component, so a raw temp path is unusable as a
+# --dest there and every case cascades from one refusal. Canonicalize: this suite
+# tests install behaviour, not the platform's temp-dir layout. The symlink-guard
+# case below plants its own symlink and is unaffected.
+mktempd(){ local d; d="$(mktemp -d)" || return 1; ( cd "$d" && pwd -P ); }
+newrepo(){ local d; d="$(mktempd)"; ( cd "$d" && git init -q ) 2>/dev/null; printf '%s' "$d"; }
 sha256(){ if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1; else shasum -a 256 "$1" | cut -d ' ' -f 1; fi; }
 
 [ -f "$installer" ] || { echo "install.sh not found at $installer" >&2; exit 1; }
@@ -46,7 +53,7 @@ check "uninstall drops gitignore block" "! grep -q 'ClaudeCollab' '$T/.gitignore
 rm -rf "$T"
 
 # --- unchanged owned files upgrade; locally changed files do not -------------
-S="$(mktemp -d)"
+S="$(mktempd)"
 cp -R "$repo_root/." "$S/"
 T="$(newrepo)"
 bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
@@ -62,8 +69,8 @@ check "uninstall preserves a changed owned-path file" "grep -q 'user replacement
 rm -rf "$S" "$T"
 
 # --- upgrades replace hardlinks instead of writing through outside dest -------
-S="$(mktemp -d)"; cp -R "$repo_root/." "$S/"
-T="$(newrepo)"; outside="$(mktemp -d)"
+S="$(mktempd)"; cp -R "$repo_root/." "$S/"
+T="$(newrepo)"; outside="$(mktempd)"
 bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
 ln "$T/collab/ask.sh" "$outside/payload-canary"
 printf 'OUTSIDE MANIFEST CANARY\n' >> "$T/collab/.install-manifest"
@@ -281,7 +288,7 @@ bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
 check "migrated legacy install uninstalls cleanly" "[ ! -e '$T/collab/ask.sh' ]"
 rm -rf "$T"
 
-S="$(mktemp -d)"; cp -R "$repo_root/." "$S/"
+S="$(mktempd)"; cp -R "$repo_root/." "$S/"
 T="$(newrepo)"; mkdir -p "$T/collab"
 printf 'OLDER INSTALLED PAYLOAD\n' > "$T/collab/ask.sh"
 printf 'collab/ask.sh\n' > "$T/collab/.install-manifest"
@@ -295,7 +302,7 @@ check "changed legacy path-only file remains untouched" "grep -q 'USER CHANGED L
 rm -rf "$S" "$T"
 
 # --- surviving hashes work without a manifest across source upgrades ----------
-S="$(mktemp -d)"; cp -R "$repo_root/." "$S/"
+S="$(mktempd)"; cp -R "$repo_root/." "$S/"
 T="$(newrepo)"
 bash "$S/install.sh" --dest "$T" >/dev/null 2>&1
 rm -f "$T/collab/.install-manifest"
@@ -307,7 +314,7 @@ check "orphaned hash migration refreshes ownership metadata" "grep -q $'\\tcolla
 rm -rf "$S" "$T"
 
 # --- explicit payload inventory excludes local/generated/arbitrary files ------
-S="$(mktemp -d)"
+S="$(mktempd)"
 cp -R "$repo_root/." "$S/"
 mkdir -p "$S/collab/logs/run"
 printf 'private\n' > "$S/collab/collab.conf.local"
@@ -332,7 +339,7 @@ check "explicit payload inventory includes every intended source file" "cmp -s '
 rm -rf "$S" "$T"
 
 # --- no-source/no-manifest uninstall refuses path-only deletion ---------------
-S="$(mktemp -d)"; cp "$installer" "$S/install.sh"
+S="$(mktempd)"; cp "$installer" "$S/install.sh"
 T="$(newrepo)"; mkdir -p "$T/collab"; printf 'USER FILE\n' > "$T/collab/ask.sh"
 bash "$S/install.sh" --uninstall --dest "$T" >/dev/null 2>&1
 check "no-source uninstall preserves known-path user files" "grep -q 'USER FILE' '$T/collab/ask.sh'"
@@ -340,7 +347,7 @@ rm -rf "$S" "$T"
 
 # --- symlink components and destination files are rejected -------------------
 for parent in collab .claude; do
-  T="$(newrepo)"; outside="$(mktemp -d)"
+  T="$(newrepo)"; outside="$(mktempd)"
   ln -s "$outside" "$T/$parent"
   if bash "$installer" --dest "$T" >/dev/null 2>&1; then
     no "install rejects symlinked $parent parent"
@@ -366,7 +373,7 @@ bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
 check "gitignore block removal preserves unrelated trailing blank lines" "cmp -s '$T/.gitignore.before' '$T/.gitignore'"
 rm -rf "$T"
 
-T="$(newrepo)"; outside="$(mktemp -d)"; target="$outside/target"
+T="$(newrepo)"; outside="$(mktempd)"; target="$outside/target"
 mkdir -p "$T/collab"; printf 'OUTSIDE\n' > "$target"; ln -s "$target" "$T/collab/ask.sh"
 if bash "$installer" --dest "$T" >/dev/null 2>&1; then
   no "install rejects a destination file symlink"
@@ -377,7 +384,7 @@ check "destination file symlink target is untouched" "grep -q OUTSIDE '$target'"
 rm -rf "$T" "$outside"
 
 # The old fixed .gitignore.cctmp name allowed a same-directory symlink escape.
-T="$(newrepo)"; outside="$(mktemp -d)"; target="$outside/target"
+T="$(newrepo)"; outside="$(mktempd)"; target="$outside/target"
 bash "$installer" --dest "$T" >/dev/null 2>&1
 printf 'OUTSIDE\n' > "$target"; ln -s "$target" "$T/.gitignore.cctmp"
 bash "$installer" --dest "$T" >/dev/null 2>&1
@@ -385,7 +392,7 @@ check "predictable gitignore temp symlink target is untouched" "grep -qx OUTSIDE
 check "gitignore replacement remains valid with hostile old temp path" "grep -q 'ClaudeCollab >>>' '$T/.gitignore'"
 rm -rf "$T" "$outside"
 
-T="$(newrepo)"; outside="$(mktemp -d)"; target="$outside/target"
+T="$(newrepo)"; outside="$(mktempd)"; target="$outside/target"
 bash "$installer" --dest "$T" >/dev/null 2>&1
 rm -f "$T/collab/ask.sh"; printf 'OUTSIDE\n' > "$target"; ln -s "$target" "$T/collab/ask.sh"
 if bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1; then
@@ -398,7 +405,7 @@ rm -rf "$T" "$outside"
 
 # Newlines are valid in Unix path components. Parsing only the first line used
 # to miss this symlink and let mkdir follow it outside the requested destination.
-base="$(mktemp -d)"; outside="$(mktemp -d)"; component=$'linked\ncomponent'
+base="$(mktempd)"; outside="$(mktempd)"; component=$'linked\ncomponent'
 ln -s "$outside" "$base/$component"
 T="$base/$component/project"
 if bash "$installer" --dest "$T" >/dev/null 2>&1; then
@@ -410,7 +417,7 @@ check "newline-containing symlink cannot escape destination" "[ ! -e '$outside/p
 rm -rf "$base" "$outside"
 
 # --- dest path containing a space --------------------------------------------
-base="$(mktemp -d)"; T="$base/with space"; mkdir -p "$T"; ( cd "$T" && git init -q ) 2>/dev/null
+base="$(mktempd)"; T="$base/with space"; mkdir -p "$T"; ( cd "$T" && git init -q ) 2>/dev/null
 bash "$installer" --dest "$T" >/dev/null 2>&1
 check "installs into a path with a space" "[ -f '$T/collab/ask.sh' ]"
 bash "$installer" --uninstall --dest "$T" >/dev/null 2>&1
@@ -436,7 +443,7 @@ stamp_and_tag() { # <marker> [tag]
   [ $# -ge 2 ] && git tag "$2"
   return 0
 }
-origin="$(mktemp -d)"; standalone="$(mktemp -d)"
+origin="$(mktempd)"; standalone="$(mktempd)"
 git clone -q "$repo_root" "$origin" 2>/dev/null
 # The clone carries the *committed* installer; this suite must exercise the
 # working-tree one, so overwrite it before the fixture commits are made.
@@ -500,7 +507,7 @@ rm -rf "$T"
 
 # No release tags at all: fall back to the default branch rather than failing.
 # This is also the pre-first-release state, so it must not be a hard error.
-untagged="$(mktemp -d)"
+untagged="$(mktempd)"
 git clone -q "$origin" "$untagged" 2>/dev/null
 ( cd "$untagged" && git tag -d v0.1.0 v0.2.0 ) >/dev/null 2>&1
 T="$(newrepo)"
