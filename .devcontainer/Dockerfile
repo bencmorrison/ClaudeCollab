@@ -1,11 +1,9 @@
 # ClaudeCollab dev container.
-# Node base (Claude Code and opencode are both distributed via npm) with the two
-# agents and a few CLI conveniences preinstalled.
+# Node base (Claude Code and opencode are both distributed via npm) with a few CLI
+# conveniences preinstalled. The two agents are NOT installed here — postCreate.sh
+# installs them at container-create time, because a RUN layer would be cached and
+# serve the same version forever across rebuilds.
 FROM mcr.microsoft.com/devcontainers/javascript-node:22
-
-# The collaborating agents, installed globally so they're on PATH for the `node` user.
-RUN npm install -g opencode-ai @anthropic-ai/claude-code \
-    && npm cache clean --force
 
 # CLI tools the slash commands and general dev work lean on.
 #   jq       — /collab:collaborate (--emit-session) and the verify scripts

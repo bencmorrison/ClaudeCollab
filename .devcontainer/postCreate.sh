@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
-# Runs once after the container is created. Ensures the persistent volumes are
-# writable by `node`, verifies the toolchain, and reports auth status.
+# Runs once after the container is created. Installs the agents, ensures the
+# persistent volumes are writable by `node`, verifies the toolchain, and reports
+# auth status.
 set -euo pipefail
+
+# Claude Code and opencode are installed HERE rather than in the Dockerfile: a RUN
+# layer is cached, so a rebuild would keep reinstalling nothing and serve the image's
+# original versions indefinitely. This runs on every container create, so a rebuild
+# gets the current release of each. `|| true` because a registry hiccup must not fail
+# container creation — the version report below prints MISSING if it does.
+# Note: opencode's `run` flags are verified at the version recorded in AGENTS.md; a
+# newer one landing here is expected, not pinned.
+sudo npm install -g @anthropic-ai/claude-code@latest opencode-ai@latest 2>&1 | tail -1 || true
 
 # Named volumes are normally seeded node-owned from the image dirs, but chown
 # defensively in case a volume initialized root-owned.

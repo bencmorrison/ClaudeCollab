@@ -49,7 +49,7 @@ Claude Code ──(slash command)──▶ collab/ask.sh ──▶ opencode run 
 
 ## Dev container & auth
 
-- `.devcontainer/` runs Claude Code **and** opencode in-container, both on PATH for the `node` user.
+- `.devcontainer/` runs Claude Code **and** opencode in-container, both on PATH for the `node` user. **Both are installed by `postCreate.sh`, not the `Dockerfile`, and both track `@latest`** — a Dockerfile `RUN` layer is cached, so it would serve the image's original versions forever and a rebuild would update nothing (the container sat on Claude Code 2.1.209 / opencode 1.17.20 while 2.1.211 / 1.18.2 were current). `postCreate` runs on every container create, so a rebuild picks up the current release of each. The install is `|| true`: a registry failure must not fail container creation, and the version report immediately below it prints `MISSING` if that happens. **Deliberately not pinned** — the opencode version this repo's `run` flags were verified against is recorded in Gotchas as a statement of what was tested, and is not a version this container holds you to; re-run the `verify-collab-*.sh` proofs after a bump that matters.
 - Auth is **in-container login**, persisted across rebuilds via named volumes (`claudecollab-claude`, `claudecollab-opencode`). Log in once: `claude` → `/login`, and `opencode auth login`.
 - Host-credential mounting was tried and **abandoned** — on macOS the mode-600/root-owned secret is unreadable by the non-root `node` user through the mount.
 - Volume ownership is seeded node-owned via the `mkdir`+`chown` in the `Dockerfile`; `postCreate.sh` also chowns defensively and reports login status on each create.
