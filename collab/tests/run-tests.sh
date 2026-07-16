@@ -898,9 +898,34 @@ bash "$logsh" verify "$r" >/dev/null 2>&1 \
 
 # Logging must NEVER fail the call it records: a broken log write costs the entry,
 # never the answer. A durable expected-call remains even when temp initialization fails.
+#
+# A broken temp dir is induced with a stub on PATH, NOT with TMPDIR=/nonexistent.
+# BSD mktemp (stock macOS) IGNORES TMPDIR for the bare invocation ask.sh makes,
+# using Darwin's per-user dir instead — probed on the runner, where
+# `TMPDIR=/nonexistent-dir-for-tmp mktemp` exits 0 and returns /var/folders/…/T/….
+# So the old fixture induced NOTHING on macOS: the rc=0 assertion below went green
+# having proven nothing, and only the verify assertion going red revealed it. Same
+# class as the doctor/guide tests that passed for the wrong reason (PLAN.md Ph3).
+#
+# The stub must fail ONLY the TMPDIR-dependent invocations (no explicit template)
+# and delegate the rest — which is precisely what GNU mktemp does under a bogus
+# TMPDIR, since an explicit template ignores it. That distinction is load-bearing,
+# not incidental: log.sh writes `expected-call` via `mktemp "$rd/.entry.XXXXXX"`
+# under the RUN DIR so it survives exactly this failure, and that surviving entry
+# is the only thing that makes the gap visible to verify. A blanket-failing stub
+# destroys it, and verify then correctly reports a clean single-call run — which is
+# the false-clean this test exists to forbid.
 initrun="$(newrun)"
+real_mktemp="$(command -v mktemp)"
+cat > "$fakedir/mktemp" <<STUB
+#!/usr/bin/env bash
+for a in "\$@"; do case "\$a" in -*) ;; *) exec "$real_mktemp" "\$@" ;; esac; done
+exit 1
+STUB
+chmod +x "$fakedir/mktemp"
 out="$(COLLAB_POLICY="$allow_pol" COLLAB_RUN_ID="$initrun" COLLAB_COMMAND=/collab:consult \
-        TMPDIR=/nonexistent-dir-for-tmp bash "$ask" -m m/x "q" 2>/dev/null)"; rc=$?
+        bash "$ask" -m m/x "q" 2>/dev/null)"; rc=$?
+rm -f "$fakedir/mktemp"
 { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'canned answer'; } \
   && ok "log: a failing log write does not fail the model call (answer still returned, rc=0)" \
   || no "log: broken logging broke the call it exists to record (rc=$rc)"

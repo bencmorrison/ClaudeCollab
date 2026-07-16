@@ -117,24 +117,16 @@ jobs:
             exit 1
           fi
 
-      # TEMPORARY PROBE — remove once read. Ground truth for BSD mktemp semantics,
-      # which decide whether ask.sh's bare `mktemp` works on macOS at all and
-      # whether the TMPDIR fixture in run-tests.sh actually induces failure there.
-      - name: PROBE BSD mktemp semantics
-        continue-on-error: true
-        run: |
-          echo "--- bare mktemp (what ask.sh calls) ---"
-          out="$(mktemp)"; echo "rc=$? out=$out"
-          echo "--- bare mktemp with a nonexistent TMPDIR (the fixture's premise) ---"
-          out="$(TMPDIR=/nonexistent-dir-for-tmp mktemp 2>&1)"; echo "rc=$? out=$out"
-          echo "--- bare mktemp with an unwritable TMPDIR (candidate portable fixture) ---"
-          d="$(mktemp -d)"; chmod 000 "$d"
-          out="$(TMPDIR="$d" mktemp 2>&1)"; echo "rc=$? out=$out"
-          chmod 755 "$d"
-          echo "--- mktemp -u (used by ask.sh's snapshot index) ---"
-          out="$(mktemp -u 2>&1)"; echo "rc=$? out=$out"
-          echo "--- id/root check (an unwritable dir does not stop root) ---"
-          id
+      # gtimeout only. The test fixtures use it as a safety net so a hang fails the
+      # run instead of wedging it, and without it five delegate cases (FIFO, device,
+      # unreadable, large-directory) report INCONCLUSIVE and cover nothing on the
+      # one platform they most need to cover — BSD find/awk is what they exercise.
+      #
+      # coreutils installs g-prefixed binaries ONLY. It does NOT shadow BSD awk or
+      # sed, so the platform difference under test is preserved. Do not add gawk or
+      # gnu-sed here: that would quietly turn this job back into a second Linux run.
+      - name: Install coreutils (gtimeout for the test fixtures)
+        run: brew install coreutils
 
       - name: Syntax check (bash -n)
         run: |
