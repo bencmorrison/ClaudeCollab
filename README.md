@@ -39,19 +39,33 @@ ClaudeCollab is three drop-in directories you add to a project:
 
 ClaudeCollab installs *into* whatever project you want Claude Code to have these commands in. It copies an explicit file inventory, records each installed file's SHA-256, and upgrades or removes it only while its bytes still match that ownership record. Existing, locally changed, ambiguous legacy, and unverified files are conservatively retained.
 
-**One-liner** (clones ClaudeCollab and installs into the current directory):
+**One-liner** (installs the **latest release** into the current directory):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash
 ```
 
+This fetches the latest release **tag**, not the tip of `main` — `main` is development, and you should not be running it by accident. The installer resolves and prints the release it picked before installing anything.
+
 **Or from a clone** (lets you inspect first — recommended):
 ```bash
-git clone https://github.com/bencmorrison/ClaudeCollab.git /tmp/claudecollab
+git clone --branch v0.1.0 https://github.com/bencmorrison/ClaudeCollab.git /tmp/claudecollab
 cd /path/to/your/project
 bash /tmp/claudecollab/install.sh          # installs into the current dir
 # or target another dir explicitly:
 bash /tmp/claudecollab/install.sh --dest /path/to/your/project
 ```
+
+Run from a clone, the installer uses **that clone's** files as-is — so the ref you checked out is the ref you get, and what you inspected is what lands.
+
+**Pinning a version**, which you want in anything reproducible — `--ref` takes any tag or branch, and always fetches it from the remote:
+```bash
+# a specific release
+curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash -s -- --ref v0.1.0
+
+# development tip, if you want unreleased changes
+curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash -s -- --ref main
+```
+`CLAUDECOLLAB_REF=v0.1.0` does the same thing as `--ref v0.1.0`.
 
 The installer copies the three directories in, sets the scripts executable, and adds the per-user config files to your project's `.gitignore`. Run `bash /tmp/claudecollab/install.sh --help` for options.
 
@@ -187,6 +201,17 @@ The `log.sh` entries name **five subcommands rather than `log.sh:*`** — delibe
 - **Cost**: calls run against your opencode-authenticated providers; usage counts against those plans (free tiers included). `opencode stats` shows token usage/cost.
 - **`--auto`**: the hardened agents have explicit allow/deny rules, so `--auto` is not what grants their tools. It only matters on weaker fallback agents with `ask` rules. Always review `/collab:delegate` diffs.
 - **Not just for coding**: `/collab:consult` and `/collab:panel` are great for planning and design reviews, which is often where a second model helps most.
+
+## Bugs & feedback
+
+Found a bug, hit a rough edge, or want to suggest something? Please open a **[GitHub issue](https://github.com/bencmorrison/ClaudeCollab/issues)**.
+
+What helps most in a bug report:
+- The output of `bash collab/doctor.sh`, which covers your tool versions, auth state, policy tier, and the agent-permission proofs in one go.
+- Which command you ran, and the exact `collab:` line `ask.sh` echoed to stderr (it names the model and agent it used).
+- Your OS. macOS and BSD support is newer and less exercised than Linux, so please say if you're on one.
+
+**Security issues are the exception — do not open a public issue for them.** Report those privately via the [Security tab](https://github.com/bencmorrison/ClaudeCollab/security), as described in **[SECURITY.md](SECURITY.md)**. That file also documents what this tool deliberately does *not* guarantee, which is worth reading before reporting: the read-only agents reach the web by design, and `/collab:delegate` allows `bash`, so neither is an exfiltration boundary.
 
 ## Working on ClaudeCollab itself
 

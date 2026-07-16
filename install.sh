@@ -14,16 +14,22 @@
 #
 # Usage:
 #   bash install.sh [--dest <dir>]     install into <dir> (default: current dir)
+#   bash install.sh --ref <tag|branch> install that ref instead of the latest release
 #   bash install.sh --uninstall [--dest <dir>]   remove it again
 #   bash install.sh --help
 #
 # Source of the files:
-#   • Run from a clone: copies from the clone it lives in.
-#   • Piped (curl … | bash): git-clones the repo into a temp dir first.
-#     Override the URL with CLAUDECOLLAB_REPO=<git-url>.
+#   • Run from a clone: copies from the clone it lives in, as-is.
+#   • Piped (curl … | bash): git-clones the repo into a temp dir first, at the
+#     LATEST RELEASE TAG — not the default branch, which is development tip.
+#   • --ref <tag|branch> (or CLAUDECOLLAB_REF) pins an exact ref: --ref v0.1.0
+#     for a specific release, --ref main to track development. It always fetches
+#     from the remote, even when this script is run from a clone.
+#   • Override the URL with CLAUDECOLLAB_REPO=<git-url>.
 set -euo pipefail
 
 REPO_URL="${CLAUDECOLLAB_REPO:-https://github.com/bencmorrison/ClaudeCollab.git}"
+REF="${CLAUDECOLLAB_REF:-}"               # empty = resolve the latest release tag
 
 # The install surface is explicit. Do not replace this with a directory walk:
 # source clones can contain ignored personal config, logs, stale manifests, and
@@ -93,7 +99,9 @@ while [ $# -gt 0 ]; do
     --uninstall) action="uninstall" ;;
     --dest) shift; dest="${1:?--dest needs a directory}" ;;
     --dest=*) dest="${1#--dest=}" ;;
-    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --ref) shift; REF="${1:?--ref needs a tag or branch}" ;;
+    --ref=*) REF="${1#--ref=}" ;;
+    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "install.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -387,13 +395,49 @@ if [ "$action" = "uninstall" ]; then
 fi
 
 # =============================== INSTALL ======================================
-# Locate the payload: the clone this script lives in, else clone the repo.
+# A ref reaches `git clone --branch`, so keep it to plain ref characters and
+# never let it open with '-' (which git would read as an option, not a value).
+valid_ref() {
+  case "$1" in
+    -*|*[!A-Za-z0-9._/-]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# The latest release tag, or empty if the repo has none. git does the version
+# sort itself (--sort=-v:refname) so this needs no GitHub API, no auth beyond
+# repo access, and no `sort -V` — which is a GNU extension that stock macOS
+# `sort` lacks. awk drains the whole list rather than `head -1` closing the
+# pipe, which under `set -o pipefail` would surface as a SIGPIPE failure.
+latest_release_tag() {
+  git ls-remote --tags --refs --sort=-v:refname "$REPO_URL" 'v*' 2>/dev/null \
+    | awk -F'refs/tags/' 'NR==1 && NF>1 {t=$2} END {if (t != "") print t}'
+}
+
+# Locate the payload. An explicit --ref always fetches: the user named a version,
+# so honour it over whatever this clone happens to be sitting on. Otherwise a
+# clone supplies its own payload as-is, and only the piped path fetches — at the
+# latest release, since curl|bash should give a release, not development tip.
 src="$self_dir"
 tmp_src=""
-if ! have_payload "$src"; then
-  command -v git >/dev/null 2>&1 || die "git is required to fetch ClaudeCollab when piped. Install git, or run from a clone."
-  tmp_src="$(mktemp -d)"; say "Fetching ClaudeCollab from $REPO_URL"
-  git clone --depth 1 "$REPO_URL" "$tmp_src" >/dev/null 2>&1 || die "git clone failed: $REPO_URL"
+if [ -n "$REF" ] || ! have_payload "$src"; then
+  command -v git >/dev/null 2>&1 || die "git is required to fetch ClaudeCollab. Install git, or run from a clone."
+  if [ -n "$REF" ]; then
+    valid_ref "$REF" || die "refusing unsafe ref: $REF"
+  else
+    REF="$(latest_release_tag)" || REF=""
+    if [ -n "$REF" ]; then
+      say "Latest release: $REF"
+    else
+      say "No release tags found — falling back to the default branch."
+    fi
+  fi
+  tmp_src="$(mktemp -d)"
+  say "Fetching ClaudeCollab from $REPO_URL${REF:+ at $REF}"
+  clone_args=(--depth 1)
+  if [ -n "$REF" ]; then clone_args+=(--branch "$REF"); fi
+  git clone "${clone_args[@]}" "$REPO_URL" "$tmp_src" >/dev/null 2>&1 \
+    || die "git clone failed: $REPO_URL${REF:+ at ref '$REF'}"
   src="$tmp_src"
 fi
 cleanup() {

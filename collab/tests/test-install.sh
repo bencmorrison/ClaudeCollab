@@ -424,5 +424,90 @@ else
   ok "refuses to install onto the ClaudeCollab source"
 fi
 
+# --- ref selection on the fetch path -----------------------------------------
+# Builds a throwaway "origin" with two release tags and a diverged default
+# branch, each stamping a different marker into an installed file, so which ref
+# was cloned is observable in the destination. CLAUDECOLLAB_REPO points at it
+# over file://, so this stays offline. The installer is copied somewhere with no
+# payload beside it to force the fetch path — i.e. to simulate curl … | bash.
+stamp_and_tag() { # <marker> [tag]
+  printf '# marker: %s\n' "$1" >> collab/ask.sh
+  git add -A && git commit -qm "$1"
+  [ $# -ge 2 ] && git tag "$2"
+  return 0
+}
+origin="$(mktemp -d)"; standalone="$(mktemp -d)"
+git clone -q "$repo_root" "$origin" 2>/dev/null
+# The clone carries the *committed* installer; this suite must exercise the
+# working-tree one, so overwrite it before the fixture commits are made.
+cp "$installer" "$origin/install.sh"
+(
+  cd "$origin" || exit 1
+  git config user.email t@t; git config user.name t
+  git checkout -q -B main
+  stamp_and_tag v0.1.0-payload v0.1.0
+  stamp_and_tag v0.2.0-payload v0.2.0
+  stamp_and_tag main-tip-payload
+) >/dev/null 2>&1
+cp "$installer" "$standalone/install.sh"
+
+T="$(newrepo)"
+CLAUDECOLLAB_REPO="file://$origin" bash "$standalone/install.sh" --dest "$T" >/dev/null 2>&1
+check "fetch path defaults to the latest release tag, not the default branch" \
+  "grep -q 'v0.2.0-payload' '$T/collab/ask.sh' && ! grep -q 'main-tip-payload' '$T/collab/ask.sh'"
+rm -rf "$T"
+
+T="$(newrepo)"
+CLAUDECOLLAB_REPO="file://$origin" bash "$standalone/install.sh" --dest "$T" --ref v0.1.0 >/dev/null 2>&1
+check "--ref pins an older release tag" \
+  "grep -q 'v0.1.0-payload' '$T/collab/ask.sh' && ! grep -q 'v0.2.0-payload' '$T/collab/ask.sh'"
+rm -rf "$T"
+
+T="$(newrepo)"
+CLAUDECOLLAB_REPO="file://$origin" bash "$standalone/install.sh" --dest "$T" --ref main >/dev/null 2>&1
+check "--ref main tracks the development branch" \
+  "grep -q 'main-tip-payload' '$T/collab/ask.sh'"
+rm -rf "$T"
+
+T="$(newrepo)"
+CLAUDECOLLAB_REF=v0.1.0 CLAUDECOLLAB_REPO="file://$origin" bash "$standalone/install.sh" --dest "$T" >/dev/null 2>&1
+check "CLAUDECOLLAB_REF pins a ref like --ref does" \
+  "grep -q 'v0.1.0-payload' '$T/collab/ask.sh'"
+rm -rf "$T"
+
+# An explicit --ref must win over the clone the script sits in, or a user who
+# named a version would silently get whatever that clone was checked out at.
+T="$(newrepo)"
+CLAUDECOLLAB_REPO="file://$origin" bash "$origin/install.sh" --dest "$T" --ref v0.1.0 >/dev/null 2>&1
+check "--ref fetches even when run from a clone" \
+  "grep -q 'v0.1.0-payload' '$T/collab/ask.sh' && ! grep -q 'main-tip-payload' '$T/collab/ask.sh'"
+rm -rf "$T"
+
+# ...but with no --ref, a clone still installs itself, unchanged from before.
+T="$(newrepo)"
+bash "$origin/install.sh" --dest "$T" >/dev/null 2>&1
+check "a clone with no --ref still installs its own payload" \
+  "grep -q 'main-tip-payload' '$T/collab/ask.sh'"
+rm -rf "$T"
+
+T="$(newrepo)"
+if CLAUDECOLLAB_REPO="file://$origin" bash "$standalone/install.sh" --dest "$T" --ref -oops >/dev/null 2>&1; then
+  no "an option-shaped ref should be refused (exit non-zero)"
+else
+  ok "refuses an option-shaped ref"
+fi
+rm -rf "$T"
+
+# No release tags at all: fall back to the default branch rather than failing.
+# This is also the pre-first-release state, so it must not be a hard error.
+untagged="$(mktemp -d)"
+git clone -q "$origin" "$untagged" 2>/dev/null
+( cd "$untagged" && git tag -d v0.1.0 v0.2.0 ) >/dev/null 2>&1
+T="$(newrepo)"
+CLAUDECOLLAB_REPO="file://$untagged" bash "$standalone/install.sh" --dest "$T" >/dev/null 2>&1
+check "falls back to the default branch when the repo has no release tags" \
+  "grep -q 'main-tip-payload' '$T/collab/ask.sh'"
+rm -rf "$T" "$untagged" "$origin" "$standalone"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
