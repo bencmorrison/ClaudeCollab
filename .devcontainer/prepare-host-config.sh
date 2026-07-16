@@ -76,14 +76,15 @@ scan_tree() {
   unset "active_dirs[$active_index]"
 }
 
+# The selected top-level files are named by this script, so their targets are not
+# a surprise: a dotfiles-managed ~/.claude symlinks them out to the dotfiles tree,
+# and confining them to $source_dir aborted startup for that whole setup. cp -L
+# stages a real copy either way. validate_link still guards the symlinks scan_tree
+# *discovers*, which are the ones that could pull in something unintended.
 preflight_file() {
   local path="$1" resolved
   [ -e "$path" ] || [ -L "$path" ] || return 0
-  if [ -L "$path" ]; then
-    resolved="$(validate_link "$path")"
-  else
-    resolved="$path"
-  fi
+  resolved="$(resolve_existing "$path")" || die "refusing dangling or unresolvable symlink: $path"
   [ -f "$resolved" ] || die "selected config file is not regular: $path"
 }
 

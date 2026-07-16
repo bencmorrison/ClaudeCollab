@@ -19,6 +19,16 @@ ln -s internal/value.md "$home/.claude/commands/inside.md"
 HOME="$home" CLAUDECOLLAB_HOST_CONFIG_STAGE="$stage" bash "$here/prepare-host-config.sh"
 [ "$(cat "$stage/commands/inside.md")" = inside ] || { echo "FAIL: internal symlink was not copied" >&2; exit 1; }
 
+# A dotfiles-managed ~/.claude symlinks the selected top-level files out to the
+# dotfiles tree. Staging must dereference them, not abort: refusing this broke
+# container startup outright for that setup (2026-07-16).
+printf 'outside\n' > "$tmp/external/value.md"
+ln -s "$tmp/external/value.md" "$home/.claude/settings.json"
+HOME="$home" CLAUDECOLLAB_HOST_CONFIG_STAGE="$stage" bash "$here/prepare-host-config.sh"
+[ "$(cat "$stage/settings.json")" = outside ] || { echo "FAIL: external selected file symlink was not staged" >&2; exit 1; }
+[ ! -L "$stage/settings.json" ] || { echo "FAIL: staged settings.json is still a symlink" >&2; exit 1; }
+rm -f "$home/.claude/settings.json"
+
 printf 'keep\n' > "$stage/sentinel"
 run_preflight() {
   if [ -n "$timeout_bin" ]; then
@@ -42,11 +52,6 @@ expect_rejected() {
   [ -f "$stage/sentinel" ] || { echo "FAIL: $label cleared the prior snapshot" >&2; exit 1; }
 }
 
-printf 'outside\n' > "$tmp/external/value.md"
-ln -s "$tmp/external/value.md" "$home/.claude/settings.json"
-expect_rejected "selected external file symlink"
-
-rm -f "$home/.claude/settings.json"
 ln -s "$tmp/external" "$home/.claude/commands/external-tree"
 expect_rejected "nested external directory symlink"
 rm "$home/.claude/commands/external-tree"
