@@ -158,6 +158,21 @@ jobs:
       - name: Wrapper unit tests (fake opencode, no model calls)
         run: bash collab/tests/run-tests.sh
 
+      # TEMPORARY PROBE — remove once read. test-install.sh sends install.sh's
+      # stderr to /dev/null, so a macOS-only failure is invisible in its output.
+      - name: PROBE installer stderr on macOS
+        continue-on-error: true
+        run: |
+          T="$(mktemp -d)"; (cd "$T" && git init -q)
+          echo "--- install.sh --dest (stderr shown) ---"
+          bash install.sh --dest "$T"; echo "rc=$?"
+          echo "--- what landed ---"
+          ls -la "$T" 2>&1 | head -20
+          echo "--- tool versions BSD vs GNU ---"
+          awk --version 2>&1 | head -1 || echo "awk: no --version (BSD awk)"
+          sed --version 2>&1 | head -1 || echo "sed: no --version (BSD sed)"
+          grep --version 2>&1 | head -1
+
       - name: Installer smoke tests (install/uninstall into temp dirs)
         # The highest-risk surface on BSD: newest code, heavy awk, and it edits
         # users' .gitignore and deletes files.
