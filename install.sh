@@ -112,33 +112,19 @@ ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 
-# Reject symlinks in an existing destination path before mkdir/cd can follow
-# them. Relative '..' components are resolved lexically but never bypass checks.
-reject_dest_symlinks() {
-  local input="$1" cur part rest last
-  case "$input" in /*) cur="/" ;; *) cur="$(pwd -P)" ;; esac
-  rest="$input"
-  while :; do
-    case "$rest" in
-      */*) part=${rest%%/*}; rest=${rest#*/}; last=false ;;
-      *) part=$rest; last=true ;;
-    esac
-    case "$part" in
-      ""|.) ;;
-      ..) cur="${cur%/*}"; [ -n "$cur" ] || cur="/" ;;
-      *)
-        [ "$cur" = "/" ] && cur="/$part" || cur="$cur/$part"
-        [ -L "$cur" ] && die "refusing destination with symlink path component: $cur"
-        ;;
-    esac
-    $last && break
-  done
-  return 0
-}
-
-reject_dest_symlinks "$dest"
-mkdir -p "$dest"
-dest="$(cd "$dest" && pwd -P)"
+# Resolve --dest to its real path, FOLLOWING any symlink in the prefix rather than
+# refusing it. This used to `die` on a symlinked destination component, which broke
+# macOS outright: /tmp -> /private/tmp and /var -> /private/var are OS-level
+# symlinks, so `cd /tmp/proj && curl … | bash` — and any project under a symlinked
+# mount — was rejected with a message that reads like a bug. The user NAMED --dest,
+# so following it is honouring intent, not an escape; `into: $dest` below reports
+# the resolved path so a redirect is never silent. The real write-time protection is
+# unchanged and lives elsewhere: safe_dest_rel independently checks every path
+# component UNDER $dest, per payload file, and still refuses a symlink there (so a
+# payload file or a planted intermediate dir cannot redirect a write outside $dest).
+# A dangling or non-directory prefix fails naturally in mkdir -p / cd below.
+mkdir -p "$dest" 2>/dev/null || die "cannot create destination directory: $dest"
+dest="$(cd "$dest" 2>/dev/null && pwd -P)" || die "cannot resolve destination directory: $dest"
 
 valid_rel() {
   local rel="$1" part rest last

@@ -403,18 +403,33 @@ fi
 check "uninstall cannot remove a destination symlink target" "grep -q OUTSIDE '$target'"
 rm -rf "$T" "$outside"
 
-# Newlines are valid in Unix path components. Parsing only the first line used
-# to miss this symlink and let mkdir follow it outside the requested destination.
+# A symlink in the dest PREFIX is resolved and FOLLOWED, not refused — macOS /tmp
+# and /var are OS-level symlinks, and a project can live under a symlinked mount, so
+# refusing this broke the platform outright. The user named --dest; following it is
+# intent, and `into: <resolved>` reports it. Newlines are valid in a component and
+# must survive the walk (a first-line-only parse once mishandled them); after `cd`
+# canonicalizes the prefix away, the working dest is the real target with no newline.
+# Per-file protection is unchanged and asserted separately (the ask.sh file-symlink
+# cases above), so this checks only that the prefix resolves and the install lands
+# in the real target rather than erroring.
 base="$(mktempd)"; outside="$(mktempd)"; component=$'linked\ncomponent'
 ln -s "$outside" "$base/$component"
+( cd "$outside" && git init -q ) 2>/dev/null
 T="$base/$component/project"
-if bash "$installer" --dest "$T" >/dev/null 2>&1; then
-  no "install rejects a newline-containing symlink destination component"
-else
-  ok "install rejects a newline-containing symlink destination component"
-fi
-check "newline-containing symlink cannot escape destination" "[ ! -e '$outside/project' ]"
+bash "$installer" --dest "$T" >/dev/null 2>&1
+check "symlinked dest prefix is resolved and installed into the real target" "[ -f '$outside/project/collab/ask.sh' ]"
 rm -rf "$base" "$outside"
+
+# A dangling symlink prefix has no real target to resolve to, so it must still fail
+# — cleanly, via mkdir/cd, not by installing somewhere unexpected.
+base="$(mktempd)"
+ln -s "$base/does-not-exist" "$base/dangling"
+if bash "$installer" --dest "$base/dangling/project" >/dev/null 2>&1; then
+  no "install proceeded through a dangling symlink destination prefix"
+else
+  ok "install fails cleanly on a dangling symlink destination prefix"
+fi
+rm -rf "$base"
 
 # --- dest path containing a space --------------------------------------------
 base="$(mktempd)"; T="$base/with space"; mkdir -p "$T"; ( cd "$T" && git init -q ) 2>/dev/null
