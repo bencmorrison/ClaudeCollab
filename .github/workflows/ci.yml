@@ -117,6 +117,25 @@ jobs:
             exit 1
           fi
 
+      # TEMPORARY PROBE — remove once read. Ground truth for BSD mktemp semantics,
+      # which decide whether ask.sh's bare `mktemp` works on macOS at all and
+      # whether the TMPDIR fixture in run-tests.sh actually induces failure there.
+      - name: PROBE BSD mktemp semantics
+        continue-on-error: true
+        run: |
+          echo "--- bare mktemp (what ask.sh calls) ---"
+          out="$(mktemp)"; echo "rc=$? out=$out"
+          echo "--- bare mktemp with a nonexistent TMPDIR (the fixture's premise) ---"
+          out="$(TMPDIR=/nonexistent-dir-for-tmp mktemp 2>&1)"; echo "rc=$? out=$out"
+          echo "--- bare mktemp with an unwritable TMPDIR (candidate portable fixture) ---"
+          d="$(mktemp -d)"; chmod 000 "$d"
+          out="$(TMPDIR="$d" mktemp 2>&1)"; echo "rc=$? out=$out"
+          chmod 755 "$d"
+          echo "--- mktemp -u (used by ask.sh's snapshot index) ---"
+          out="$(mktemp -u 2>&1)"; echo "rc=$? out=$out"
+          echo "--- id/root check (an unwritable dir does not stop root) ---"
+          id
+
       - name: Syntax check (bash -n)
         run: |
           rc=0
