@@ -957,12 +957,15 @@ rm -rf "$shbdir"
 scc="$repo_root/collab/tests/check-shellcheck.sh"
 sccdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
 
-# Skip-when-absent: run with shellcheck's dir removed from PATH (invoke bash by its
-# absolute path so the child still starts), assert a clean exit + the skip note.
+# Skip-when-absent: give the child an empty PATH so shellcheck is genuinely absent,
+# then assert a clean exit + the skip note. Stripping shellcheck's dir from PATH is
+# UNRELIABLE on usrmerge Linux (where /bin and /usr/bin are the same directory, so
+# removing one leaves shellcheck reachable via the other — which false-passed locally
+# on macOS, where the dirs are separate, and failed on the Linux CI runner).
+# check-shellcheck.sh runs no external command before its skip-and-exit, so an empty
+# PATH is safe; bash is invoked by its absolute path so the child still starts.
 scc_bash="$(command -v bash)"
-scc_scdir="$(command -v shellcheck 2>/dev/null || true)"; scc_scdir="${scc_scdir%/*}"
-scc_nopath="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "${scc_scdir:-/nonexistent}" | paste -sd ':' -)"
-scc_out="$(PATH="$scc_nopath" "$scc_bash" "$scc" "$sccdir/none.sh" 2>&1)"; scc_rc=$?
+scc_out="$(PATH=/nonexistent "$scc_bash" "$scc" "$sccdir/none.sh" 2>&1)"; scc_rc=$?
 { [ "$scc_rc" -eq 0 ] && printf '%s' "$scc_out" | grep -qi 'not installed'; } \
   && ok "shellcheck lint: skips cleanly (exit 0 + note) when shellcheck is absent" \
   || no "shellcheck lint did not skip cleanly without shellcheck (rc=$scc_rc): $scc_out"
