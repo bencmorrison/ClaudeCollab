@@ -862,7 +862,7 @@ if [ -f "$repo_root/install.sh" ]; then
   gclean_path="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$fakedir" | paste -sd ':' -)"
   if HOME="$gdoc" XDG_CONFIG_HOME="$gdoc/.config" bash "$repo_root/install.sh" --global >/dev/null 2>&1; then
     gout="$(PATH="$gclean_path" HOME="$gdoc" XDG_CONFIG_HOME="$gdoc/.config" \
-            COLLAB_LOG_DIR= COLLAB_LOG= COLLAB_CONF= COLLAB_POLICY= COLLAB_MODEL= COLLAB_MODELS= COLLAB_AGENT_DIR= \
+            COLLAB_LOG_DIR='' COLLAB_LOG='' COLLAB_CONF='' COLLAB_POLICY='' COLLAB_MODEL='' COLLAB_MODELS='' COLLAB_AGENT_DIR='' \
             run_with_optional_timeout 120 bash "$gdoc/.claude/collab/doctor.sh" 2>&1)"; grc=$?
     gagents="$(printf '%s\n' "$gout" | sed -n '/== Agent definitions ==/,/^$/p')"
     gcmds="$(printf '%s\n' "$gout" | sed -n '/== Slash commands ==/,/^$/p')"
@@ -882,10 +882,23 @@ if [ -f "$repo_root/install.sh" ]; then
     printf '%s' "$gout" | grep -q 'wrapper unit suite skipped in a global install' \
       && ok "doctor/global: wrapper unit suite is skipped with a neutral note (repo-only fixtures)" \
       || no "doctor/global: wrapper unit suite was not skipped in a global install: $(printf '%s' "$gout" | sed -n '/== Wrapper unit tests ==/,/^$/p')"
-    # The headline property: a CLEAN global install must not cry wolf — exit 0, no FAIL.
-    { [ "$grc" -eq 0 ] && ! printf '%s' "$gout" | grep -q 'FAIL'; } \
-      && ok "doctor/global: a clean global install exits 0 with zero FAIL lines" \
-      || no "doctor/global: clean global install did not exit clean (rc=$grc): $(printf '%s' "$gout" | grep 'FAIL' | head -3)"
+    # The headline property: with opencode available, a CLEAN global install must not cry
+    # wolf — exit 0, no FAIL. In a credential-free/opencode-free CI, opencode is legitimately
+    # absent, so doctor CORRECTLY FAILs on that missing prerequisite (a true fail, not a
+    # global-layout false-fail) — the D1 property is already covered by the three per-section
+    # assertions above, which need no opencode. So only assert the exit-0 headline where
+    # opencode actually exists; otherwise assert no NON-opencode FAIL slipped in.
+    if command -v opencode >/dev/null 2>&1; then
+      { [ "$grc" -eq 0 ] && ! printf '%s' "$gout" | grep -q 'FAIL'; } \
+        && ok "doctor/global: a clean global install exits 0 with zero FAIL lines" \
+        || no "doctor/global: clean global install did not exit clean (rc=$grc): $(printf '%s' "$gout" | grep 'FAIL' | head -3)"
+    else
+      # Exclude the derived "doctor: PROBLEMS — fix the FAIL line(s)" SUMMARY (it contains the
+      # word FAIL but is not a per-check failure); assert no per-check FAIL other than opencode.
+      { ! printf '%s' "$gout" | grep 'FAIL' | grep -v 'PROBLEMS' | grep -qvi 'opencode'; } \
+        && ok "doctor/global: opencode-free env — only the true opencode-absent FAIL, no global-layout false-fail" \
+        || no "doctor/global: an unexpected non-opencode FAIL in a global install: $(printf '%s' "$gout" | grep 'FAIL' | grep -v 'PROBLEMS' | grep -vi 'opencode' | head -3)"
+    fi
   else
     no "doctor/global: install.sh --global failed in the meta-test sandbox"
   fi

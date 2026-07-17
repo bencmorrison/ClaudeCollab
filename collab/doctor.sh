@@ -377,8 +377,8 @@ fi
 # In a global install the defs are in opencode's global agent dir, so point the lint
 # there via COLLAB_AGENT_DIR (which it honors); per-project/repo runs it unchanged.
 hdr "Agent permission invariants (source lint)"
-if [ -n "$global" ]; then lint_cmd() { COLLAB_AGENT_DIR="$opencode_agent_dir" bash collab/tests/check-agent-permissions.sh "$@"; }
-else                      lint_cmd() { bash collab/tests/check-agent-permissions.sh "$@"; }; fi
+if [ -n "$global" ]; then lint_cmd() { COLLAB_AGENT_DIR="$opencode_agent_dir" bash collab/tests/check-agent-permissions.sh; }
+else                      lint_cmd() { bash collab/tests/check-agent-permissions.sh; }; fi
 if lint_cmd >/dev/null 2>&1; then
   pass "agent defs hold the default-deny-allowlist invariants ('*': deny floor, no re-open, expected allow-set)"
 else
