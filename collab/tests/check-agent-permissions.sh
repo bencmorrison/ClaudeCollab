@@ -27,6 +27,12 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
 cd "$repo_root" || exit 1
 
+# Where the hardened agent defs live. Default is the repo-relative .opencode/agent
+# (unchanged for CI and the checkout). A --global install places them in opencode's
+# global agent dir; doctor.sh passes that here via $COLLAB_AGENT_DIR so the SAME lint
+# guards the globally-installed defs. An absolute override is cwd-independent.
+AGENT_DIR="${COLLAB_AGENT_DIR:-.opencode/agent}"
+
 fail=0
 pass() { printf '\033[32mok\033[0m   %s\n' "$*"; }
 bad()  { printf '\033[31mFAIL\033[0m %s — %s\n' "$1" "$2"; fail=1; }
@@ -159,22 +165,22 @@ EOF
 }
 
 echo "== collab-read (allowlist: webfetch/websearch) =="
-check_agent ".opencode/agent/collab-read.md" "webfetch websearch"
+check_agent "$AGENT_DIR/collab-read.md" "webfetch websearch"
 
 echo "== collab-build (allowlist: edit/write/patch/bash) =="
-check_agent ".opencode/agent/collab-build.md" "edit write patch bash"
+check_agent "$AGENT_DIR/collab-build.md" "edit write patch bash"
 
 # collab-research is the source-backed /collab:research path.
 # `bash` must stay OUT of this allow-set — it's what keeps the secret-read and
 # grep/glob denies real on a path that can reach the network.
 echo "== collab-research (allowlist: webfetch/websearch) =="
-check_agent ".opencode/agent/collab-research.md" "webfetch websearch"
+check_agent "$AGENT_DIR/collab-research.md" "webfetch websearch"
 
 # collab-watch is the /collab:witness oversight path. Its read map is INVERTED (deny floor,
 # only collab/logs/** allowed) — that scoping is the construction guarantee that keeps
 # an auditor auditing the log instead of drifting into reviewing the source.
 echo "== collab-watch (allowlist: no tool; read scoped to collab/logs/**) =="
-check_agent ".opencode/agent/collab-watch.md" "" "scoped:collab/logs/**"
+check_agent "$AGENT_DIR/collab-watch.md" "" "scoped:collab/logs/**"
 
 echo
 if [ "$fail" -eq 0 ]; then printf '\033[32magent permissions: allowlist invariants hold\033[0m\n'

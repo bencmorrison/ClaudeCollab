@@ -16,6 +16,13 @@
 #   bash install.sh [--dest <dir>]     install into <dir> (default: current dir)
 #   bash install.sh --ref <tag|branch> install that ref instead of the latest release
 #   bash install.sh --uninstall [--dest <dir>]   remove it again
+#   bash install.sh --global           install user-level: scripts into ~/.claude/collab,
+#                                       slash commands into ~/.claude/commands/collab
+#                                       (invocations rewritten to absolute paths), agent
+#                                       defs into the opencode global agent dir
+#                                       ($XDG_CONFIG_HOME/opencode/agent). No .gitignore
+#                                       (home isn't a repo). Incompatible with --dest.
+#   bash install.sh --global --uninstall         remove the global install
 #   bash install.sh --help
 #
 # Source of the files:
@@ -93,19 +100,28 @@ HASHES_REL="collab/.install-hashes"       # sha256<TAB>path ownership records
 STATE_REL="collab/.install-state"         # installer-owned destination state
 
 # ---- args -------------------------------------------------------------------
-action="install"; dest="$PWD"
+action="install"; dest="$PWD"; global=""; dest_explicit=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --uninstall) action="uninstall" ;;
-    --dest) shift; dest="${1:?--dest needs a directory}" ;;
-    --dest=*) dest="${1#--dest=}" ;;
+    --global) global=1 ;;
+    --dest) shift; dest="${1:?--dest needs a directory}"; dest_explicit=1 ;;
+    --dest=*) dest="${1#--dest=}"; dest_explicit=1 ;;
     --ref) shift; REF="${1:?--ref needs a tag or branch}" ;;
     --ref=*) REF="${1#--ref=}" ;;
-    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "install.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
   shift
 done
+
+# --global installs into ~/.claude + the opencode global agent dir, NOT a project,
+# so a destination directory is meaningless there. Reject the combination loudly
+# rather than silently ignoring one.
+if [ -n "$global" ] && [ -n "$dest_explicit" ]; then
+  echo "install.sh: --global and --dest are incompatible (--global targets ~/.claude and the opencode global agent dir)." >&2
+  exit 2
+fi
 
 say()  { printf '\033[36m•\033[0m %s\n' "$*"; }
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
@@ -324,8 +340,346 @@ remove_if_owned() {
   fi
 }
 
+# ============================ GLOBAL (user-level) =============================
+# A SEPARATE branch from the per-project path above. It never touches $dest, the
+# per-project manifest/hashes/state, or the .gitignore block. Its ownership records
+# live in DISTINCT files (.install-manifest.global / .install-hashes.global) keyed
+# by RESOLVED ABSOLUTE path, so the two layouts never read each other's records and
+# uninstalling one can never delete the other's files.
+#
+# Two roots, derived PURELY from the environment so a test can sandbox the whole run
+# with HOME=$tmp XDG_CONFIG_HOME=$tmp/.config and nothing lands under the real home:
+#   CLAUDE_DIR         = $HOME/.claude                         (scripts -> its collab/)
+#   OPENCODE_AGENT_DIR = ${XDG_CONFIG_HOME:-$HOME/.config}/opencode/agent  (agent defs)
+# Both are resolved to a PHYSICAL path (following a dotfiles symlink like
+# ~/.claude -> ~/.dotfiles/common/.claude), reusing the same mkdir+`cd … && pwd -P`
+# follow-the-symlink pattern the --dest resolver uses. $CLAUDE_CONFIG_DIR is
+# deliberately NOT honoured (PLAN.md scorecard item 6: undocumented, treat as absent).
+CLAUDE_DIR=""; OPENCODE_AGENT_DIR=""; GMANIFEST=""; GHASHES=""
+G_UROOT=""; G_UREL=""; G_ROOT=""; G_REL=""; G_ABS=""
+gh_old=""; gm_new=""; gh_new=""
+
+g_resolve_roots() {  # <create|nocreate>
+  local create="$1"
+  [ -n "${HOME:-}" ] || die "--global needs \$HOME to be set."
+  CLAUDE_DIR="$HOME/.claude"
+  OPENCODE_AGENT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/agent"
+  if [ "$create" = create ]; then
+    mkdir -p "$CLAUDE_DIR" 2>/dev/null || die "cannot create Claude config dir: $CLAUDE_DIR"
+    mkdir -p "$OPENCODE_AGENT_DIR" 2>/dev/null || die "cannot create opencode agent dir: $OPENCODE_AGENT_DIR"
+  fi
+  # Resolve physical only where the dir exists (uninstall may run with neither).
+  if [ -d "$CLAUDE_DIR" ]; then
+    CLAUDE_DIR="$(cd "$CLAUDE_DIR" 2>/dev/null && pwd -P)" || die "cannot resolve Claude config dir: $CLAUDE_DIR"
+  fi
+  if [ -d "$OPENCODE_AGENT_DIR" ]; then
+    OPENCODE_AGENT_DIR="$(cd "$OPENCODE_AGENT_DIR" 2>/dev/null && pwd -P)" || die "cannot resolve opencode agent dir: $OPENCODE_AGENT_DIR"
+  fi
+}
+
+# Validate every component of <rel> UNDER <root>, refusing a symlink anywhere along
+# it — the multi-root analogue of safe_dest_rel. A payload file or a planted
+# intermediate dir cannot redirect a write outside the resolved root.
+safe_under_root() {  # <root> <rel>
+  local root="$1" rel="$2" cur="$1" part rest last
+  valid_rel "$rel" || die "refusing unsafe global path: $rel"
+  rest="$rel"
+  while :; do
+    case "$rest" in
+      */*) part=${rest%%/*}; rest=${rest#*/}; last=false ;;
+      *) part=$rest; last=true ;;
+    esac
+    cur="$cur/$part"
+    [ -L "$cur" ] && die "refusing global destination symlink: $root/$rel"
+    $last && break
+  done
+  return 0
+}
+
+# Map a payload rel to its global destination. Agent defs go FLAT into the opencode
+# global agent dir (basename only); collab/** scripts preserve their sub-path under
+# CLAUDE_DIR; the collab/ slash commands go to CLAUDE_DIR/commands/collab/ (Claude Code
+# reads user-level commands there, namespaced /collab:<name> exactly as per-project).
+# Nothing else maps. Sets G_ROOT/G_REL/G_ABS; returns 1 to skip.
+global_target() {  # <payload_rel>
+  local rel="$1"
+  case "$rel" in
+    .opencode/agent/*)         G_ROOT="$OPENCODE_AGENT_DIR"; G_REL="${rel##*/}" ;;
+    .claude/commands/collab/*) G_ROOT="$CLAUDE_DIR";         G_REL="commands/collab/${rel##*/}" ;;
+    collab/*)                  G_ROOT="$CLAUDE_DIR";         G_REL="$rel" ;;
+    *) return 1 ;;
+  esac
+  G_ABS="$G_ROOT/$G_REL"
+  return 0
+}
+
+# Last-match-wins hash lookup for an absolute path in a hashes file. Last wins so an
+# upgraded file's fresh record (appended after the old one during a run) is the one
+# uninstall trusts — the mid-run durability guarantee below depends on it.
+g_hash_of() {  # <hashesfile> <abspath>
+  local f="$1" p="$2" found
+  [ -f "$f" ] || return 1
+  found="$(awk -F '\t' -v p="$p" '$2==p && NF==2 {h=$1} END{if(h!=""){print h}else{exit 1}}' "$f")" || return 1
+  valid_hash "$found" || return 1
+  printf '%s\n' "$found"
+}
+
+# A path is ours only while its current bytes match the record from BEFORE this run
+# (frozen in $gh_old). No legacy-format migration: the global layout is new, so there
+# are no path-only global manifests to adopt.
+g_is_owned() {  # <abspath>
+  local abs="$1" expected actual
+  expected="$(g_hash_of "$gh_old" "$abs" 2>/dev/null || true)"
+  [ -f "$abs" ] && [ ! -L "$abs" ] || return 1
+  actual="$(sha256_file "$abs")"
+  [ -n "$expected" ] && [ "$actual" = "$expected" ]
+}
+
+# Update the accumulators: replace any prior record for <abs> with <hash>, and index
+# the path. The accumulators are SEEDED from the prior on-disk records, so a file we
+# skip this run keeps its old record (parity with copy_one's retain behaviour) and a
+# file we don't re-process keeps its record too — which is what makes a mid-run flush
+# leave an accurate, complete ownership set for uninstall.
+g_set_record() {  # <abspath> <hash>
+  local abs="$1" hash="$2" t
+  t="$(mktemp)" || die "could not create a temporary file"
+  awk -F '\t' -v p="$abs" '$2!=p' "$gh_new" > "$t" && mv -f "$t" "$gh_new"
+  printf '%s\t%s\n' "$hash" "$abs" >> "$gh_new"
+  grep -qxF "$abs" "$gm_new" 2>/dev/null || printf '%s\n' "$abs" >> "$gm_new"
+}
+
+# Atomically replace the on-disk global manifest/hashes from the accumulators, via
+# mktemp+mv so a hardlinked reserved path cannot be written THROUGH to an outside
+# inode (the same defence the per-project metadata writes use). Called after EVERY
+# file, so a mid-run failure still leaves records matching exactly what is on disk.
+g_flush() {
+  local t
+  safe_under_root "$CLAUDE_DIR" "collab/.install-manifest.global"
+  safe_under_root "$CLAUDE_DIR" "collab/.install-hashes.global"
+  t="$(mktemp "$CLAUDE_DIR/collab/.cc-gman.XXXXXX")" || die "could not create a secure manifest temporary file"
+  sort -u "$gm_new" > "$t" && mv -f "$t" "$GMANIFEST" || { rm -f "$t"; die "could not write global manifest"; }
+  t="$(mktemp "$CLAUDE_DIR/collab/.cc-ghash.XXXXXX")" || die "could not create a secure hashes temporary file"
+  sort -u "$gh_new" > "$t" && mv -f "$t" "$GHASHES" || { rm -f "$t"; die "could not write global hashes"; }
+}
+
+g_copy_one() {  # <payload_rel>
+  local rel="$1" abs root relu tmp c
+  global_target "$rel" || return 0        # nothing else maps
+  root="$G_ROOT"; relu="$G_REL"; abs="$G_ABS"
+  safe_under_root "$root" "$relu"
+  if [ -e "$abs" ] && ! g_is_owned "$abs"; then
+    warn "skipping $abs — a file you already have is there; leaving it untouched"
+    printf '%s\n' "$abs" >> "$skipped_list"
+    skipped=$((skipped+1)); return
+  fi
+  mkdir -p "$(dirname "$abs")"
+  tmp="$(mktemp "$(dirname "$abs")/.cc-payload.XXXXXX")" || die "could not create a secure payload temporary file"
+  case "$rel" in
+    .claude/commands/collab/*)
+      # A slash command hardcodes `bash collab/…` in its body AND in every
+      # allowed-tools grant variant (env-prefixed, COLLAB_CONFIRMED=1/RUN_ID forms,
+      # the `RUN=$(bash collab/log.sh new-run:*)` command-substitution grant, and the
+      # `… | bash collab/log.sh …` pipe). Globally the scripts live at an absolute
+      # path, so rewrite the single common literal prefix `bash collab/` → `bash
+      # <CLAUDE_DIR>/collab/`. That one substitution covers every form uniformly and
+      # leaves bare prose paths (e.g. `collab/models.policy.local`, which the scripts
+      # resolve relative to themselves) untouched. Done with bash literal parameter
+      # expansion, NOT sed/awk: the replacement contains `<CLAUDE_DIR>`, which may hold
+      # `&`, `\`, `/` that sed/gsub would reinterpret — the same escape-class bug as the
+      # awk -v fix. The `cat; printf x` / `%x` guard preserves trailing newlines that a
+      # bare `$(...)` capture would strip (this repo has been burned by that before).
+      c="$(cat "$src/$rel"; printf x)" || { rm -f "$tmp"; die "could not read command file: $rel"; }
+      c="${c%x}"
+      c="${c//bash collab\//bash $CLAUDE_DIR/collab/}"
+      printf '%s' "$c" > "$tmp" || { rm -f "$tmp"; die "could not template command file: $rel"; }
+      chmod 0644 "$tmp"
+      ;;
+    *)
+      cp -p "$src/$rel" "$tmp" || { rm -f "$tmp"; die "could not prepare payload file: $rel"; }
+      case "$relu" in collab/*.sh|collab/tests/fake-opencode) chmod +x "$tmp" ;; esac
+      ;;
+  esac
+  mv -f "$tmp" "$abs"
+  g_set_record "$abs" "$(sha256_file "$abs")"   # hash of the TEMPLATED bytes on disk
+  g_flush
+  count=$((count+1))
+}
+
+# Merge (never clobber) the two knobs the installed scripts need to run in global
+# mode into CLAUDE_DIR/collab/collab.conf.local: COLLAB_AGENT_DIR (so the wrapper's
+# fallback check probes the SAME dir opencode resolves --agent from) and
+# COLLAB_LOG_PARTITION=1 (so each project's logs/`latest`/witness stay separate under
+# the one shared log root). Every pre-existing line — the user's COLLAB_MODEL etc. —
+# is preserved verbatim. Key detection matches conf_get's parser (leading whitespace
+# trimmed, `#` comments ignored). The two keys differ in update policy:
+#   - COLLAB_AGENT_DIR is UPDATE-ALWAYS: the installer owns this path (it's derived
+#     from the resolved opencode dir and must track it), so a prior line is replaced.
+#   - COLLAB_LOG_PARTITION is SET-IF-ABSENT: if the user already set it (even to 0),
+#     their line is preserved verbatim — we never silently override a deliberate
+#     config choice. It is only added (=1) when the key is absent.
+# The agent dir is passed through ENVIRON, NOT `awk -v`: -v runs the value through
+# awk's backslash-escape processing, which would corrupt a path containing a '\'
+# (e.g. an XDG dir with a backslash) and make the merge branch disagree with the
+# escape-free printf fresh branch below — a re-install would then rewrite a correct
+# value to a wrong one. ENVIRON delivers the bytes verbatim, matching the fresh path.
+g_write_conf() {
+  local conf="$CLAUDE_DIR/collab/collab.conf.local" tmp
+  safe_under_root "$CLAUDE_DIR" "collab/collab.conf.local"
+  if [ -e "$conf" ] && { [ ! -f "$conf" ] || [ -L "$conf" ]; }; then
+    die "refusing non-file collab.conf.local path: $conf"
+  fi
+  mkdir -p "$CLAUDE_DIR/collab"
+  tmp="$(mktemp "$CLAUDE_DIR/collab/.cc-conf.XXXXXX")" || die "could not create a secure conf temporary file"
+  if [ -f "$conf" ]; then
+    cc_adir="$OPENCODE_AGENT_DIR" awk '
+      function keyof(l,  s,eq,k){ s=l; sub(/^[[:space:]]+/,"",s)
+        if(s ~ /^#/ || s !~ /=/) return ""
+        eq=index(s,"="); k=substr(s,1,eq-1); gsub(/[[:space:]]/,"",k); return k }
+      { k=keyof($0)
+        if(k=="COLLAB_AGENT_DIR"){ if(!sa){print "COLLAB_AGENT_DIR=" ENVIRON["cc_adir"]; sa=1} next }
+        if(k=="COLLAB_LOG_PARTITION"){ sp=1; print; next }
+        print }
+      END{ if(!sa) print "COLLAB_AGENT_DIR=" ENVIRON["cc_adir"]
+           if(!sp) print "COLLAB_LOG_PARTITION=1" }
+    ' "$conf" > "$tmp" || { rm -f "$tmp"; die "could not rewrite collab.conf.local"; }
+  else
+    {
+      printf '# collab.conf.local — written by install.sh --global (global/user-level layout).\n'
+      printf '# COLLAB_AGENT_DIR points the wrapper fallback check at the opencode global agent dir.\n'
+      printf '# COLLAB_LOG_PARTITION=1 keeps each project'\''s logs separate under the shared log root.\n'
+      printf 'COLLAB_AGENT_DIR=%s\n' "$OPENCODE_AGENT_DIR"
+      printf 'COLLAB_LOG_PARTITION=1\n'
+    } > "$tmp" || { rm -f "$tmp"; die "could not write collab.conf.local"; }
+  fi
+  mv -f "$tmp" "$conf"
+}
+
+global_install() {
+  g_resolve_roots create
+  # A global command file bakes the resolved CLAUDE_DIR into its body and every
+  # allowed-tools grant as an UNQUOTED shell token (`bash <dir>/collab/ask.sh …`), so a
+  # whitespace-bearing path (a $HOME with a space) would word-split at runtime and break
+  # every command silently. Fail closed with an actionable message instead — this is the
+  # INSTALL path only; global_uninstall must never refuse, so it can always clean up.
+  case "$CLAUDE_DIR$OPENCODE_AGENT_DIR" in
+    *[[:space:]]*)
+      die "--global cannot bake a path containing whitespace into command invocations (resolved: '$CLAUDE_DIR', '$OPENCODE_AGENT_DIR'). Use the per-project install (bash install.sh --dest <project>), or a home path without spaces." ;;
+  esac
+  if [ "$src" -ef "$CLAUDE_DIR" ] 2>/dev/null; then
+    die "Payload source is your Claude config dir itself — run --global from a clone or via curl … | bash."
+  fi
+  GMANIFEST="$CLAUDE_DIR/collab/.install-manifest.global"
+  GHASHES="$CLAUDE_DIR/collab/.install-hashes.global"
+  mkdir -p "$CLAUDE_DIR/collab"
+  safe_under_root "$CLAUDE_DIR" "collab/.install-manifest.global"
+  safe_under_root "$CLAUDE_DIR" "collab/.install-hashes.global"
+  { [ -e "$GMANIFEST" ] && [ ! -f "$GMANIFEST" ]; } && die "refusing non-file global manifest path: $GMANIFEST"
+  { [ -e "$GHASHES" ] && [ ! -f "$GHASHES" ]; } && die "refusing non-file global hashes path: $GHASHES"
+
+  say "Installing ClaudeCollab (global / user-level)"
+  say "  from:         $src"
+  say "  scripts   ->  $CLAUDE_DIR/collab/"
+  say "  commands  ->  $CLAUDE_DIR/commands/collab/  (invocations rewritten to absolute)"
+  say "  agent defs -> $OPENCODE_AGENT_DIR/"
+
+  gh_old="$(mktemp)"; gm_new="$(mktemp)"; gh_new="$(mktemp)"; skipped_list="$(mktemp)"
+  [ -f "$GHASHES" ] && cp "$GHASHES" "$gh_old"
+  [ -f "$GHASHES" ] && cp "$GHASHES" "$gh_new"
+  [ -f "$GMANIFEST" ] && cp "$GMANIFEST" "$gm_new"
+  count=0; skipped=0
+  g_flush                                  # persist seeded state before any copy
+  while IFS= read -r rel; do
+    g_copy_one "$rel"
+  done < <(payload_files)
+  g_flush
+  g_write_conf
+
+  ok "Installed ${count} file(s)$( [ "$skipped" -gt 0 ] && printf ', skipped %d already-present file(s)' "$skipped")."
+  if [ "$skipped" -gt 0 ]; then
+    warn "These ClaudeCollab files were NOT installed because you already had a file at that path:"
+    while IFS= read -r p; do warn "    $p"; done < "$skipped_list"
+    warn "Your files were left untouched; the ClaudeCollab version of each is absent."
+  fi
+  say "Wrote $CLAUDE_DIR/collab/collab.conf.local (COLLAB_AGENT_DIR, COLLAB_LOG_PARTITION)."
+  say "Next steps:"
+  say "  1. Authenticate opencode:  opencode auth login"
+  say "  2. Check the setup:        bash $CLAUDE_DIR/collab/doctor.sh"
+}
+
+g_root_rel() {  # <abspath> -> sets G_UROOT/G_UREL; returns 1 if under neither root
+  local abs="$1"
+  case "$abs" in
+    "$CLAUDE_DIR"/*)         G_UROOT="$CLAUDE_DIR";         G_UREL="${abs#"$CLAUDE_DIR"/}" ;;
+    "$OPENCODE_AGENT_DIR"/*) G_UROOT="$OPENCODE_AGENT_DIR"; G_UREL="${abs#"$OPENCODE_AGENT_DIR"/}" ;;
+    *) return 1 ;;
+  esac
+  return 0
+}
+
+g_remove_if_owned() {  # <abspath>
+  local abs="$1" expected actual
+  if ! g_root_rel "$abs"; then
+    warn "keeping path outside the current global roots (config drift?): $abs"; return 0
+  fi
+  safe_under_root "$G_UROOT" "$G_UREL"
+  [ -e "$abs" ] || return 0
+  if [ ! -f "$abs" ] || [ -L "$abs" ]; then
+    warn "keeping changed/non-file path: $abs"; return 0
+  fi
+  expected="$(g_hash_of "$GHASHES" "$abs" 2>/dev/null || true)"
+  actual="$(sha256_file "$abs")"
+  if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
+    rm -f "$abs"; removed=$((removed+1))
+  else
+    warn "keeping changed or unverified file: $abs"
+  fi
+}
+
+global_uninstall() {
+  g_resolve_roots nocreate
+  GMANIFEST="$CLAUDE_DIR/collab/.install-manifest.global"
+  GHASHES="$CLAUDE_DIR/collab/.install-hashes.global"
+  say "Uninstalling ClaudeCollab (global / user-level) from:"
+  say "  $CLAUDE_DIR/collab/  and  $OPENCODE_AGENT_DIR/"
+  if [ ! -f "$GMANIFEST" ] && [ ! -f "$GHASHES" ]; then
+    warn "no global install records under $CLAUDE_DIR/collab — nothing to remove."
+    return 0
+  fi
+  if [ -e "$GMANIFEST" ] && [ ! -f "$GMANIFEST" ]; then die "refusing non-file global manifest path: $GMANIFEST"; fi
+  if [ -e "$GHASHES" ] && [ ! -f "$GHASHES" ]; then die "refusing non-file global hashes path: $GHASHES"; fi
+  removed=0
+  # Prefer the manifest's path index; fall back to the hashes' path field if lost.
+  local list; list="$(mktemp)"
+  if [ -f "$GMANIFEST" ]; then
+    cp "$GMANIFEST" "$list"
+  else
+    awk -F '\t' 'NF==2 {print $2}' "$GHASHES" | sort -u > "$list"
+  fi
+  while IFS= read -r abs || [ -n "$abs" ]; do
+    [ -n "$abs" ] || continue
+    case "$abs" in /*) ;; *) warn "skipping suspicious non-absolute record: $abs"; continue ;; esac
+    g_remove_if_owned "$abs"
+  done < "$list"
+  rm -f "$list"
+  rm -f "$GMANIFEST" "$GHASHES"
+  # rmdir only-empty payload dirs, deepest first. collab/collab.conf.local and any
+  # collab/logs/ runs keep their parent dirs alive — user config and audit logs are
+  # deliberately NOT removed by an uninstall. commands/collab + commands are pruned
+  # only if empty, so a user's OTHER slash commands keep commands/ alive. The opencode
+  # agent dir (and its parent `opencode` dir) are pruned only if empty, so a user's
+  # other opencode config is safe.
+  local d
+  for d in "$CLAUDE_DIR/collab/tests" "$CLAUDE_DIR/collab/logs" "$CLAUDE_DIR/collab" \
+           "$CLAUDE_DIR/commands/collab" "$CLAUDE_DIR/commands" \
+           "$OPENCODE_AGENT_DIR" "$(dirname "$OPENCODE_AGENT_DIR")"; do
+    [ -d "$d" ] && rmdir "$d" 2>/dev/null || true
+  done
+  ok "Removed ClaudeCollab global install (${removed} file(s)). Your config and logs were left untouched."
+}
+
 # =============================== UNINSTALL ====================================
 if [ "$action" = "uninstall" ]; then
+  if [ -n "$global" ]; then global_uninstall; exit 0; fi
   safe_dest_rel "$MANIFEST_REL"
   safe_dest_rel "$HASHES_REL"
   safe_dest_rel "$STATE_REL"
@@ -431,9 +785,18 @@ cleanup() {
   [ -n "${skipped_list:-}" ] && rm -f "$skipped_list"
   [ -n "${manifest_tmp:-}" ] && rm -f "$manifest_tmp"
   [ -n "${hashes_tmp:-}" ] && rm -f "$hashes_tmp"
+  [ -n "${gh_old:-}" ] && rm -f "$gh_old"
+  [ -n "${gm_new:-}" ] && rm -f "$gm_new"
+  [ -n "${gh_new:-}" ] && rm -f "$gh_new"
   return 0
 }
 trap cleanup EXIT
+
+# --global install: a separate branch that never touches $dest or the per-project
+# ownership/gitignore machinery. It needs $src (the resolved payload), which the block
+# above supplied, so it dispatches here — before the per-project source==dest guard,
+# whose $dest=$PWD would wrongly fire when --global is run from inside a clone.
+if [ -n "$global" ]; then global_install; exit 0; fi
 
 # Refuse to install onto the source itself (would be a no-op that self-clobbers).
 if [ "$src" = "$dest" ]; then

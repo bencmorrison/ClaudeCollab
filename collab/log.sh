@@ -137,6 +137,10 @@ cfg() {  # cfg <KEY> <default> — env override > config file > default
 # can't run we say so once, loudly, and get out of the way — a missing log is
 # visible to `verify` and `/collab:witness` refuses to audit one, so a silent gap can't be
 # mistaken for a clean record.
+# Base log root: an explicit COLLAB_LOG_DIR (env or config) wins; otherwise the
+# per-install default `<install>/logs`. Opt-in per-project partitioning may narrow
+# this to a per-project subdir BELOW it (see the COLLAB_LOG_PARTITION block after the
+# hashing helpers, once _sha is defined).
 LOG_DIR="$(cfg COLLAB_LOG_DIR "$here/logs")"
 disabled() { [ "$(cfg COLLAB_LOG on)" = "off" ]; }
 
@@ -156,6 +160,48 @@ _rand() {  # short random hex; /dev/urandom where available, else $RANDOM/$$
   if [ -r /dev/urandom ]; then od -An -tx1 -N4 /dev/urandom | tr -d ' \n'
   else printf '%04x%04x' "$RANDOM" "$$"; fi
 }
+
+# ---- per-project log partitioning (opt-in, OFF by default) ------------------
+# COLLAB_LOG_PARTITION=1 narrows the log root to a per-project subdir of the base:
+# <base>/<project-key>/<run_id>, so a single shared install (e.g. a future global
+# install at ~/.claude/collab) keeps each project's runs — and its `latest` symlink,
+# retention, and /collab:witness resolution — separate rather than interleaved in one
+# flat root. OFF (default empty) leaves LOG_DIR exactly as resolved above: today's
+# behavior, byte-identical.
+#
+# The subdir stays UNDER the base logs tree on purpose: ask.sh's --watch scope check
+# and collab-watch's `**/collab/logs/**` glob both still match, because <key>/<run>
+# sits beneath collab/logs/, never as a sibling of it.
+#
+# An explicit COLLAB_LOG_DIR (env or config) DISABLES partitioning: the caller has
+# already named exactly where logs go, and second-guessing that would move their logs
+# out from under them. Partition only when the root is our own default.
+
+# _project_key — a filesystem-safe token for the CWD's project: the git top-level if
+# in a repo, else the CWD. Basename (for a human-readable dir) plus a short hash of the
+# FULL absolute path, so two different repos sharing a basename never collide.
+# Best-effort and never fatal: a failing git/hash call falls back, it does not abort —
+# this runs at load time under `set -e`, and logging must never fail the call.
+_project_key() {
+  local root base hash
+  root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$root" ] || root="$PWD"
+  base="$(basename "$root" 2>/dev/null || true)"
+  [ -n "$base" ] || base="project"
+  # Reduce to a safe token; anything outside [A-Za-z0-9._-] becomes '_'.
+  base="$(printf '%s' "$base" | tr -c 'A-Za-z0-9._-' '_' 2>/dev/null || true)"
+  [ -n "$base" ] || base="project"
+  hash="$(printf '%s' "$root" | _sha 2>/dev/null || true)"
+  if [ -n "$hash" ]; then hash="${hash:0:12}"
+  else hash="$(printf '%s' "$root" | cksum 2>/dev/null | awk '{print $1}' || true)"; fi
+  [ -n "$hash" ] || hash="0"
+  printf '%s\n' "${base}-${hash}"
+}
+
+if [ "$(cfg COLLAB_LOG_PARTITION "")" = "1" ] \
+   && [ -z "${COLLAB_LOG_DIR:-}" ] && [ -z "$(conf_get COLLAB_LOG_DIR)" ]; then
+  LOG_DIR="$here/logs/$(_project_key)"
+fi
 
 # ---- run resolution ---------------------------------------------------------
 # A run_id groups a whole workflow (all three calls of a /collab:panel round, both rounds

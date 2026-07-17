@@ -83,7 +83,10 @@
 #      automated/CI use),
 #      $COLLAB_LOG / $COLLAB_LOG_DIR / $COLLAB_LOG_PROMPTS / $COLLAB_RUN_ID /
 #      $COLLAB_COMMAND (see Logging above), $COLLAB_WATCH_MODEL (the model --watch
-#      prefers; env or collab.conf.local).
+#      prefers; env or collab.conf.local), $COLLAB_AGENT_DIR (where the wrapper looks
+#      for the collab-* agent DEFS to decide fallback; env or collab.conf.local;
+#      default $(dirname "$0")/../.opencode/agent — governs ONLY the fallback check,
+#      NOT how opencode resolves --agent; see the resolution note below).
 #
 # Exit codes: 3 = model denied by policy, 4 = model gated `ask` unconfirmed,
 #      5 = required-hardened def missing (always, for --watch), 8 = --watch would run a
@@ -191,6 +194,24 @@ conf_get() {
 # > config file > opencode's own default (empty here).
 model="${COLLAB_MODEL:-}"
 [ -n "$model" ] || model="$(conf_get COLLAB_MODEL)"
+
+# Agent-def directory — where the wrapper looks for the collab-* defs to decide
+# whether to FALL BACK to a weaker built-in agent. Resolved ONCE, here, with the
+# precedence: $COLLAB_AGENT_DIR (env, one-off override) > collab.conf.local value >
+# the sibling .opencode/agent (today's per-project layout). Unset/unconfigured yields
+# exactly "$(dirname "$0")/../.opencode/agent", so existing installs are byte-identical.
+#
+# THIS GOVERNS ONLY THE WRAPPER'S FALLBACK DECISION. opencode itself resolves `--agent`
+# INDEPENDENTLY, from its OWN config (the CWD project's .opencode/agent or opencode's
+# global config dir) — nothing here changes how opencode is invoked. So whatever sets
+# COLLAB_AGENT_DIR MUST point at the same directory the installer actually placed the
+# defs in, or the wrapper's "def present" check and opencode's resolution disagree: the
+# wrapper could believe a hardened def is enforced while opencode runs a different (or
+# fallback) agent. For collab-watch, whose check is a no-fallback security gate, that is
+# a silent oversight failure. (Reviewer finding — PLAN.md "Global install", change B.)
+agent_def_dir="${COLLAB_AGENT_DIR:-$(conf_get COLLAB_AGENT_DIR)}"
+[ -n "$agent_def_dir" ] || agent_def_dir="$(dirname "$0")/../.opencode/agent"
+
 agent="collab-read"  # our read-only agent: denies mutation (bash/edit/write), grep/glob,
                      # subagents, and secret reads (.env/keys/creds) at opencode's
                      # permission layer; webfetch/websearch are allowed, so this is
@@ -255,7 +276,7 @@ esac
 # The def check comes FIRST: if the def is missing AND the model is a Claude one,
 # "reinstall the def" is the actionable error, and the model complaint would just
 # send the user chasing the wrong thing.
-if [ "$agent" = "collab-watch" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-watch.md" ]; then
+if [ "$agent" = "collab-watch" ] && [ ! -f "$agent_def_dir/collab-watch.md" ]; then
   echo "error: collab-watch agent def not found. Refusing to fall back — any weaker agent can read the" >&2
   echo "repo's source and would 'audit' that instead of the log, which is not oversight. Reinstall it." >&2
   exit 5
@@ -378,7 +399,7 @@ fi
 # COLLAB_REQUIRE_HARDENED=1 turns the (loud but easy-to-miss) downgrade into a hard
 # error: for automated/CI use, refuse to run at all rather than silently drop to a
 # weaker/unrestricted agent. Off by default so interactive use still degrades.
-if [ "$agent" = "collab-read" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-read.md" ]; then
+if [ "$agent" = "collab-read" ] && [ ! -f "$agent_def_dir/collab-read.md" ]; then
   if [ -n "${COLLAB_REQUIRE_HARDENED:-}" ]; then
     echo "error: collab-read agent def not found and COLLAB_REQUIRE_HARDENED=1 — refusing to fall back to a weaker agent." >&2
     exit 5
@@ -391,7 +412,7 @@ fi
 # opencode's built-in `build` — the only write-capable built-in — rather than fail.
 # `build` is UNRESTRICTED (no task/egress/secret-read denies), so warn loudly: the
 # delegated edit still works, but without collab-build's hardening.
-if [ "$agent" = "collab-build" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-build.md" ]; then
+if [ "$agent" = "collab-build" ] && [ ! -f "$agent_def_dir/collab-build.md" ]; then
   if [ -n "${COLLAB_REQUIRE_HARDENED:-}" ]; then
     echo "error: collab-build agent def not found and COLLAB_REQUIRE_HARDENED=1 — refusing to fall back to the unrestricted 'build' agent." >&2
     exit 5
@@ -405,7 +426,7 @@ fi
 # but it's compliance-only: it does not deny bash, secret reads, or grep/glob. Since
 # this path has network egress, a downgrade here means secrets could be both read AND
 # exfiltrated, so the warning matters more than on the collab-read path.
-if [ "$agent" = "collab-research" ] && [ ! -f "$(dirname "$0")/../.opencode/agent/collab-research.md" ]; then
+if [ "$agent" = "collab-research" ] && [ ! -f "$agent_def_dir/collab-research.md" ]; then
   if [ -n "${COLLAB_REQUIRE_HARDENED:-}" ]; then
     echo "error: collab-research agent def not found and COLLAB_REQUIRE_HARDENED=1 — refusing to fall back to a weaker agent." >&2
     exit 5

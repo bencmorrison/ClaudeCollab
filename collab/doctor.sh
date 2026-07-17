@@ -54,6 +54,29 @@ cfg() {
   printf '%s\n' "$v"
 }
 
+# --- Installed-layout detection (global vs per-project/repo) -----------------
+# A --global install drops a DISTINCT manifest here, and in that layout repo_root is
+# the user's CLAUDE_DIR: the agent defs then live in opencode's global agent dir and
+# the slash commands in <CLAUDE_DIR>/commands/collab — NOT the repo-relative
+# .opencode/agent and .claude/commands paths the per-project/repo checks use. Detect it
+# once; only the agent-def, slash-command and source-lint checks branch on it. When
+# global="" (per-project or the ClaudeCollab checkout) EVERY check below is byte-identical.
+global=""
+gmanifest="$repo_root/collab/.install-manifest.global"
+opencode_agent_dir=""
+claude_phys=""
+if [ -f "$gmanifest" ]; then
+  global=1
+  opencode_agent_dir="$(conf_get COLLAB_AGENT_DIR)"   # the installer wrote this (already physical)
+  # The global manifest stores PHYSICAL absolute paths (the installer resolved them with
+  # `pwd -P`), but repo_root above is the LOGICAL pwd — and CLAUDE_DIR is often reached
+  # through a symlink (a dotfiles ~/.claude, or macOS /var -> /private/var under a temp
+  # HOME). Resolve CLAUDE_DIR to physical so the command manifest key matches what was
+  # recorded. (The agent check needs no such fix: it keys off opencode_agent_dir, which
+  # comes from conf.local and is already physical.)
+  claude_phys="$(cd "$repo_root" && pwd -P)"
+fi
+
 # --- 1. Required tools -------------------------------------------------------
 hdr "Tools"
 if command -v opencode >/dev/null 2>&1; then
@@ -148,12 +171,22 @@ hdr "Agent definitions"
 # permission map, so a shadowing def that is actually weaker FAILS there loudly. This
 # check exists so the failure names its cause instead of looking like our own agent
 # def mysteriously regressing.
+# In a --global install the defs are in opencode's global agent dir and ownership is
+# recorded (by absolute path) in .install-manifest.global; otherwise they are the
+# repo-relative .opencode/agent files cross-checked against .install-manifest. Only the
+# path + manifest differ — the present/ours/shadowed logic is identical either way.
+if [ -n "$global" ] && [ -z "$opencode_agent_dir" ]; then
+  bad "global install but collab.conf.local has no COLLAB_AGENT_DIR — cannot locate the agent defs (reinstall: bash install.sh --global)"
+fi
 agents_shadowed=""
 for def in collab-read collab-build collab-research collab-watch; do
-  f=".opencode/agent/${def}.md"
-  if [ ! -f "$f" ]; then
+  if [ -n "$global" ]; then f="$opencode_agent_dir/${def}.md"; mfile="$gmanifest"
+  else                      f=".opencode/agent/${def}.md";      mfile="$manifest_agents"; fi
+  if [ -n "$global" ] && [ -z "$opencode_agent_dir" ]; then
+    :  # already reported above; skip a misleading "/collab-*.md MISSING" line
+  elif [ ! -f "$f" ]; then
     bad "${def} agent def MISSING ($f) — ask.sh falls back to a weaker/unrestricted built-in (or exits 5 for collab-watch)"
-  elif [ -f "$manifest_agents" ] && ! grep -qxF "$f" "$manifest_agents"; then
+  elif [ -f "$mfile" ] && ! grep -qxF "$f" "$mfile"; then
     agents_shadowed="$agents_shadowed $def"
     warn "${def}: a file is at $f but ClaudeCollab did NOT install it — yours was kept, ours is absent"
   else
@@ -176,11 +209,15 @@ done
 hdr "Slash commands"
 cmds="consult panel workshop review research delegate collaborate witness configure"
 missing=""; shadowed=""; present=0
+# Global install: commands live at <CLAUDE_DIR>/commands/collab and ownership is in
+# .install-manifest.global (absolute paths). Per-project/repo: .claude/commands/collab
+# cross-checked against .install-manifest (repo-relative). Same present/shadowed logic.
 for c in $cmds; do
-  f=".claude/commands/collab/${c}.md"
-  if [ ! -f "$repo_root/$f" ]; then
+  if [ -n "$global" ]; then exists="$claude_phys/commands/collab/${c}.md"; mkey="$exists"; mfile="$gmanifest"
+  else                      f=".claude/commands/collab/${c}.md"; exists="$repo_root/$f"; mkey="$f"; mfile="$manifest_agents"; fi
+  if [ ! -f "$exists" ]; then
     missing="$missing $c"
-  elif [ -f "$manifest_agents" ] && ! grep -qxF "$f" "$manifest_agents"; then
+  elif [ -f "$mfile" ] && ! grep -qxF "$mkey" "$mfile"; then
     # The file is there but this install didn't put it there — it's the user's.
     shadowed="$shadowed $c"
   else
@@ -220,8 +257,8 @@ fi
 # absent in the ClaudeCollab source repo (nothing was "installed"), present in every
 # install. Same shape as the check-shebangs skip below — a check that needs the
 # checkout stays silent outside it, rather than failing someone else's repo.
-if [ -f "$manifest_agents" ]; then
-  : # installed project — CLAUDE.md is the user's own; nothing here is ours to police
+if [ -n "$global" ] || [ -f "$manifest_agents" ]; then
+  : # installed project (per-project or global) — CLAUDE.md is the user's own; not ours to police
 elif [ ! -f AGENTS.md ]; then
   : # no shared guide to point at — not the ClaudeCollab repo
 else
@@ -337,8 +374,12 @@ if [ -d .git ] && [ -f collab/tests/check-shebangs.sh ]; then
 fi
 
 # --- 6a. Agent permission invariants (source-level lint; no opencode needed) --
+# In a global install the defs are in opencode's global agent dir, so point the lint
+# there via COLLAB_AGENT_DIR (which it honors); per-project/repo runs it unchanged.
 hdr "Agent permission invariants (source lint)"
-if bash collab/tests/check-agent-permissions.sh >/dev/null 2>&1; then
+if [ -n "$global" ]; then lint_cmd() { COLLAB_AGENT_DIR="$opencode_agent_dir" bash collab/tests/check-agent-permissions.sh "$@"; }
+else                      lint_cmd() { bash collab/tests/check-agent-permissions.sh "$@"; }; fi
+if lint_cmd >/dev/null 2>&1; then
   pass "agent defs hold the default-deny-allowlist invariants ('*': deny floor, no re-open, expected allow-set)"
 else
   bad "agent permission invariants VIOLATED — run: bash collab/tests/check-agent-permissions.sh"
@@ -387,7 +428,16 @@ fi
 
 # --- 7. Wrapper unit tests (token-free) --------------------------------------
 hdr "Wrapper unit tests"
-if bash collab/tests/run-tests.sh >/dev/null 2>&1; then pass "ask.sh unit suite (collab/tests/run-tests.sh) all green"
+# run-tests.sh is a DEVELOPER regression suite: its meta-tests read repo-only fixtures
+# (e.g. reset_agents copies $repo_root/.opencode/agent/*), which a --global install does
+# NOT place — the defs live in opencode's global agent dir instead. Running it from a
+# global tree therefore false-FAILs on absent fixtures, not on any real defect. Skip it
+# in global mode with a neutral note, the same way the CLAUDE.md/AGENTS.md and shebang
+# checks stay silent outside the checkout. Per-project/repo still runs it — there the
+# agent defs are siblings and it works.
+if [ -n "$global" ]; then
+  info "wrapper unit suite skipped in a global install — it's a repo-development regression check that references repo-only fixtures; run it from a clone (bash collab/tests/run-tests.sh)"
+elif bash collab/tests/run-tests.sh >/dev/null 2>&1; then pass "ask.sh unit suite (collab/tests/run-tests.sh) all green"
 else bad "ask.sh unit suite FAILED — run: bash collab/tests/run-tests.sh"; fi
 # Only meaningful in the ClaudeCollab source tree (install.sh isn't shipped into
 # installed projects), so gate on its presence rather than the test file's.

@@ -69,6 +69,14 @@ curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/inst
 
 The installer copies the three directories in, sets the scripts executable, and adds the per-user config files to your project's `.gitignore`. Run `bash /tmp/claudecollab/install.sh --help` for options.
 
+**Global (user-level) install** — install once into your Claude config so the commands work in **every** project, instead of copying them into each repo:
+```bash
+bash /tmp/claudecollab/install.sh --global
+# remove it again:
+bash /tmp/claudecollab/install.sh --global --uninstall
+```
+This puts the scripts in `~/.claude/collab/`, the hardened agent defs in opencode's global agent dir (`~/.config/opencode/agent/`), and the `/collab:*` commands in `~/.claude/commands/collab/` — with each command's script paths rewritten to absolute so they resolve from any working directory. It writes `~/.claude/collab/collab.conf.local` (`COLLAB_AGENT_DIR`, `COLLAB_LOG_PARTITION=1`) so each project's audit logs stay separate under one shared root, and it never touches a project's `.gitignore`. Your own commands, config, and logs are left alone; uninstall removes only the files it installed. (A home directory whose path contains spaces isn't supported for `--global` — use the per-project install there.)
+
 Then authenticate opencode and verify:
 ```bash
 opencode auth login     # interactive OAuth — your provider login (subscription or free tier), no API keys

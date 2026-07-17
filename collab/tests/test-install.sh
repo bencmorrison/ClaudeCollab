@@ -23,6 +23,15 @@ mktempd(){ local d; d="$(mktemp -d)" || return 1; ( cd "$d" && pwd -P ); }
 newrepo(){ local d; d="$(mktempd)"; ( cd "$d" && git init -q ) 2>/dev/null; printf '%s' "$d"; }
 sha256(){ if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1; else shasum -a 256 "$1" | cut -d ' ' -f 1; fi; }
 
+# --- global-mode sandbox helpers ---------------------------------------------
+# EVERY --global invocation is env-sandboxed onto a throwaway HOME/XDG so nothing
+# can touch the real ~/.claude or ~/.config. real_marker() snapshots the real dirs;
+# real_before/real_after bracket the global block and prove they were untouched.
+REAL_HOME="${HOME:-}"
+real_marker(){ { ls -1a "$REAL_HOME/.claude/collab" 2>/dev/null; ls -1a "${XDG_CONFIG_HOME:-$REAL_HOME/.config}/opencode/agent" 2>/dev/null; } | sort; }
+gsandbox(){ local d; d="$(mktempd)"; mkdir -p "$d/.config"; printf '%s' "$d"; }
+gi(){ local h="$1"; shift; HOME="$h" XDG_CONFIG_HOME="$h/.config" bash "$installer" --global "$@"; }  # gi <home> [args...]
+
 [ -f "$installer" ] || { echo "install.sh not found at $installer" >&2; exit 1; }
 
 # --- fresh install -----------------------------------------------------------
@@ -530,6 +539,244 @@ CLAUDECOLLAB_REPO="file://$untagged" bash "$standalone/install.sh" --dest "$T" >
 check "falls back to the default branch when the repo has no release tags" \
   "grep -q 'main-tip-payload' '$T/collab/ask.sh'"
 rm -rf "$T" "$untagged" "$origin" "$standalone"
+
+# ==================== GLOBAL (user-level) install mode =======================
+# Slice B1. Every invocation below is sandboxed with HOME=<tmp> XDG_CONFIG_HOME=<tmp>/.config
+# via gi(), so it lands entirely in temp; real_before/real_after prove the real home
+# was never touched. NO slash commands are installed this slice (a later one does that).
+real_before="$(real_marker)"
+
+# --- fresh --global install --------------------------------------------------
+G="$(gsandbox)"
+gi "$G" >/dev/null 2>&1
+cdir="$(cd "$G/.claude" && pwd -P)"
+oadir="$(cd "$G/.config/opencode/agent" && pwd -P)"
+check "global: agent def lands in the opencode global agent dir" "[ -f '$oadir/collab-read.md' ]"
+check "global: all four agent defs land flat"                    "[ -f '$oadir/collab-build.md' ] && [ -f '$oadir/collab-research.md' ] && [ -f '$oadir/collab-watch.md' ]"
+check "global: scripts land under ~/.claude/collab"              "[ -f '$cdir/collab/ask.sh' ] && [ -f '$cdir/collab/log.sh' ] && [ -f '$cdir/collab/tests/run-tests.sh' ]"
+check "global: installed ask.sh is executable"                   "[ -x '$cdir/collab/ask.sh' ]"
+check "global: installed fake-opencode is executable"            "[ -x '$cdir/collab/tests/fake-opencode' ]"
+check "global: a non-script payload file is not chmod'd"         "[ ! -x '$cdir/collab/models.policy' ]"
+check "global: all nine slash commands land in commands/collab"  "[ -f '$cdir/commands/collab/collaborate.md' ] && [ -f '$cdir/commands/collab/configure.md' ] && [ -f '$cdir/commands/collab/consult.md' ] && [ -f '$cdir/commands/collab/delegate.md' ] && [ -f '$cdir/commands/collab/panel.md' ] && [ -f '$cdir/commands/collab/research.md' ] && [ -f '$cdir/commands/collab/review.md' ] && [ -f '$cdir/commands/collab/witness.md' ] && [ -f '$cdir/commands/collab/workshop.md' ]"
+check "global: conf.local has COLLAB_AGENT_DIR (resolved)"       "grep -qx 'COLLAB_AGENT_DIR=$oadir' '$cdir/collab/collab.conf.local'"
+check "global: conf.local has COLLAB_LOG_PARTITION=1"            "grep -qx 'COLLAB_LOG_PARTITION=1' '$cdir/collab/collab.conf.local'"
+check "global: NO .gitignore block is written in home"           "[ ! -e '$G/.gitignore' ] && [ ! -e '$cdir/.gitignore' ]"
+check "global: writes a global manifest under a DISTINCT name"   "[ -f '$cdir/collab/.install-manifest.global' ] && [ ! -e '$cdir/collab/.install-manifest' ]"
+check "global: writes global hashes under a distinct name"       "[ -f '$cdir/collab/.install-hashes.global' ]"
+check "global: manifest records the RESOLVED ABSOLUTE path"      "grep -qx '$cdir/collab/ask.sh' '$cdir/collab/.install-manifest.global'"
+rm -rf "$G"
+
+# --- SLICE B2/C: slash commands installed with invocations rewritten absolute -
+G="$(gsandbox)"
+gi "$G" >/dev/null 2>&1
+cdir="$(cd "$G/.claude" && pwd -P)"
+resid="$(grep -rl 'bash collab/' "$cdir/commands/collab/" 2>/dev/null || true)"
+check "global commands: NO residual relative 'bash collab/' in ANY command"     "[ -z '$resid' ]"
+check "global commands: a BODY invocation uses the absolute script path"        "grep -qF 'bash $cdir/collab/ask.sh -m <provider/model>' '$cdir/commands/collab/panel.md'"
+check "global commands: an allowed-tools GRANT uses the absolute script path"   "head -6 '$cdir/commands/collab/panel.md' | grep -qF 'Bash(bash $cdir/collab/ask.sh:*)'"
+check "global commands: the RUN=\$(...) substitution grant was rewritten"       "grep -qF 'RUN=\$(bash $cdir/collab/log.sh new-run:*)' '$cdir/commands/collab/panel.md'"
+check "global commands: an env-prefixed grant was rewritten"                    "grep -qF 'COLLAB_COMMAND=/collab:panel bash $cdir/collab/ask.sh:*' '$cdir/commands/collab/panel.md'"
+check "global commands: the witness piped grant was rewritten"                  "grep -qF 'printf *| bash $cdir/collab/log.sh final:*' '$cdir/commands/collab/witness.md'"
+check "global commands: bare PROSE path collab/models.policy is left untouched" "grep -qF 'collab/models.policy' '$cdir/commands/collab/consult.md'"
+check "global commands: a command is recorded in the global manifest"           "grep -qx '$cdir/commands/collab/panel.md' '$cdir/collab/.install-manifest.global'"
+# byte-exactness: installed file must equal the intended bash-literal transform
+src_cmd="$repo_root/.claude/commands/collab/panel.md"
+exp="$(cat "$src_cmd"; printf x)"; exp="${exp%x}"; exp="${exp//bash collab\//bash $cdir/collab/}"
+printf '%s' "$exp" > "$G/.exp.md"
+check "global commands: installed file is byte-identical to the literal transform" "cmp -s '$G/.exp.md' '$cdir/commands/collab/panel.md'"
+rm -rf "$G"
+
+# --- command templating is a LITERAL replacement: a '\' or '&' in CLAUDE_DIR ---
+# round-trips byte-exactly (sed/awk would reinterpret them — same class as awk -v).
+G="$(gsandbox)"; sh="$G/h\\x&y"
+if mkdir -p "$sh" 2>/dev/null && [ -d "$sh" ]; then
+  HOME="$sh" XDG_CONFIG_HOME="$G/.config" bash "$installer" --global >/dev/null 2>&1
+  cdir="$(cd "$sh/.claude" && pwd -P)"
+  exp="$(cat "$repo_root/.claude/commands/collab/panel.md"; printf x)"; exp="${exp%x}"
+  exp="${exp//bash collab\//bash $cdir/collab/}"
+  printf '%s' "$exp" > "$G/.exp2.md"
+  check "global commands \\&: literal transform round-trips byte-exactly"        "cmp -s '$G/.exp2.md' '$cdir/commands/collab/panel.md'"
+  check "global commands \\&: NO residual 'bash collab/' remains"                "! grep -q 'bash collab/' '$cdir/commands/collab/panel.md'"
+else
+  ok "global commands \\& [FS rejects such names]: skipped; literal transform proven for the normal path above"
+fi
+rm -rf "$G"
+
+# --- uninstall removes commands and prunes empty command dirs ----------------
+G="$(gsandbox)"
+gi "$G" >/dev/null 2>&1
+cdir="$(cd "$G/.claude" && pwd -P)"
+gi "$G" --uninstall >/dev/null 2>&1
+check "global uninstall: removes installed commands"            "[ ! -e '$cdir/commands/collab/panel.md' ]"
+check "global uninstall: prunes empty commands/collab + commands" "[ ! -d '$cdir/commands/collab' ] && [ ! -d '$cdir/commands' ]"
+rm -rf "$G"
+
+# --- skip-not-clobber for a user's same-path command; user's OTHER cmd survives
+G="$(gsandbox)"
+mkdir -p "$G/.claude/commands/collab"
+printf 'USER COMMAND\n' > "$G/.claude/commands/collab/panel.md"
+printf 'my other\n'     > "$G/.claude/commands/mine.md"
+gcout="$G/.gc.txt"
+gi "$G" > "$gcout" 2>&1
+cdir="$(cd "$G/.claude" && pwd -P)"
+check "global command skip: does NOT overwrite a user's same-path command"      "grep -qx 'USER COMMAND' '$G/.claude/commands/collab/panel.md'"
+check "global command skip: other 8 commands still install"                     "[ -f '$cdir/commands/collab/consult.md' ]"
+check "global command skip: the skip is summarised by name"                     "grep -q 'were NOT installed' '$gcout'"
+check "global command skip: the skipped command is not recorded as owned"       "! grep -q 'commands/collab/panel.md$' '$cdir/collab/.install-manifest.global'"
+gi "$G" --uninstall >/dev/null 2>&1
+check "global command skip: uninstall does NOT delete the user's command"       "grep -qx 'USER COMMAND' '$G/.claude/commands/collab/panel.md'"
+check "global command skip: user's OTHER command keeps commands/ alive"         "[ -f '$G/.claude/commands/mine.md' ]"
+rm -rf "$G"
+
+# --- conf.local MERGE (never clobber an existing conf) -----------------------
+G="$(gsandbox)"; mkdir -p "$G/.claude/collab"
+printf 'COLLAB_MODEL=x/y\n# a comment\nCOLLAB_MODELS=a/b c/d\n' > "$G/.claude/collab/collab.conf.local"
+gi "$G" >/dev/null 2>&1
+oadir="$(cd "$G/.config/opencode/agent" && pwd -P)"
+conf="$G/.claude/collab/collab.conf.local"
+check "global merge: pre-existing COLLAB_MODEL line survives"    "grep -qx 'COLLAB_MODEL=x/y' '$conf'"
+check "global merge: pre-existing comment + COLLAB_MODELS survive" "grep -qx '# a comment' '$conf' && grep -qx 'COLLAB_MODELS=a/b c/d' '$conf'"
+check "global merge: adds COLLAB_AGENT_DIR"                      "grep -qx 'COLLAB_AGENT_DIR=$oadir' '$conf'"
+check "global merge: adds COLLAB_LOG_PARTITION=1"                "grep -qx 'COLLAB_LOG_PARTITION=1' '$conf'"
+gi "$G" >/dev/null 2>&1                                          # re-install must not duplicate
+na=$(grep -c '^COLLAB_AGENT_DIR=' "$conf"); np=$(grep -c '^COLLAB_LOG_PARTITION=1' "$conf"); nm=$(grep -c '^COLLAB_MODEL=' "$conf")
+check "global merge: re-install keeps exactly one of each key"   "[ '$na' -eq 1 ] && [ '$np' -eq 1 ] && [ '$nm' -eq 1 ]"
+rm -rf "$G"
+
+# --- FIX 1: a backslash in the agent-dir path round-trips identically ---------
+# The MERGE branch used to pass the path through `awk -v`, whose backslash-escape
+# processing corrupted a '\'-bearing path while the fresh (printf) branch wrote it
+# correctly — so a re-install silently rewrote a correct value to a wrong one. The
+# fix (ENVIRON) must make fresh and merge byte-identical. XDG_CONFIG_HOME is custom
+# here (a component with a literal backslash), so this bypasses gi()'s fixed XDG.
+G="$(gsandbox)"; bxdg="$G/cfg\\back"
+if mkdir -p "$bxdg" 2>/dev/null && [ -d "$bxdg" ]; then
+  HOME="$G" XDG_CONFIG_HOME="$bxdg" bash "$installer" --global >/dev/null 2>&1   # fresh
+  oadir="$(cd "$bxdg/opencode/agent" && pwd -P)"
+  fresh_val="$(grep '^COLLAB_AGENT_DIR=' "$G/.claude/collab/collab.conf.local" | head -1)"
+  HOME="$G" XDG_CONFIG_HOME="$bxdg" bash "$installer" --global >/dev/null 2>&1   # merge
+  merge_val="$(grep '^COLLAB_AGENT_DIR=' "$G/.claude/collab/collab.conf.local" | head -1)"
+  check "global backslash: fresh and merge COLLAB_AGENT_DIR are byte-identical" "[ '$fresh_val' = '$merge_val' ]"
+  check "global backslash: the value equals the real resolved agent dir"        "[ '$merge_val' = 'COLLAB_AGENT_DIR=$oadir' ]"
+else
+  # FS rejected a backslash filename: fall back to proving fresh==merge for a normal
+  # path (still exercises both branches), and note the FS limitation in the name.
+  gi "$G" >/dev/null 2>&1
+  oadir="$(cd "$G/.config/opencode/agent" && pwd -P)"
+  fresh_val="$(grep '^COLLAB_AGENT_DIR=' "$G/.claude/collab/collab.conf.local" | head -1)"
+  gi "$G" >/dev/null 2>&1
+  merge_val="$(grep '^COLLAB_AGENT_DIR=' "$G/.claude/collab/collab.conf.local" | head -1)"
+  check "global backslash [FS lacks '\\' names]: fresh==merge for a normal path"  "[ '$fresh_val' = '$merge_val' ] && [ '$merge_val' = 'COLLAB_AGENT_DIR=$oadir' ]"
+fi
+rm -rf "$G"
+
+# --- FIX 2: COLLAB_LOG_PARTITION is set-if-absent, never overriding the user --
+G="$(gsandbox)"; mkdir -p "$G/.claude/collab"
+printf 'COLLAB_LOG_PARTITION=0\n' > "$G/.claude/collab/collab.conf.local"
+gi "$G" >/dev/null 2>&1
+conf="$G/.claude/collab/collab.conf.local"
+oadir="$(cd "$G/.config/opencode/agent" && pwd -P)"
+check "global partition: a user's COLLAB_LOG_PARTITION=0 is preserved (not flipped)" "grep -qx 'COLLAB_LOG_PARTITION=0' '$conf' && ! grep -q '^COLLAB_LOG_PARTITION=1' '$conf'"
+check "global partition: COLLAB_AGENT_DIR is still written alongside the kept =0"    "grep -qx 'COLLAB_AGENT_DIR=$oadir' '$conf'"
+rm -rf "$G"
+
+G="$(gsandbox)"; mkdir -p "$G/.claude/collab"
+printf 'COLLAB_MODEL=x/y\n' > "$G/.claude/collab/collab.conf.local"       # key absent
+gi "$G" >/dev/null 2>&1
+check "global partition: an absent COLLAB_LOG_PARTITION defaults to =1"              "grep -qx 'COLLAB_LOG_PARTITION=1' '$G/.claude/collab/collab.conf.local'"
+rm -rf "$G"
+
+# --- SYMLINKED ~/.claude is resolved to its physical target ------------------
+G="$(gsandbox)"; real="$(mktempd)"
+ln -s "$real" "$G/.claude"
+gi "$G" >/dev/null 2>&1
+oadir="$(cd "$G/.config/opencode/agent" && pwd -P)"
+check "global symlink: install writes to the PHYSICAL ~/.claude target" "[ -f '$real/collab/ask.sh' ]"
+check "global symlink: manifest records the physical absolute path"     "grep -qx '$real/collab/ask.sh' '$real/collab/.install-manifest.global'"
+check "global symlink: conf COLLAB_AGENT_DIR is the physical agent dir"  "grep -qx 'COLLAB_AGENT_DIR=$oadir' '$real/collab/collab.conf.local'"
+rm -rf "$G" "$real"
+
+# --- uninstall --global removes exactly what it installed, across both roots --
+G="$(gsandbox)"
+gi "$G" >/dev/null 2>&1
+cdir="$(cd "$G/.claude" && pwd -P)"; oadir="$(cd "$G/.config/opencode/agent" && pwd -P)"
+mkdir -p "$cdir/collab/logs/run1"; printf 'log\n' > "$cdir/collab/logs/run1/calls.jsonl"
+printf 'my own tool\n' > "$cdir/collab/mytool.sh"
+gi "$G" --uninstall >/dev/null 2>&1
+check "global uninstall: removes installed scripts"             "[ ! -e '$cdir/collab/ask.sh' ]"
+check "global uninstall: removes installed agent defs"          "[ ! -e '$oadir/collab-read.md' ]"
+check "global uninstall: leaves a user-created file intact"     "grep -qx 'my own tool' '$cdir/collab/mytool.sh'"
+check "global uninstall: leaves collab/logs/ intact"            "[ -f '$cdir/collab/logs/run1/calls.jsonl' ]"
+check "global uninstall: leaves conf.local intact"              "[ -f '$cdir/collab/collab.conf.local' ]"
+check "global uninstall: prunes the now-empty tests dir"        "[ ! -d '$cdir/collab/tests' ]"
+check "global uninstall: prunes the now-empty agent dir"        "[ ! -d '$oadir' ]"
+check "global uninstall: removes its own manifest + hashes"     "[ ! -e '$cdir/collab/.install-manifest.global' ] && [ ! -e '$cdir/collab/.install-hashes.global' ]"
+rm -rf "$G"
+
+# --- a same-path user file is never clobbered (install OR uninstall) ----------
+G="$(gsandbox)"
+mkdir -p "$G/.config/opencode/agent" "$G/.claude/collab"
+printf 'USER AGENT\n' > "$G/.config/opencode/agent/collab-read.md"
+printf 'USER SCRIPT\n' > "$G/.claude/collab/ask.sh"
+gout="$G/.gout.txt"
+gi "$G" > "$gout" 2>&1
+check "global skip: does NOT overwrite a user's same-path agent def" "grep -qx 'USER AGENT' '$G/.config/opencode/agent/collab-read.md'"
+check "global skip: does NOT overwrite a user's same-path script"    "grep -qx 'USER SCRIPT' '$G/.claude/collab/ask.sh'"
+check "global skip: summarises the skips by name"                    "grep -q 'were NOT installed' '$gout'"
+check "global skip: a skipped file is not recorded as owned"         "! grep -q 'collab/ask.sh$' '$G/.claude/collab/.install-manifest.global' && ! grep -q 'agent/collab-read.md$' '$G/.claude/collab/.install-manifest.global'"
+gi "$G" --uninstall >/dev/null 2>&1
+check "global skip: uninstall does NOT delete the user's agent def"  "grep -qx 'USER AGENT' '$G/.config/opencode/agent/collab-read.md'"
+check "global skip: uninstall does NOT delete the user's script"     "grep -qx 'USER SCRIPT' '$G/.claude/collab/ask.sh'"
+rm -rf "$G"
+
+# --- ISOLATION: a per-project install and a --global install never cross ------
+G="$(gsandbox)"; P="$(newrepo)"
+bash "$installer" --dest "$P" >/dev/null 2>&1
+gi "$G" >/dev/null 2>&1
+cdir="$(cd "$G/.claude" && pwd -P)"; oadir="$(cd "$G/.config/opencode/agent" && pwd -P)"
+check "isolation: per-project uses the plain manifest name"     "[ -f '$P/collab/.install-manifest' ] && [ ! -e '$P/collab/.install-manifest.global' ]"
+check "isolation: global uses the .global manifest name"        "[ -f '$cdir/collab/.install-manifest.global' ] && [ ! -e '$cdir/collab/.install-manifest' ]"
+bash "$installer" --uninstall --dest "$P" >/dev/null 2>&1
+check "isolation: per-project uninstall leaves global scripts"  "[ -f '$cdir/collab/ask.sh' ]"
+check "isolation: per-project uninstall leaves global agent defs" "[ -f '$oadir/collab-read.md' ]"
+bash "$installer" --dest "$P" >/dev/null 2>&1                   # reinstall project, then remove global
+gi "$G" --uninstall >/dev/null 2>&1
+check "isolation: global uninstall leaves per-project scripts"  "[ -f '$P/collab/ask.sh' ]"
+check "isolation: global uninstall leaves per-project commands" "[ -f '$P/.claude/commands/collab/consult.md' ]"
+rm -rf "$G" "$P"
+
+# --- --global and --dest are mutually exclusive ------------------------------
+G="$(gsandbox)"; P="$(mktempd)"
+if HOME="$G" XDG_CONFIG_HOME="$G/.config" bash "$installer" --global --dest "$P" >/dev/null 2>&1; then
+  no "global: --global combined with --dest is refused"
+else
+  ok "global: --global combined with --dest is refused"
+fi
+rm -rf "$G" "$P"
+
+# --- --global refuses a resolved path containing whitespace ------------------
+# A command file bakes CLAUDE_DIR into its body/grants as an UNQUOTED token, so a
+# space in the path would word-split at runtime and silently break every command.
+# The installer must fail closed (install path only) rather than write broken files.
+G="$(gsandbox)"; ws="$G/a b"; mkdir -p "$ws"
+wout="$G/.ws.txt"
+if HOME="$ws" XDG_CONFIG_HOME="$G/.config" bash "$installer" --global > "$wout" 2>&1; then
+  no "global: refuses a HOME path containing whitespace"
+else
+  ok "global: refuses a HOME path containing whitespace"
+fi
+check "global whitespace: prints an actionable refusal mentioning whitespace" "grep -qi 'whitespace' '$wout'"
+nf="$(find "$ws" -type f 2>/dev/null | head -1)"
+check "global whitespace: writes NO files under the space-bearing home"        "[ -z '$nf' ]"
+rm -rf "$G"
+
+# --- the real home must never have been touched by any of the above ----------
+real_after="$(real_marker)"
+if [ "$real_before" = "$real_after" ]; then
+  ok "global: nothing under the real \$HOME/.claude or \$XDG opencode agent dir was touched"
+else
+  no "global: the real \$HOME was modified by a sandboxed --global run"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
