@@ -888,7 +888,11 @@ if [ -f "$repo_root/install.sh" ]; then
     # global-layout false-fail) — the D1 property is already covered by the three per-section
     # assertions above, which need no opencode. So only assert the exit-0 headline where
     # opencode actually exists; otherwise assert no NON-opencode FAIL slipped in.
-    if command -v opencode >/dev/null 2>&1; then
+    # Gate on opencode as DOCTOR sees it — the SANITIZED gclean_path, not the suite's own
+    # PATH. This suite puts a FAKE `opencode` on PATH that gclean_path strips, so an
+    # unqualified `command -v opencode` reports present on an opencode-free CI runner and
+    # wrongly takes the exit-0 branch while doctor (no opencode) correctly FAILs.
+    if PATH="$gclean_path" command -v opencode >/dev/null 2>&1; then
       { [ "$grc" -eq 0 ] && ! printf '%s' "$gout" | grep -q 'FAIL'; } \
         && ok "doctor/global: a clean global install exits 0 with zero FAIL lines" \
         || no "doctor/global: clean global install did not exit clean (rc=$grc): $(printf '%s' "$gout" | grep 'FAIL' | head -3)"
