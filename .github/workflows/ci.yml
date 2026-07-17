@@ -48,10 +48,10 @@ jobs:
           exit "$rc"
 
       - name: ShellCheck (severity=warning)
-        run: |
-          # warning severity: catch real bugs (unset vars, bad quoting, dead code)
-          # without failing on info/style nits. Tighten later if desired.
-          xargs -a /tmp/shfiles shellcheck --severity=warning --shell=bash
+        # Single source of truth: the same script a dev runs locally and doctor --full
+        # calls, so the file set + flags can't drift between local and CI. It skips
+        # cleanly if shellcheck is absent — the Install step above guarantees it here.
+        run: bash collab/tests/check-shellcheck.sh
 
       - name: Shebang conformance (#!/usr/bin/env bash everywhere)
         run: bash collab/tests/check-shebangs.sh

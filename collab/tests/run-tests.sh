@@ -326,6 +326,45 @@ ERR4="$(cat "$errf4")"; rm -f "$errf4"
   || no "collab-research fallback wrong (agent: $(tr '\n' ' ' <"$argsfile"); err: $ERR4)"
 rm -rf "$tmp_repo4"
 
+# 14e. COLLAB_AGENT_DIR governs the wrapper's def-EXISTENCE (fallback) check. It changes
+#      ONLY whether the wrapper falls back; opencode still resolves --agent from its own
+#      config. These cases prove the env/config value is consulted instead of the default
+#      sibling path, in both directions. (Path-resolution plumbing for a future shared
+#      install — PLAN.md "Global install", change B.)
+#
+# 14e-i. def ABSENT at COLLAB_AGENT_DIR (points at an empty dir) even though the REAL
+#        ask.sh has the def at its default sibling location -> must fall back to plan.
+#        Proves the default is NOT consulted when the env var is set.
+emptyad="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+: > "$argsfile"
+COLLAB_AGENT_DIR="$emptyad" COLLAB_LOG=off COLLAB_POLICY="$allow_pol" bash "$ask" "q" >/dev/null 2>&1
+{ args_has 'plan' && ! args_has 'collab-read'; } \
+  && ok "COLLAB_AGENT_DIR (empty dir) -> real ask.sh falls back to plan (default path ignored)" \
+  || no "COLLAB_AGENT_DIR not consulted for the fallback check (got: $(tr '\n' ' ' <"$argsfile"))"
+rm -rf "$emptyad"
+
+# 14e-ii. def PRESENT at COLLAB_AGENT_DIR, with a wrapper copy that has NO sibling
+#         .opencode -> the env dir makes the otherwise-missing def "present", so NO
+#         fallback: collab-read is used. The reverse of 14e-i.
+tmp_ad="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$tmp_ad/collab"
+cp "$ask" "$tmp_ad/collab/ask.sh"
+adir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; : > "$adir/collab-read.md"
+: > "$argsfile"
+COLLAB_AGENT_DIR="$adir" COLLAB_LOG=off COLLAB_POLICY="$allow_pol" bash "$tmp_ad/collab/ask.sh" "q" >/dev/null 2>&1
+{ args_has 'collab-read' && ! args_has 'plan' && ! args_has 'build'; } \
+  && ok "COLLAB_AGENT_DIR with the def present -> no fallback (collab-read used)" \
+  || no "COLLAB_AGENT_DIR did not satisfy the def check (got: $(tr '\n' ' ' <"$argsfile"))"
+
+# 14e-iii. Same, but COLLAB_AGENT_DIR supplied via collab.conf.local (config path, not
+#          env) -> also honored. Proves conf_get feeds the resolution.
+adconf="$(mktemp "${TMPDIR:-/tmp}/collab.XXXXXX")"; printf 'COLLAB_AGENT_DIR=%s\n' "$adir" > "$adconf"
+: > "$argsfile"
+COLLAB_CONF="$adconf" COLLAB_LOG=off COLLAB_POLICY="$allow_pol" bash "$tmp_ad/collab/ask.sh" "q" >/dev/null 2>&1
+{ args_has 'collab-read' && ! args_has 'plan' && ! args_has 'build'; } \
+  && ok "COLLAB_AGENT_DIR from collab.conf.local -> no fallback (collab-read used)" \
+  || no "COLLAB_AGENT_DIR from config not consulted (got: $(tr '\n' ' ' <"$argsfile"))"
+rm -f "$adconf"; rm -rf "$tmp_ad" "$adir"
+
 # 14c. COLLAB_REQUIRE_HARDENED=1 turns a missing def into a hard error (exit 5, no
 #      opencode call) instead of falling back to a weaker/unrestricted agent.
 tmp_repo3="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$tmp_repo3/collab"
@@ -798,6 +837,78 @@ hsec="$(sed -n '/== Agent permission proof (runtime, --full) ==/,/^$/p' "$houtf"
   || no "doctor/full: hard runtime contradiction was downgraded (rc=$hrc): $hsec"
 rm -rf "$harddoc"
 
+# --- doctor.sh GLOBAL-INSTALL awareness (Slice D1) -----------------------------
+# A --global install lays the agent defs into opencode's global agent dir and the
+# commands into <CLAUDE_DIR>/commands/collab — NOT the repo-relative .opencode/agent
+# and .claude/commands paths. Before D1, doctor false-FAILed "MISSING" on every def
+# and command of a healthy global install, the source lint failed the same way, and the
+# wrapper-unit check ran run-tests.sh (a repo-development suite with repo-only fixtures)
+# and false-FAILed too — the exact "your install is broken" cry-wolf this repo kills. Do
+# a REAL sandboxed global install and run the INSTALLED doctor, asserting the fixed
+# sections are healthy AND the whole run exits 0 with no FAIL line.
+#
+# No recursion guard is needed: in global mode doctor SKIPS run-tests.sh (this suite) with
+# a neutral note, and its installer-smoke check is gated on install.sh, which a global
+# install does not place — so the installed global doctor runs no nested test suite at all.
+# Gated on install.sh (only in the ClaudeCollab checkout; absent in an installed project).
+if [ -f "$repo_root/install.sh" ]; then
+  gdoc="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; mkdir -p "$gdoc/.config"
+  # Run the installed doctor in a SANITIZED environment mirroring a real end-user shell:
+  #   - strip $fakedir from PATH so doctor doesn't find THIS harness's fake `opencode`
+  #     (which would make the resolved-config proof run against the stub and false-FAIL —
+  #     an artifact of the test rig, not of doctor).
+  #   - clear the COLLAB_* vars this suite exports (COLLAB_LOG_DIR etc.) so doctor reads
+  #     the INSTALLED conf.local, not the rig's logging dir.
+  gclean_path="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$fakedir" | paste -sd ':' -)"
+  if HOME="$gdoc" XDG_CONFIG_HOME="$gdoc/.config" bash "$repo_root/install.sh" --global >/dev/null 2>&1; then
+    gout="$(PATH="$gclean_path" HOME="$gdoc" XDG_CONFIG_HOME="$gdoc/.config" \
+            COLLAB_LOG_DIR='' COLLAB_LOG='' COLLAB_CONF='' COLLAB_POLICY='' COLLAB_MODEL='' COLLAB_MODELS='' COLLAB_AGENT_DIR='' \
+            run_with_optional_timeout 120 bash "$gdoc/.claude/collab/doctor.sh" 2>&1)"; grc=$?
+    gagents="$(printf '%s\n' "$gout" | sed -n '/== Agent definitions ==/,/^$/p')"
+    gcmds="$(printf '%s\n' "$gout" | sed -n '/== Slash commands ==/,/^$/p')"
+    glint="$(printf '%s\n' "$gout" | sed -n '/== Agent permission invariants (source lint) ==/,/^$/p')"
+    { [ "$(printf '%s' "$gagents" | grep -c 'present and ours')" -eq 4 ] && ! printf '%s' "$gagents" | grep -qE 'MISSING|did NOT install'; } \
+      && ok "doctor/global: all four agent defs found in the global agent dir (no false MISSING)" \
+      || no "doctor/global: agent-def check false-fails in a global install: $gagents"
+    { printf '%s' "$gcmds" | grep -q 'all 9 ClaudeCollab slash commands present and ours' && ! printf '%s' "$gcmds" | grep -q 'MISSING'; } \
+      && ok "doctor/global: all nine slash commands found under commands/collab (no false MISSING)" \
+      || no "doctor/global: slash-command check false-fails in a global install: $gcmds"
+    { printf '%s' "$glint" | grep -q 'PASS' && ! printf '%s' "$glint" | grep -q 'FAIL'; } \
+      && ok "doctor/global: source lint passes against the global agent dir" \
+      || no "doctor/global: source lint false-fails in a global install: $glint"
+    printf '%s' "$gout" | grep -q '== Agent guide ==' \
+      && no "doctor/global: polices the user's own CLAUDE.md in a global install (out of scope)" \
+      || ok "doctor/global: Agent-guide section stays silent (global = installed, CLAUDE.md is the user's)"
+    printf '%s' "$gout" | grep -q 'wrapper unit suite skipped in a global install' \
+      && ok "doctor/global: wrapper unit suite is skipped with a neutral note (repo-only fixtures)" \
+      || no "doctor/global: wrapper unit suite was not skipped in a global install: $(printf '%s' "$gout" | sed -n '/== Wrapper unit tests ==/,/^$/p')"
+    # The headline property: with opencode available, a CLEAN global install must not cry
+    # wolf — exit 0, no FAIL. In a credential-free/opencode-free CI, opencode is legitimately
+    # absent, so doctor CORRECTLY FAILs on that missing prerequisite (a true fail, not a
+    # global-layout false-fail) — the D1 property is already covered by the three per-section
+    # assertions above, which need no opencode. So only assert the exit-0 headline where
+    # opencode actually exists; otherwise assert no NON-opencode FAIL slipped in.
+    # Gate on opencode as DOCTOR sees it — the SANITIZED gclean_path, not the suite's own
+    # PATH. This suite puts a FAKE `opencode` on PATH that gclean_path strips, so an
+    # unqualified `command -v opencode` reports present on an opencode-free CI runner and
+    # wrongly takes the exit-0 branch while doctor (no opencode) correctly FAILs.
+    if PATH="$gclean_path" command -v opencode >/dev/null 2>&1; then
+      { [ "$grc" -eq 0 ] && ! printf '%s' "$gout" | grep -q 'FAIL'; } \
+        && ok "doctor/global: a clean global install exits 0 with zero FAIL lines" \
+        || no "doctor/global: clean global install did not exit clean (rc=$grc): $(printf '%s' "$gout" | grep 'FAIL' | head -3)"
+    else
+      # Exclude the derived "doctor: PROBLEMS — fix the FAIL line(s)" SUMMARY (it contains the
+      # word FAIL but is not a per-check failure); assert no per-check FAIL other than opencode.
+      { ! printf '%s' "$gout" | grep 'FAIL' | grep -v 'PROBLEMS' | grep -qvi 'opencode'; } \
+        && ok "doctor/global: opencode-free env — only the true opencode-absent FAIL, no global-layout false-fail" \
+        || no "doctor/global: an unexpected non-opencode FAIL in a global install: $(printf '%s' "$gout" | grep 'FAIL' | grep -v 'PROBLEMS' | grep -vi 'opencode' | head -3)"
+    fi
+  else
+    no "doctor/global: install.sh --global failed in the meta-test sandbox"
+  fi
+  rm -rf "$gdoc"
+fi
+
 # --- check-shebangs.sh meta-tests ----------------------------------------------
 # A lint nobody proved can fail is decoration. Assert it accepts the conforming
 # form and rejects each way a script could drift off `#!/usr/bin/env bash`.
@@ -838,6 +949,42 @@ bash "$shb" "$shbdir/data.txt" >/dev/null 2>&1 \
   || no "shebang lint wrongly failed a non-script file"
 
 rm -rf "$shbdir"
+
+# --- check-shellcheck.sh meta-tests --------------------------------------------
+# Prove the lint accepts a clean script, catches a real warning-level finding, and
+# SKIPS cleanly when shellcheck is absent — so CI's macOS job and shellcheck-less devs
+# never false-fail. The accept/catch cases need shellcheck; the skip case never does.
+scc="$repo_root/collab/tests/check-shellcheck.sh"
+sccdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+
+# Skip-when-absent: give the child an empty PATH so shellcheck is genuinely absent,
+# then assert a clean exit + the skip note. Stripping shellcheck's dir from PATH is
+# UNRELIABLE on usrmerge Linux (where /bin and /usr/bin are the same directory, so
+# removing one leaves shellcheck reachable via the other — which false-passed locally
+# on macOS, where the dirs are separate, and failed on the Linux CI runner).
+# check-shellcheck.sh runs no external command before its skip-and-exit, so an empty
+# PATH is safe; bash is invoked by its absolute path so the child still starts.
+scc_bash="$(command -v bash)"
+scc_out="$(PATH=/nonexistent "$scc_bash" "$scc" "$sccdir/none.sh" 2>&1)"; scc_rc=$?
+{ [ "$scc_rc" -eq 0 ] && printf '%s' "$scc_out" | grep -qi 'not installed'; } \
+  && ok "shellcheck lint: skips cleanly (exit 0 + note) when shellcheck is absent" \
+  || no "shellcheck lint did not skip cleanly without shellcheck (rc=$scc_rc): $scc_out"
+
+if command -v shellcheck >/dev/null 2>&1; then
+  printf '#!/usr/bin/env bash\necho hi\n' > "$sccdir/good.sh"
+  bash "$scc" "$sccdir/good.sh" >/dev/null 2>&1 \
+    && ok "shellcheck lint: accepts a clean script" \
+    || no "shellcheck lint rejects a clean script (false positive)"
+  # `echo $(ls)` is SC2046 (word splitting) — a stable warning-level finding.
+  printf '#!/usr/bin/env bash\necho $(ls)\n' > "$sccdir/bad.sh"
+  bash "$scc" "$sccdir/bad.sh" >/dev/null 2>&1 \
+    && no "shellcheck lint MISSED a warning-level issue (SC2046)" \
+    || ok "shellcheck lint: catches a warning-level issue (SC2046)"
+else
+  ok "shellcheck lint: accept/catch cases skipped (shellcheck not installed here)"
+fi
+
+rm -rf "$sccdir"
 
 # ---------------------------------------------------------------------------
 # Evidence layer (collab/log.sh + ask.sh's hooks) — Phase W0.
@@ -1425,6 +1572,104 @@ touch -d "60 days ago" "$oldrun" 2>/dev/null || touch -t 202001010000 "$oldrun" 
 bash "$logsh" prune --days 14 >/dev/null 2>&1
 [ ! -d "$oldrun" ] && ok "log: prune removes runs past the retention window" \
                    || no "log: prune left a 60-day-old run in place"
+
+# --- per-project log partitioning (COLLAB_LOG_PARTITION; opt-in) ---------------
+# A future shared install keeps ONE collab/logs tree; partitioning gives each project
+# its own subdir BELOW it so `latest`, retention and /collab:witness never cross
+# projects. OFF by default = today's flat layout, byte-identical. The suite exports
+# COLLAB_LOG_DIR globally, which DISABLES partitioning — so every case here runs with it
+# unset in a subshell (mirroring the delegate-fixture pattern), or explicitly sets it to
+# assert it wins.
+# Canonicalize partroot: log.sh derives its base via `cd "$(dirname "$0")" && pwd`,
+# which collapses the `//` a macOS TMPDIR (trailing slash) leaves in a bare mktemp path.
+# base_logs must match that canonical form for the string comparisons below.
+partroot="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")" && pwd)"; mkdir -p "$partroot/collab"
+cp "$logsh" "$partroot/collab/log.sh"; plogsh="$partroot/collab/log.sh"
+base_logs="$partroot/collab/logs"
+projA="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; projB="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+# git-init each project so its key derives from a distinct git top-level — deterministic
+# even if TMPDIR happens to sit inside another repo. (Falls back to CWD if git absent;
+# the two paths still differ, so the keys still differ.)
+if command -v git >/dev/null 2>&1; then
+  ( cd "$projA" && git init -q ) 2>/dev/null || true
+  ( cd "$projB" && git init -q ) 2>/dev/null || true
+fi
+
+# ON: a run lands under <base>/<project-key>/<run>. Resolve the dir under the same
+# cwd+env so the key derivation matches the one new-run used.
+rA="$( cd "$projA" && unset COLLAB_LOG_DIR && COLLAB_LOG_PARTITION=1 bash "$plogsh" new-run /collab:consult )"
+dirA="$( cd "$projA" && unset COLLAB_LOG_DIR && COLLAB_LOG_PARTITION=1 bash "$plogsh" dir "$rA" )"
+rB="$( cd "$projB" && unset COLLAB_LOG_DIR && COLLAB_LOG_PARTITION=1 bash "$plogsh" new-run /collab:consult )"
+dirB="$( cd "$projB" && unset COLLAB_LOG_DIR && COLLAB_LOG_PARTITION=1 bash "$plogsh" dir "$rB" )"
+keyA="${dirA#"$base_logs/"}"; keyA="${keyA%%/*}"
+keyB="${dirB#"$base_logs/"}"; keyB="${keyB%%/*}"
+
+# The run dir must sit UNDER the base collab/logs tree (a KEY segment, not flat), so the
+# watch-scope check and the `**/collab/logs/**` glob still match.
+{ case "$dirA" in "$base_logs/"*) true ;; *) false ;; esac; } \
+  && [ -n "$keyA" ] && [ "$keyA" != "$rA" ] && [ "$dirA" = "$base_logs/$keyA/$rA" ] \
+  && ok "log: PARTITION=1 places a run under <base>/<project-key>/<run>, below collab/logs" \
+  || no "log: PARTITION=1 did not partition under the base (dirA=$dirA base=$base_logs key=$keyA)"
+
+# Two project roots with DIFFERENT basenames get different keys. Weak on its own — the
+# random mktemp basenames already differ, so this passes on the basename alone and would
+# NOT notice the path-hash suffix being dropped. The shared-basename case below is the
+# one that actually exercises the hash; this stays as a baseline.
+{ [ -n "$keyA" ] && [ -n "$keyB" ] && [ "$keyA" != "$keyB" ]; } \
+  && ok "log: PARTITION=1 gives two different-basename project roots different keys" \
+  || no "log: two project roots collided on the same key (A=$keyA B=$keyB)"
+
+# SHARED basename, different parents: the key prefix is identical ("proj"), so ONLY the
+# path-hash suffix can distinguish the two. This is the property the hash exists for and
+# the collision the basename-alone token would produce. It MUST fail if the hash suffix
+# were dropped — both keys would collapse to "proj" and neither the inequality nor the
+# `proj-*` shape check below would hold.
+sharedA="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"; sharedB="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+mkdir -p "$sharedA/proj" "$sharedB/proj"
+if command -v git >/dev/null 2>&1; then
+  ( cd "$sharedA/proj" && git init -q ) 2>/dev/null || true
+  ( cd "$sharedB/proj" && git init -q ) 2>/dev/null || true
+fi
+srA="$( cd "$sharedA/proj" && unset COLLAB_LOG_DIR && COLLAB_LOG_PARTITION=1 bash "$plogsh" new-run /collab:consult )"
+sdirA="$( cd "$sharedA/proj" && unset COLLAB_LOG_DIR && COLLAB_LOG_PARTITION=1 bash "$plogsh" dir "$srA" )"
+srB="$( cd "$sharedB/proj" && unset COLLAB_LOG_DIR && COLLAB_LOG_PARTITION=1 bash "$plogsh" new-run /collab:consult )"
+sdirB="$( cd "$sharedB/proj" && unset COLLAB_LOG_DIR && COLLAB_LOG_PARTITION=1 bash "$plogsh" dir "$srB" )"
+skeyA="${sdirA#"$base_logs/"}"; skeyA="${skeyA%%/*}"
+skeyB="${sdirB#"$base_logs/"}"; skeyB="${skeyB%%/*}"
+{ [ -n "$skeyA" ] && [ -n "$skeyB" ] && [ "$skeyA" != "$skeyB" ] \
+  && case "$skeyA" in proj-*) true ;; *) false ;; esac \
+  && case "$skeyB" in proj-*) true ;; *) false ;; esac; } \
+  && ok "log: PARTITION=1 distinguishes two SAME-basename projects by the path-hash suffix" \
+  || no "log: shared-basename projects collided (A=$skeyA B=$skeyB) — hash suffix not distinguishing"
+
+# The "logging must never fail the call" invariant, at LOAD time: a failing git (or
+# hasher) while deriving the project key must NOT abort. Shadow git with a stub that
+# exits non-zero; the call must still exit 0 and create its run dir (key falls back to
+# $PWD). This locks the invariant so a future edit dropping a `|| true` fails CI.
+gitstub="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+printf '#!/usr/bin/env bash\nexit 127\n' > "$gitstub/git"; chmod +x "$gitstub/git"
+grid="$( cd "$projA" && unset COLLAB_LOG_DIR && PATH="$gitstub:$PATH" COLLAB_LOG_PARTITION=1 bash "$plogsh" new-run /collab:consult )"; grc=$?
+gdir="$( cd "$projA" && unset COLLAB_LOG_DIR && PATH="$gitstub:$PATH" COLLAB_LOG_PARTITION=1 bash "$plogsh" dir "$grid" )"
+{ [ "$grc" -eq 0 ] && [ -n "$grid" ] && [ -d "$gdir" ]; } \
+  && ok "log: PARTITION=1 with git failing at load -> exit 0, run dir still created (never-fail invariant)" \
+  || no "log: a failing git at load broke the partitioned call (rc=$grc, dir=$gdir)"
+
+# OFF (default): the run lands DIRECTLY in the base logs dir — today's layout, unchanged.
+rOff="$( cd "$projA" && unset COLLAB_LOG_DIR && bash "$plogsh" new-run /collab:consult )"
+dirOff="$( cd "$projA" && unset COLLAB_LOG_DIR && bash "$plogsh" dir "$rOff" )"
+[ "$dirOff" = "$base_logs/$rOff" ] \
+  && ok "log: partitioning OFF -> run lands directly in the base logs dir (no key segment)" \
+  || no "log: OFF changed the log layout (dirOff=$dirOff, expected $base_logs/$rOff)"
+
+# An explicit COLLAB_LOG_DIR wins and DISABLES partitioning, even with PARTITION=1: the
+# caller named exactly where logs go.
+explicitld="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+rE="$( cd "$projA" && COLLAB_LOG_DIR="$explicitld" COLLAB_LOG_PARTITION=1 bash "$plogsh" new-run /collab:consult )"
+dirE="$( cd "$projA" && COLLAB_LOG_DIR="$explicitld" COLLAB_LOG_PARTITION=1 bash "$plogsh" dir "$rE" )"
+[ "$dirE" = "$explicitld/$rE" ] \
+  && ok "log: explicit COLLAB_LOG_DIR beats PARTITION=1 (no per-project subdir)" \
+  || no "log: PARTITION overrode an explicit COLLAB_LOG_DIR (dirE=$dirE, expected $explicitld/$rE)"
+rm -rf "$partroot" "$projA" "$projB" "$explicitld" "$sharedA" "$sharedB" "$gitstub"
 
 echo
 printf 'wrapper + panel + lint + log tests: %d passed, %d failed, %d inconclusive\n' "$pass" "$fail" "$inconclusive"
