@@ -557,13 +557,23 @@ g_write_conf() {
 global_install() {
   g_resolve_roots create
   # A global command file bakes the resolved CLAUDE_DIR into its body and every
-  # allowed-tools grant as an UNQUOTED shell token (`bash <dir>/collab/ask.sh …`), so a
-  # whitespace-bearing path (a $HOME with a space) would word-split at runtime and break
-  # every command silently. Fail closed with an actionable message instead — this is the
+  # allowed-tools grant as an UNQUOTED shell token (`bash <dir>/collab/ask.sh …`), so the
+  # path must be shell-safe: whitespace would word-split at runtime, and a shell
+  # metacharacter (& ; | ( ) < > * ? etc.) would mis-parse or glob it — silently breaking
+  # every command. Guard with a positive ALLOWLIST of characters known safe both unquoted
+  # in a command AND in the `${//}` literal replacement that does the templating: letters,
+  # digits, and ._/+@%,:=~- . (bash 5.2 adds a further trap — an '&' in a ${//} replacement
+  # triggers patsub_replacement and re-injects the matched text; the allowlist bars '&' too,
+  # so the templating stays literal on every bash.) Fail closed with an actionable message.
+  #
+  # CLAUDE_DIR ONLY — this is deliberate. CLAUDE_DIR is what gets baked unquoted into
+  # commands. OPENCODE_AGENT_DIR is only written to conf.local as `COLLAB_AGENT_DIR=<dir>`,
+  # which conf_get parses and ask.sh uses QUOTED (in `-f` checks), so a special char there
+  # is harmless and MUST stay allowed (the backslash conf-merge test relies on it).
   # INSTALL path only; global_uninstall must never refuse, so it can always clean up.
-  case "$CLAUDE_DIR$OPENCODE_AGENT_DIR" in
-    *[[:space:]]*)
-      die "--global cannot bake a path containing whitespace into command invocations (resolved: '$CLAUDE_DIR', '$OPENCODE_AGENT_DIR'). Use the per-project install (bash install.sh --dest <project>), or a home path without spaces." ;;
+  case "$CLAUDE_DIR" in
+    *[!A-Za-z0-9._/+@%,:=~-]*)
+      die "--global: the resolved Claude dir '$CLAUDE_DIR' contains a character unsafe to bake unquoted into command invocations (whitespace, a shell metacharacter like & ; | ( ), or a glob char). Use the per-project install (bash install.sh --dest <project>), or a home path limited to letters, digits, and ._/-" ;;
   esac
   if [ "$src" -ef "$CLAUDE_DIR" ] 2>/dev/null; then
     die "Payload source is your Claude config dir itself — run --global from a clone or via curl … | bash."

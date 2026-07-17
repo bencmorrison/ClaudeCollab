@@ -586,19 +586,24 @@ printf '%s' "$exp" > "$G/.exp.md"
 check "global commands: installed file is byte-identical to the literal transform" "cmp -s '$G/.exp.md' '$cdir/commands/collab/panel.md'"
 rm -rf "$G"
 
-# --- command templating is a LITERAL replacement: a '\' or '&' in CLAUDE_DIR ---
-# round-trips byte-exactly (sed/awk would reinterpret them — same class as awk -v).
+# --- a CLAUDE_DIR with a shell metacharacter (\ &) is REFUSED, not baked in -----
+# CLAUDE_DIR is baked UNQUOTED into command invocations, so a shell-unsafe char must
+# fail closed. (The templating's ${//} literal replacement stays correct-by-construction
+# for the ALLOWED charset — this guard supersedes the old byte-exact round-trip test, and
+# also dodges bash 5.2's patsub_replacement, where an '&' in the replacement re-injects
+# the match.) OPENCODE_AGENT_DIR is NOT guarded (see the backslash conf test below).
 G="$(gsandbox)"; sh="$G/h\\x&y"
 if mkdir -p "$sh" 2>/dev/null && [ -d "$sh" ]; then
-  HOME="$sh" XDG_CONFIG_HOME="$G/.config" bash "$installer" --global >/dev/null 2>&1
-  cdir="$(cd "$sh/.claude" && pwd -P)"
-  exp="$(cat "$repo_root/.claude/commands/collab/panel.md"; printf x)"; exp="${exp%x}"
-  exp="${exp//bash collab\//bash $cdir/collab/}"
-  printf '%s' "$exp" > "$G/.exp2.md"
-  check "global commands \\&: literal transform round-trips byte-exactly"        "cmp -s '$G/.exp2.md' '$cdir/commands/collab/panel.md'"
-  check "global commands \\&: NO residual 'bash collab/' remains"                "! grep -q 'bash collab/' '$cdir/commands/collab/panel.md'"
+  mout="$G/.m.txt"
+  if HOME="$sh" XDG_CONFIG_HOME="$G/.config" bash "$installer" --global > "$mout" 2>&1; then
+    no "global commands \\&: a metachar CLAUDE_DIR is refused"
+  else
+    ok "global commands \\&: a metachar CLAUDE_DIR is refused"
+  fi
+  check "global commands \\&: prints the actionable unsafe-path refusal" "grep -qi 'unsafe' '$mout'"
+  check "global commands \\&: writes NO command files under it"          "[ ! -e '$sh/.claude/commands' ]"
 else
-  ok "global commands \\& [FS rejects such names]: skipped; literal transform proven for the normal path above"
+  ok "global commands \\& [FS rejects such names]: skipped; the guard is charset-based and proven for space/';' below"
 fi
 rm -rf "$G"
 
@@ -754,10 +759,12 @@ else
 fi
 rm -rf "$G" "$P"
 
-# --- --global refuses a resolved path containing whitespace ------------------
-# A command file bakes CLAUDE_DIR into its body/grants as an UNQUOTED token, so a
-# space in the path would word-split at runtime and silently break every command.
-# The installer must fail closed (install path only) rather than write broken files.
+# --- --global refuses a CLAUDE_DIR outside the shell-safe charset ------------
+# A command file bakes CLAUDE_DIR into its body/grants as an UNQUOTED token, so any
+# shell-unsafe char (whitespace, or a metacharacter like ; & | ( ) *) would word-split,
+# mis-parse or glob at runtime and silently break every command. The installer fails
+# closed (install path only) rather than write broken files. The refusal message keeps
+# the word "whitespace" (the space is the canonical case) AND names shell metacharacters.
 G="$(gsandbox)"; ws="$G/a b"; mkdir -p "$ws"
 wout="$G/.ws.txt"
 if HOME="$ws" XDG_CONFIG_HOME="$G/.config" bash "$installer" --global > "$wout" 2>&1; then
@@ -768,6 +775,21 @@ fi
 check "global whitespace: prints an actionable refusal mentioning whitespace" "grep -qi 'whitespace' '$wout'"
 nf="$(find "$ws" -type f 2>/dev/null | head -1)"
 check "global whitespace: writes NO files under the space-bearing home"        "[ -z '$nf' ]"
+rm -rf "$G"
+
+# A shell metacharacter (';') in CLAUDE_DIR is refused too, for the same reason.
+G="$(gsandbox)"; mc="$G/a;b"
+if mkdir -p "$mc" 2>/dev/null && [ -d "$mc" ]; then
+  scout="$G/.sc.txt"
+  if HOME="$mc" XDG_CONFIG_HOME="$G/.config" bash "$installer" --global > "$scout" 2>&1; then
+    no "global: refuses a CLAUDE_DIR with a shell metacharacter (';')"
+  else
+    ok "global: refuses a CLAUDE_DIR with a shell metacharacter (';')"
+  fi
+  check "global metachar: writes NO files under the ';'-bearing home" "[ -z \"\$(find \"$mc\" -type f 2>/dev/null | head -1)\" ]"
+else
+  ok "global metachar [FS rejects ';' names]: skipped"
+fi
 rm -rf "$G"
 
 # --- the real home must never have been touched by any of the above ----------
