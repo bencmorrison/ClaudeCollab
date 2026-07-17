@@ -950,6 +950,39 @@ bash "$shb" "$shbdir/data.txt" >/dev/null 2>&1 \
 
 rm -rf "$shbdir"
 
+# --- check-shellcheck.sh meta-tests --------------------------------------------
+# Prove the lint accepts a clean script, catches a real warning-level finding, and
+# SKIPS cleanly when shellcheck is absent — so CI's macOS job and shellcheck-less devs
+# never false-fail. The accept/catch cases need shellcheck; the skip case never does.
+scc="$repo_root/collab/tests/check-shellcheck.sh"
+sccdir="$(mktemp -d "${TMPDIR:-/tmp}/collab.XXXXXX")"
+
+# Skip-when-absent: run with shellcheck's dir removed from PATH (invoke bash by its
+# absolute path so the child still starts), assert a clean exit + the skip note.
+scc_bash="$(command -v bash)"
+scc_scdir="$(command -v shellcheck 2>/dev/null || true)"; scc_scdir="${scc_scdir%/*}"
+scc_nopath="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "${scc_scdir:-/nonexistent}" | paste -sd ':' -)"
+scc_out="$(PATH="$scc_nopath" "$scc_bash" "$scc" "$sccdir/none.sh" 2>&1)"; scc_rc=$?
+{ [ "$scc_rc" -eq 0 ] && printf '%s' "$scc_out" | grep -qi 'not installed'; } \
+  && ok "shellcheck lint: skips cleanly (exit 0 + note) when shellcheck is absent" \
+  || no "shellcheck lint did not skip cleanly without shellcheck (rc=$scc_rc): $scc_out"
+
+if command -v shellcheck >/dev/null 2>&1; then
+  printf '#!/usr/bin/env bash\necho hi\n' > "$sccdir/good.sh"
+  bash "$scc" "$sccdir/good.sh" >/dev/null 2>&1 \
+    && ok "shellcheck lint: accepts a clean script" \
+    || no "shellcheck lint rejects a clean script (false positive)"
+  # `echo $(ls)` is SC2046 (word splitting) — a stable warning-level finding.
+  printf '#!/usr/bin/env bash\necho $(ls)\n' > "$sccdir/bad.sh"
+  bash "$scc" "$sccdir/bad.sh" >/dev/null 2>&1 \
+    && no "shellcheck lint MISSED a warning-level issue (SC2046)" \
+    || ok "shellcheck lint: catches a warning-level issue (SC2046)"
+else
+  ok "shellcheck lint: accept/catch cases skipped (shellcheck not installed here)"
+fi
+
+rm -rf "$sccdir"
+
 # ---------------------------------------------------------------------------
 # Evidence layer (collab/log.sh + ask.sh's hooks) — Phase W0.
 # This is the data a watcher agent audits INSTEAD of Claude's own summary, so the

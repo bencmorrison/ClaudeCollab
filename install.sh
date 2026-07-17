@@ -65,6 +65,7 @@ PAYLOAD_FILES=(
   "collab/tests/check-docs.sh"
   "collab/tests/check-frontmatter.sh"
   "collab/tests/check-shebangs.sh"
+  "collab/tests/check-shellcheck.sh"
   "collab/tests/fake-opencode"
   "collab/tests/run-tests.sh"
   "collab/tests/test-install.sh"

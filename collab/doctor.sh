@@ -373,6 +373,22 @@ if [ -d .git ] && [ -f collab/tests/check-shebangs.sh ]; then
   else bad "non-conforming shebang(s) — run: bash collab/tests/check-shebangs.sh"; fi
 fi
 
+# --- 6z2. ShellCheck (--full; needs the git checkout + shellcheck) ------------
+# Same class as the shebang lint: a repo-development check that `git ls-files` the
+# source, so it is gated on the checkout and skipped in installs. Under --full only
+# (external tool), and it skips cleanly with a note when shellcheck is absent — so it
+# never false-fails; CI's Linux job is the enforcer on every push.
+if [ -n "$full" ] && [ -d .git ] && [ -f collab/tests/check-shellcheck.sh ]; then
+  hdr "ShellCheck (static analysis)"
+  if ! command -v shellcheck >/dev/null 2>&1; then
+    warn "shellcheck not installed — skipped (install: brew install shellcheck); CI's Linux job enforces it"
+  elif bash collab/tests/check-shellcheck.sh >/dev/null 2>&1; then
+    pass "every tracked shell script passes shellcheck (severity=warning)"
+  else
+    bad "shellcheck found issues — run: bash collab/tests/check-shellcheck.sh"
+  fi
+fi
+
 # --- 6a. Agent permission invariants (source-level lint; no opencode needed) --
 # In a global install the defs are in opencode's global agent dir, so point the lint
 # there via COLLAB_AGENT_DIR (which it honors); per-project/repo runs it unchanged.
