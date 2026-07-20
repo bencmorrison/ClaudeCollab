@@ -8,6 +8,7 @@ Convene a panel of models for multiple independent perspectives on:
 $ARGUMENTS
 
 1. **Resolve the panel's models.** Run `bash collab/panel-models.sh [provider/model ...]` — pass explicit ids, or pass none to use `$COLLAB_MODELS` (ordered, space- or comma-separated). It de-duplicates and **warns about single-model or single-provider sets ("diversity theater")**. Read its stdout (the resolved list) and heed any stderr warnings; if it warns the panel isn't diverse, pick models from different providers/families before continuing (run `opencode models` to see what's available). Aim for 2-3 models from different families.
+   - **An explicit user request overrides the role rule below.** If the user asked for a specific model or vendor on the panel (e.g. "include Anthropic"), put it there and skip the leaning — the role heuristic only picks the default when the user didn't say (issue #3).
    - Your role decides whether Anthropic is on the panel: if you're purely **coordinating** (the user asked you to hand the work out and synthesize, not weigh in yourself), an **Anthropic model may be one of the 2-3** so that perspective is represented. If you're also **authoring** your own view as the tie-breaker, lean toward **non-Anthropic** models — you already supply the Anthropic perspective.
 2. **Open one run for the whole panel** so the evidence layer records it as a single auditable unit rather than N unrelated calls: `RUN=$(bash collab/log.sh new-run /collab:panel)`. Use that `$RUN` for every call below.
 3. Ask each the SAME question, one call per model:

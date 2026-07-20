@@ -10,6 +10,8 @@ $ARGUMENTS
 
 **Cost up front.** This is roughly **2 calls per model** (~6 for a 3-model panel). Tell the user the model set and the call count *before* you start, and let them stop you. Use `--rounds 1` reasoning (skip step 7) if they want it cheap.
 
+**Before anything: did the user name who should be on the panel?** If they asked for a specific model or vendor — "make sure Anthropic's at the table", "put Claude on it", "use gpt-5" — that is an **instruction and it wins outright**: put them on the panel and skip the mode leaning entirely. The mode below only chooses the default when the user did *not* specify. Do **not** let the authoring default talk you out of an explicit request — that is exactly issue #3.
+
 **Pick your mode first, and say which out loud.** It changes who's on the panel, so it must not be decided silently:
 - **Authoring** (default) — you contribute your own plan as a labelled voice and make the judgement calls. The Anthropic perspective is then already in the room via you, so the panel should lean **non-Anthropic**: adding an Anthropic panelist here duplicates you rather than adding a missing angle.
 - **Coordinating** — the user asked you to run the session and *not* weigh in ("coordinate only", "don't give me your take", "just run it"). You package, reconcile, and report, but you do not inject your own plan or break ties. Now the Anthropic perspective is genuinely **absent**, so an **Anthropic model is eligible** on the panel — and often *should* be, or that perspective is missing from the work entirely.
