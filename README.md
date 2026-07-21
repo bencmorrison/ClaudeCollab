@@ -85,6 +85,25 @@ bash collab/doctor.sh   # preflight check of the whole setup (token-free)
 ```
 Repeat `opencode auth login` for each provider you want (OpenAI / ChatGPT, GitHub Copilot, Google Gemini, …).
 
+### Updating
+
+**Updating is the same command as installing** — re-run the one-liner in the project you installed into:
+```bash
+curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash
+```
+There is no separate "update" mode. The installer is idempotent: the first run installs and records each file's SHA-256; a later run reconciles against that record. It fetches the **latest release tag** (so you only move forward when a new release is cut — a merge to `main` alone doesn't reach you unless you pass `--ref main`), resolves and **prints the release it picked**, then:
+
+- **upgrades a file only while its bytes still match the hash recorded at install** — so files you have not touched get the new version;
+- **leaves any file you edited locally alone** (it is never clobbered) — so a customization survives, but that file will *not* pick up the update until you reconcile it by hand;
+- **adds any brand-new payload files**, and does **not** delete files that are no longer part of the payload.
+
+So an update is *not* a clean reinstall — it deliberately preserves your changes and never removes anything. If you want a genuinely clean slate, uninstall first, then install:
+```bash
+curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash -s -- --uninstall
+curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash
+```
+`--uninstall` removes only the files ClaudeCollab installed and can still prove it owns (by hash); your own files, config, and `collab/logs/` are left in place. A **global** install updates the same way with `--global` (`… | bash -s -- --global`). After any update, run `bash collab/doctor.sh` to confirm the install is healthy.
+
 ## Usage
 
 Run these inside Claude Code in a project you've installed into:
