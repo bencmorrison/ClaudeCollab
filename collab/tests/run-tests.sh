@@ -1552,6 +1552,46 @@ bash "$logsh" verify "$r" >/dev/null 2>&1 \
   && no "log: verify PASSED a modified final disposition payload" \
   || ok "log: entry_hash protects final disposition payloads"
 
+# subagent-voice (issue #5) — a Claude subagent's collab turn. It is a CLAIM, not
+# captured evidence: its text is transcribed by Claude (claimed_response), never
+# wrapper-captured (raw_response). It must record claim:true, captured:false, survive
+# byte-exactly, and pass verify's hash-chain contract alongside a normal opencode call.
+r="$(newrun)"; run_logged "$r" -m openai/gpt-5 "the panel question"
+svresp="$fakedir/sv-resp.txt"
+printf 'subagent says:\n  "quote", back\\slash, and a trailing newline\n' > "$svresp"
+COLLAB_RUN_ID="$r" bash "$logsh" subagent-voice --model claude-opus-4-8 \
+  --label "anthropic voice" --response-file "$svresp" >/dev/null 2>&1
+sv="$(entries "$r" | jq -c 'select(.type=="subagent-voice")')"
+{ [ "$(printf '%s' "$sv" | jq -r '.claim')" = "true" ] \
+  && [ "$(printf '%s' "$sv" | jq -r '.captured')" = "false" ] \
+  && [ "$(printf '%s' "$sv" | jq -r '.transport')" = "claude-subagent" ] \
+  && [ "$(printf '%s' "$sv" | jq -r 'has("raw_response")')" = "false" ]; } \
+  && ok "log: subagent-voice is claim:true, captured:false, and uses claimed_response not raw_response" \
+  || no "log: subagent-voice flags wrong (got $sv)"
+# Byte-exact: extract with `jq -sj` (no added newline) to a file and `cmp` against the
+# source — NEVER a $(...) capture, which strips trailing newlines from BOTH sides and
+# would make this "byte-exact" test pass no matter what (the trap AGENTS.md names).
+entries "$r" | jq -sj '[.[]|select(.type=="subagent-voice")][0].claimed_response' > "$fakedir/sv-got.txt"
+cmp -s "$fakedir/sv-got.txt" "$svresp" \
+  && ok "log: subagent-voice claimed_response is byte-exact (newlines/quotes/backslashes survive)" \
+  || no "log: subagent-voice claimed_response mangled"
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && ok "log: verify accepts a run mixing an opencode call and a subagent-voice claim" \
+  || no "log: verify rejected a valid opencode+subagent-voice run"
+# Tampering with the final subagent-voice text must be caught by the response_hash
+# self-check (the chain cannot cover the tail).
+rewrite_line "$COLLAB_LOG_DIR/$r/calls.jsonl" '$' 'subagent says' 'subagent LIED'
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && no "log: verify PASSED an edited final subagent-voice claimed_response" \
+  || ok "log: response_hash catches an altered subagent-voice transcript"
+# A collab that is ONLY a subagent voice (an all-Anthropic consult) is a real exchange,
+# not an empty run — it must verify, unlike a claude-final-only run.
+r="$(newrun)"; printf 'lone subagent reply' > "$svresp"
+COLLAB_RUN_ID="$r" bash "$logsh" subagent-voice --model claude-opus-4-8 --response-file "$svresp" >/dev/null 2>&1
+bash "$logsh" verify "$r" >/dev/null 2>&1 \
+  && ok "log: verify accepts a subagent-voice-only run (all-Anthropic collab is not empty)" \
+  || no "log: verify rejected a legitimate subagent-voice-only run"
+
 # new-run must MINT a run, never hand back an ambient one — that would silently merge
 # two workflows into a single audit unit.
 r1="$(newrun)"; r2="$(COLLAB_RUN_ID="$r1" bash "$logsh" new-run /collab:panel)"

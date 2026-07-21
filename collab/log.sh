@@ -48,6 +48,12 @@
 #                         writing its own disposition record is self-report in new
 #                         clothes. A watcher must check each claim against the raw
 #                         `completed` responses and the `claude-final` entry.
+#   subagent-voice        a Claude subagent's contribution to a collab (reached via the
+#                         Task/Agent tool, not opencode). **A CLAIM, NOT CAPTURED** —
+#                         `claim:true, captured:false`. Its text is in `claimed_response`
+#                         (never `raw_response`): Claude transcribes it, so a watcher can
+#                         check `claude-final` represents it consistently but CANNOT
+#                         confirm it verbatim, unlike an opencode `completed`.
 #
 # Usage:
 #   log.sh new-run [command]                 mint a run_id (mkdir + prune), print it
@@ -63,6 +69,12 @@
 #   log.sh final [--run <id>]                claude-final; text on stdin
 #   log.sh disposition --model <m> --point <p> --verdict <Adopt|Adapt|Reject|Defer> \
 #                    [--why <text>]          claude-disposition (a claim, not a fact)
+#   log.sh subagent-voice --response-file <f> [--model <m>] [--label <l>] \
+#                    [--prompt-file <f>] [--run <id>]
+#                                            a Claude subagent's collab turn — a CLAIM
+#                                            (captured:false), transcribed by Claude, not
+#                                            wrapper-captured like an opencode `completed`
+#                                            (its text lives in `claimed_response`)
 #   log.sh diff --call-id <id> --patch-file <f> [--base <tree>] [--after <tree>]
 #                                            record what a delegated model changed
 #   log.sh verify [run_id]                   integrity: exact expected/start/complete triples
@@ -498,6 +510,70 @@ cmd_disposition() {
   rm -f "$entry"
 }
 
+# subagent-voice — a Claude subagent's contribution to a collab (a /collab:panel or
+# /collab:workshop voice reached natively via the Task/Agent tool, not through opencode).
+#
+# THIS IS A CLAIM, NOT CAPTURED EVIDENCE — `claim: true`, `captured: false`. A subagent
+# runs inside Claude Code's own process; there is no wrapper between Claude and its
+# reply the way `ask.sh` tees opencode's stdout. So the text here is what CLAUDE says
+# the subagent said — transcribed by the party under audit, like `claude-disposition`,
+# NOT verbatim-captured like a `completed` entry's `raw_response`. A watcher must treat
+# it accordingly: it can check that `claude-final` represents this voice consistently,
+# but it CANNOT confirm the transcript is verbatim. The distinct field name
+# `claimed_response` (never `raw_response`) keeps that boundary visible in the log.
+#
+# COMPLETENESS BOUND — say it plainly, don't paper it: unlike an opencode call, which
+# writes a durable `expected-call` BEFORE it runs (so `verify` catches a crash that
+# leaves the response unlogged), a subagent-voice is a SINGLE entry Claude writes AFTER
+# the fact. There is no mechanical marker that a subagent was spawned, so `verify`
+# cannot detect a subagent voice that was spawned and never logged. A logged voice is
+# integrity-checked like any entry; an OMITTED one is invisible. So both the presence
+# and the wording of a subagent voice rest on Claude's honesty, not on construction —
+# the same bound `/collab:witness` discloses for `claude-final`.
+cmd_subagent_voice() {
+  local model="" label="" prompt_file="" response_file="" run=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --model)   model="${2-}";   shift 2 ;;
+      --label)   label="${2-}";   shift 2 ;;
+      --prompt-file)   prompt_file="${2-}";   shift 2 ;;
+      --response-file) response_file="${2-}"; shift 2 ;;
+      --run)     run="${2-}";     shift 2 ;;
+      *) echo "log.sh subagent-voice: unknown arg '$1'" >&2; exit 2 ;;
+    esac
+  done
+  [ -n "$response_file" ] && [ -f "$response_file" ] || { echo "log.sh subagent-voice: --response-file must exist" >&2; exit 2; }
+  disabled && return 0
+  have_jq || return 0
+  local rid rd file; rid="$(resolve_run "$run")"; rd="$(ensure_run "$rid")"; file="$rd/calls.jsonl"
+
+  # The prompt Claude sent the subagent obeys COLLAB_LOG_PROMPTS like any other prompt.
+  # The response is ALWAYS stored in full: it is the evidence a watcher compares against,
+  # even though it is a transcript rather than a capture.
+  local prompt_hash="" mode pfile="$prompt_file" tmp_empty=""; mode="$(_prompt_mode)"
+  if [ -n "$prompt_file" ] && [ -f "$prompt_file" ] && [ "$mode" != "off" ]; then
+    prompt_hash="$(_sha < "$prompt_file")"
+  fi
+  if [ -z "$pfile" ] || [ ! -f "$pfile" ]; then tmp_empty="$(mktemp)"; pfile="$tmp_empty"; fi
+  local rhash; rhash="$(_sha < "$response_file")"
+  local entry; entry="$(mktemp)"
+  _entry "$rid" subagent-voice "" | jq -c \
+    --arg model "$model" --arg label "$label" \
+    --arg pmode "$mode" --rawfile ptxt "$pfile" --arg phash "$prompt_hash" \
+    --rawfile resp "$response_file" --arg rhash "$rhash" \
+    '. + {claim:true, captured:false, transport:"claude-subagent",
+          model:(if $model=="" then null else $model end),
+          label:(if $label=="" then null else $label end),
+          prompt_mode:$pmode,
+          prompt:(if $pmode=="full" then $ptxt else null end),
+          prompt_hash:(if $phash=="" then null else $phash end),
+          claimed_response:$resp,
+          response_hash:(if $rhash=="" then null else $rhash end)}' > "$entry"
+  [ -n "$tmp_empty" ] && rm -f "$tmp_empty"
+  _with_lock "$file.lock" _append_locked "$file" "$entry"
+  rm -f "$entry"
+}
+
 # verify — the integrity contract: every `started` has a matching `completed`. A gap
 # means a call crashed, timed out or was killed, and its response never reached the
 # log. `/collab:witness` (W2) refuses to audit a failed-integrity log rather than report
@@ -575,8 +651,16 @@ cmd_verify() {
       printf '  %s\n' $bad_expected_ids >&2
       bad=1
     fi
-    if [ "$n_expected" -eq 0 ]; then
-      echo "INTEGRITY FAIL: run contains no expected/model lifecycle calls." >&2
+    # A run is empty only if it has neither an opencode lifecycle call NOR a Claude
+    # subagent voice: a collab may legitimately consist of subagent voices alone (an
+    # all-Anthropic consult), and that is a real recorded exchange, not an empty run.
+    # Count only WELL-FORMED subagent voices — a bare {"type":"subagent-voice"} with a
+    # valid entry_hash but no claimed_response is not a recorded exchange and must not
+    # let an otherwise-empty run pass.
+    local n_voices
+    n_voices="$(jq -rs '[.[] | select(.type=="subagent-voice" and (.claimed_response|type)=="string")] | length' "$file")"
+    if [ "$n_expected" -eq 0 ] && [ "$n_voices" -eq 0 ]; then
+      echo "INTEGRITY FAIL: run contains no model lifecycle calls or subagent voices." >&2
       bad=1
     fi
     bad_cardinality="$(jq -rs '
@@ -654,7 +738,7 @@ cmd_verify() {
             echo "INTEGRITY FAIL: patch '$(basename "$pf")' does not match its digest (line $i) — the recorded diff was altered." >&2
             bad=1; break
           fi
-        elif [ "$(printf '%s' "$line" | jq -j 'if .type=="claude-final" then (.text // "") else (.raw_response // "") end' | _sha)" != "$rh" ]; then
+        elif [ "$(printf '%s' "$line" | jq -j 'if .type=="claude-final" then (.text // "") elif .type=="subagent-voice" then (.claimed_response // "") else (.raw_response // "") end' | _sha)" != "$rh" ]; then
           echo "INTEGRITY FAIL: response_hash mismatch at line $i (the recorded answer does not match its digest)." >&2
           bad=1; break
         fi
@@ -695,6 +779,7 @@ case "$sub" in
   completed)   cmd_completed "$@" ;;
   final)       cmd_final "$@" ;;
   disposition) cmd_disposition "$@" ;;
+  subagent-voice) cmd_subagent_voice "$@" ;;
   diff)        cmd_diff "$@" ;;
   verify)      cmd_verify "$@" ;;
   prune)       cmd_prune "$@" ;;
