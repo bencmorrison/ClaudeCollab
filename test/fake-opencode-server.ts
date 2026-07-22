@@ -1,0 +1,191 @@
+/**
+ * Offline fixture for the M2 client tests: a minimal `node:http` server that
+ * implements exactly the session endpoints the recipe uses, and RECORDS every
+ * request body so a test can assert the exact wire shapes.
+ *
+ * It is deliberately adversarial about the history-vs-sync distinction: it can be
+ * told to serve DIFFERENT text in the synchronous `POST .../message` response than
+ * in the `GET .../message` history, so a client that (wrongly) read the sync body
+ * would return the wrong string and the test would catch it.
+ *
+ * No opencode, no model, no network beyond loopback — this is a pure protocol fake.
+ */
+
+import { createServer, type Server } from "node:http";
+import { AddressInfo } from "node:net";
+
+export interface FakeOpencodeOpts {
+  /** The byte-exact final answer to serve in the GET history. */
+  historyText: string;
+  /** Text served in the SYNC POST response. When different from `historyText`,
+   * proves the client reads history, not the sync body. Defaults to a fixed
+   * wrong-marker so "the sync body must not be the source" is always exercised. */
+  syncText?: string;
+  /** Delay (ms) before the POST message response — used to trigger a timeout abort. */
+  messageDelayMs?: number;
+  /** Return 500 on the GET history (drive an error path with the session created). */
+  failHistory?: boolean;
+  /** Return 500 on the POST message. */
+  failMessage?: boolean;
+  /** Session id to hand back from POST /session. */
+  sessionId?: string;
+}
+
+export interface FakeOpencode {
+  baseUrl: string;
+  /** Recorded request bodies / ids, in arrival order. */
+  recorded: {
+    createBodies: Array<Record<string, unknown>>;
+    messageBodies: Array<Record<string, unknown>>;
+    deletes: string[];
+    historyGets: string[];
+  };
+  close(): Promise<void>;
+}
+
+function readBody(req: import("node:http").IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (c) => (data += c));
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
+
+export function startFakeOpencode(opts: FakeOpencodeOpts): Promise<FakeOpencode> {
+  const sessionId = opts.sessionId ?? "ses_fake";
+  const syncText = opts.syncText ?? "SYNC-BODY-TEXT-THAT-MUST-NOT-BE-RETURNED";
+  const recorded: FakeOpencode["recorded"] = {
+    createBodies: [],
+    messageBodies: [],
+    deletes: [],
+    historyGets: [],
+  };
+
+  const server: Server = createServer(async (req, res) => {
+    const url = req.url ?? "";
+    const method = req.method ?? "GET";
+    const send = (status: number, obj: unknown) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(obj));
+    };
+
+    try {
+      // POST /session
+      if (method === "POST" && url === "/session") {
+        recorded.createBodies.push(JSON.parse((await readBody(req)) || "{}"));
+        send(200, { id: sessionId, title: "fake", time: { created: Date.now() } });
+        return;
+      }
+
+      // POST /session/{id}/message
+      const msgMatch = url.match(/^\/session\/([^/]+)\/message$/);
+      if (method === "POST" && msgMatch) {
+        recorded.messageBodies.push(JSON.parse((await readBody(req)) || "{}"));
+        if (opts.messageDelayMs) await new Promise((r) => setTimeout(r, opts.messageDelayMs));
+        if (opts.failMessage) {
+          send(500, { error: "forced message failure" });
+          return;
+        }
+        // The SYNC envelope: only the final assistant message, NO tool parts, and
+        // deliberately the WRONG text. Metadata is real so `SendResult` populates.
+        send(200, {
+          info: {
+            id: "msg_asst",
+            role: "assistant",
+            providerID: "openai",
+            modelID: "gpt-fake",
+            cost: 0.0042,
+            tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+            finish: "stop",
+          },
+          parts: [{ type: "text", text: syncText }],
+        });
+        return;
+      }
+
+      // GET /session/{id}/message  → the full history (the sanctioned source)
+      if (method === "GET" && msgMatch) {
+        recorded.historyGets.push(msgMatch[1]);
+        if (opts.failHistory) {
+          send(500, { error: "forced history failure" });
+          return;
+        }
+        send(200, [
+          {
+            info: { id: "msg_user", role: "user", time: { created: 1 } },
+            parts: [{ id: "p0", type: "text", text: "the question" }],
+          },
+          {
+            info: {
+              id: "msg_asst_tool",
+              role: "assistant",
+              providerID: "openai",
+              modelID: "gpt-fake",
+              cost: 0.0042,
+              tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+              finish: "tool-calls",
+            },
+            parts: [
+              { id: "p1", type: "step-start" },
+              {
+                id: "p2",
+                type: "tool",
+                callID: "call_1",
+                tool: "read",
+                state: {
+                  status: "completed",
+                  input: { filePath: "/x/marker.txt" },
+                  output: "MARKER-FILE-CONTENTS",
+                },
+              },
+              { id: "p3", type: "step-finish" },
+            ],
+          },
+          {
+            info: {
+              id: "msg_asst_final",
+              role: "assistant",
+              providerID: "openai",
+              modelID: "gpt-fake",
+              cost: 0.0042,
+              tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+              finish: "stop",
+            },
+            // The REAL final answer, byte-exact. May contain newlines/quotes/unicode.
+            parts: [
+              { id: "p4", type: "step-start" },
+              { id: "p5", type: "text", text: opts.historyText },
+              { id: "p6", type: "step-finish" },
+            ],
+          },
+        ]);
+        return;
+      }
+
+      // DELETE /session/{id}
+      const delMatch = url.match(/^\/session\/([^/]+)$/);
+      if (method === "DELETE" && delMatch) {
+        recorded.deletes.push(delMatch[1]);
+        send(200, {});
+        return;
+      }
+
+      send(404, { error: `no route for ${method} ${url}` });
+    } catch (err) {
+      send(500, { error: (err as Error).message });
+    }
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({
+        baseUrl: `http://127.0.0.1:${port}`,
+        recorded,
+        close: () =>
+          new Promise<void>((r) => server.close(() => r())),
+      });
+    });
+  });
+}
