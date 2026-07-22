@@ -72,6 +72,16 @@ Used by `/collab:witness` to audit whether Claude's account of a model exchange 
 - **Keep `COLLAB_LOG_DIR` under the default `collab/logs` tree when using `/collab:witness`.** `collab/ask.sh --watch` resolves the effective root and mechanically rejects an outside path before any model call; a child beneath the default root is accepted. Arbitrary custom roots remain valid for logging, not witnessing.
 - **The hashes are not tamper-proofing.** `prev_hash` chains entries and each entry carries a self-hash; referenced patch artifacts are checked too. This catches accidental corruption across generic entry types but provides no chain of custody: anything that can write the log can rewrite the hashes.
 
+### TS/MCP rewrite (in development, branch `feat/ts-mcp-rewrite`): the loopback serve surface
+
+This subsection covers ONLY the in-development TypeScript/MCP path (`package.json`, `src/`, `test/`). It does not apply to the shipped bash layer in `collab/`, which is unchanged.
+
+- **The MCP server spawns `opencode serve`, which listens on `127.0.0.1` on an ephemeral (OS-chosen) port for as long as the server is up.** This is a new network surface: the bash `opencode run` path spawned a one-shot process with **no** listening socket, so nothing local could reach it.
+- **During that window, any process on the host can reach the serve API** — it is plaintext HTTP and, by default, unauthenticated (opencode prints an unsecured-server warning; `OPENCODE_SERVER_PASSWORD` exists if you need auth). The permission map — not the transport — is what still enforces read-only per agent.
+- **Mitigations, all implemented in M1:** the socket binds **loopback only** (never a routable interface); an **idle timeout** (`COLLAB_SERVE_IDLE_MS`, default 10 min) kills the serve after inactivity so the window is not open indefinitely; an **optional per-call spawn mode** (`COLLAB_SERVE_PER_CALL=1`) opens the socket only for the duration of a single call; and **shutdown-on-stdin-EOF / transport-close** tears the serve down the moment Claude Code closes the connection, closing the window at session end rather than orphaning a listener.
+- This is an **accepted, documented surface** — the trade for the MCP transport that replaces the per-command grant matrix (PLAN.md "Rewrite: TypeScript MCP server", milestone M1). It is in scope for the threat model to the same extent as the rest of the loopback tooling.
+- `COLLAB_TEARDOWN_MODE=spike` is a **test-only seam**: it drops the primary stdin-EOF watch so the flagship orphan test can demonstrate the orphan bug against the spike's own (weaker) approach. It must never be set in production; worst case is the orphaned-serve regression the primary teardown exists to fix — an availability issue, not a security hole.
+
 ## Reporting a vulnerability
 
 Please report security issues **privately**, not in a public issue:

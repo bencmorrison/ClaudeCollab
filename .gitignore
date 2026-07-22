@@ -18,6 +18,9 @@ collab/collab.conf.local
 # Node (opencode/claude are installed globally; this is just in case deps land here)
 node_modules/
 
+# TS/MCP rewrite build output (tsconfig outDir); tests run via tsx, not a build.
+dist/
+
 # opencode project-local install cruft (created when opencode resolves an agent
 # def in .opencode/); we commit .opencode/agent/*.md, not the package manifests.
 .opencode/package.json

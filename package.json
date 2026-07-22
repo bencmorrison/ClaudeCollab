@@ -1,0 +1,22 @@
+{
+  "name": "claudecollab",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TS/MCP rewrite (in development): an MCP server fronting `opencode serve`, letting Claude Code collaborate with other LLMs. Coexists with the bash layer in collab/. See PLAN.md milestone M1.",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/server.ts",
+    "test": "tsx test/run.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opencode-ai/sdk": "^1.18.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
