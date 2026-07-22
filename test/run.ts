@@ -10,6 +10,7 @@ import { run as client } from "./client.test.js";
 import { run as log } from "./log.test.js";
 import { run as policy } from "./policy.test.js";
 import { run as config } from "./config.test.js";
+import { run as consult } from "./consult.test.js";
 
 const suites: Array<[string, () => Promise<number>]> = [
   ["lifecycle", lifecycle],
@@ -19,6 +20,7 @@ const suites: Array<[string, () => Promise<number>]> = [
   ["log", log],
   ["policy", policy],
   ["config", config],
+  ["consult", consult],
 ];
 
 let total = 0;

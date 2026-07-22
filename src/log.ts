@@ -64,6 +64,30 @@ import {
 export type PromptMode = "full" | "hash" | "off";
 export type CaptureState = "complete" | "failed";
 export type Verdict = "Adopt" | "Adapt" | "Reject" | "Defer";
+/** Policy tiers (mirrors `policy.ts` `PolicyTier`; duplicated here to avoid a src-layer
+ * import cycle — `config.ts` already imports from `log.ts`). */
+export type PolicyTier = "allow" | "ask" | "deny";
+
+/**
+ * `tier` / `confirmed` on a `started`/`completed` entry — a DELIBERATE positive-direction
+ * addition OVER the bash oracle (bash records neither). Without them, `/collab:witness`
+ * cannot audit whether an ask-tier model was consulted with claimed user approval. They
+ * are OPTIONAL: emitted only when the caller supplies them, so allow-tier and legacy
+ * (bash-written) entries carry neither key. Both verifiers accept entries with or without
+ * these fields — bash `verify` recomputes `entry_hash` over `del(.entry_hash)` (the whole
+ * object, no field whitelist), so extra keys are naturally hashed and never rejected, and
+ * TS `verify` recomputes the same way. Cross-verification (both directions) is pinned in
+ * test/log.test.ts and test/consult.test.ts.
+ */
+function policyFields(
+  tier: PolicyTier | undefined,
+  confirmed: boolean | undefined,
+): { [k: string]: JsonValue } {
+  const out: { [k: string]: JsonValue } = {};
+  if (tier !== undefined) out.tier = tier;
+  if (confirmed !== undefined) out.confirmed = confirmed;
+  return out;
+}
 
 /** Every write method returns this instead of throwing (C31). `ok:false` carries a
  * reason for diagnostics but is NEVER propagated as an exception into the tool call. */
@@ -329,6 +353,20 @@ export class EvidenceLog {
     return path.join(this.#runDir(this.#resolveRun(runId)), "calls.jsonl");
   }
 
+  /** Whether the evidence layer is on (COLLAB_LOG != "off"). Read-only; no side
+   * effects. Exposed for diagnostics (collab_status / doctor) so the "logging on/off"
+   * report reuses the SAME cfg() resolution as every write path, rather than a second
+   * copy that could drift from C35's env>conf>default order. */
+  enabled(): boolean {
+    return !this.#disabled();
+  }
+
+  /** The effective log root after COLLAB_LOG_DIR + partitioning resolution — the exact
+   * directory writes land under. Read-only; for the same diagnostic reason as `enabled`. */
+  logDir(): string {
+    return this.#logDir();
+  }
+
   /** The most recent run's id (via the `latest` symlink). Returns undefined if none. */
   latest(): string | undefined {
     const l = path.join(this.#logDir(), "latest");
@@ -411,6 +449,11 @@ export class EvidenceLog {
     agent?: string;
     session?: string;
     prompt?: string;
+    /** Policy tier the call was made under (C1–C7). Optional, positive-direction
+     * addition over bash (see the `#policyFields` note) — absent on legacy/allow entries. */
+    tier?: PolicyTier;
+    /** Whether the human approved an ask-tier call. Optional; see `#policyFields`. */
+    confirmed?: boolean;
     run?: string;
   }): Promise<StartedResult> {
     if (this.#disabled()) return { ok: true };
@@ -432,6 +475,7 @@ export class EvidenceLog {
         // rawfile of an empty temp file); otherwise null.
         prompt: mode === "full" ? (args.prompt ?? "") : null,
         prompt_hash: nullIfEmpty(promptHash),
+        ...policyFields(args.tier, args.confirmed),
       };
       const r = await this.#appendLocked(path.join(rd, "calls.jsonl"), payload, true);
       return { ok: r.ok, turn: r.turn };
@@ -461,6 +505,10 @@ export class EvidenceLog {
     agent?: string;
     captureState: CaptureState;
     response?: string;
+    /** Policy tier / human-approval, mirrored from `started` for the same audit reason
+     * (see `#policyFields`). Both optional; absent on legacy/allow entries. */
+    tier?: PolicyTier;
+    confirmed?: boolean;
     run?: string;
   }): Promise<WriteResult> {
     if (args.captureState !== "complete" && args.captureState !== "failed") {
@@ -495,6 +543,7 @@ export class EvidenceLog {
         capture_state: capture,
         raw_response: rawResponse,
         response_hash: nullIfEmpty(responseHash),
+        ...policyFields(args.tier, args.confirmed),
       };
       const r = await this.#appendLocked(path.join(rd, "calls.jsonl"), payload, false);
       return { ok: r.ok };
