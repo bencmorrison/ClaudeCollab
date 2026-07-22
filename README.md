@@ -166,22 +166,18 @@ ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Us
 
 Every model call is logged to `collab/logs/<run_id>/calls.jsonl` as three lifecycle entries sharing one `call_id`: `expected-call` before capture setup, `started` before execution, and `completed` after it. Three calls produce nine lifecycle entries. The record includes the exact prompt sent, the model's full untruncated answer, model, agent, and exit code. It's git-ignored and stays on your machine.
 
-This isn't for debugging. When Claude tells you "GPT-5 agreed with my approach", that summary is written by the party you'd be checking up on. The log is the other model's actual words, so you can read them yourself — and it's the data source for the `/collab:witness` command, which hands a *different* model the log and asks whether Claude's account of the exchange holds up.
+This is **receipts**. When Claude tells you "GPT-5 agreed with my approach", that summary is written by the party you'd be checking up on — the log is the other model's *actual words*, on disk and yours to read, so you can check them yourself, diff them against Claude's account, or keep them for later. It is a plain local file: readable, prunable, and governed by the privacy knobs below. It earned its keep finding real bugs during this project's own development.
 
 - **See it:** `cat collab/logs/latest/calls.jsonl | jq` — or check a run with `bash collab/log.sh verify $(readlink collab/logs/latest)`. Verification checks lifecycle cardinality, capture completeness, referenced artifacts, every entry's self-hash, and the chain; setup failures and mid-flight gaps do not pass as clean.
 - **Privacy:** by default the log keeps the full prompt, which means whatever context Claude pasted in from your repo. Set `COLLAB_LOG_PROMPTS=hash` (keep a digest, not the text) or `off` in `collab/collab.conf.local` if that's not OK for your work. Runs older than 14 days are pruned automatically (`COLLAB_LOG_RETENTION_DAYS`); `COLLAB_LOG=off` turns the whole thing off.
 - **What it is not:** tamper-proofing. The hashes catch accidental corruption; they're not a chain of custody, and anything that can write the log can rewrite them.
 - **Custom location:** keep logs at the default `collab/logs` location if you use `/collab:witness`. The logger accepts `COLLAB_LOG_DIR`, but the watcher is intentionally limited to `collab/logs/**`; a path outside that scope cannot be audited and the command stops rather than running without evidence.
 
-### `/collab:witness` — have another model check Claude's account
+### `/collab:witness` — optional: have another model check Claude's account
 
-`/collab:witness` hands the log to a **non-Claude** model whose only capability is reading `collab/logs/` — no shell, no web, and no access to your source, so it audits the record rather than drifting into reviewing your code. It reports what Claude dropped, misrepresented, or flattened, with the model's actual words next to Claude's rendering of them, and a verdict of OK / Concerns / Inconclusive. The report is saved under `collab/logs/<run_id>/reports/`, so Claude isn't the only thing standing between you and it.
+If you want it automated, `/collab:witness` hands the log to a **non-Claude** model whose only capability is reading `collab/logs/` — no shell, no web, no access to your source — and asks whether Claude's account of an exchange matched what the models actually said, saving a verdict (OK / Concerns / Inconclusive) under `collab/logs/<run_id>/reports/`. It refuses a failed-integrity log rather than reporting "clean" over a gap; pin the auditor with `COLLAB_WATCH_MODEL` in `collab/collab.conf.local` (a Claude model is refused unless you confirm it). It is an optional command, not a load-bearing part of the tool — reading the log yourself is the primary use.
 
-Report filenames are deterministic: the exact provider/model id is sanitized by replacing each maximal run outside ASCII `[A-Za-z0-9._-]` with `-`, trimming leading/trailing `-`, and using `model` if the result is empty.
-
-It refuses to audit a log that fails its integrity check, rather than reporting "clean" over a gap. Set `COLLAB_WATCH_MODEL` in `collab/collab.conf.local` to pin the auditor; a Claude model is refused unless you explicitly confirm it.
-
-**The honest bound, stated plainly:** Claude writes the prompt the auditor works from, and picks which run to audit. What's caught *by construction* is omission and misrepresentation — the watcher reads the whole raw log, so Claude cannot hide what another model said. What is **not** caught is Claude's dispositional honesty: a subtly biased prompt is still Claude's to write. Closing that would need Claude Code to expose its own decision state unmediated, and it doesn't. A clean verdict means one bounded check found nothing — not that the engagement was honest.
+**The honest bound:** Claude writes the auditor's prompt and picks which run to audit, so omission and misrepresentation are caught *by construction* (the watcher reads the whole raw log), but Claude's dispositional honesty is **not** — a subtly biased prompt is still Claude's to write. A clean verdict means one bounded check found nothing, not that the engagement was honest.
 
 ## Uninstall
 
