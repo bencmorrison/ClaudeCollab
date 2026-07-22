@@ -9,6 +9,11 @@ name: CI
 # against BSD awk/sed/mktemp and stock bash 3.2. The macOS job is free only
 # because this repo is public (private repos bill macOS minutes at 10x), which
 # is why it landed at release rather than earlier.
+#
+# A third job, `node`, covers the TS/MCP rewrite (PLAN.md "Implementation plan
+# — synthesized 2026-07-22"): typecheck plus the offline subset of
+# `test/*.test.ts`. Same credential-free, opencode-free rule applies — see
+# that job for which suites it runs and why.
 
 on:
   push:
@@ -162,3 +167,54 @@ jobs:
         # The highest-risk surface on BSD: newest code, heavy awk, and it edits
         # users' .gitignore and deletes files.
         run: bash collab/tests/test-install.sh
+
+  node:
+    name: node (TS/MCP rewrite — typecheck + offline suites)
+    runs-on: ubuntu-latest
+    # `npm test` (test/run.ts) runs all nine test/*.test.ts suites, and three of
+    # them — lifecycle, orphan, mcp-client — spawn the REAL `opencode serve`
+    # binary to prove process lifecycle (PLAN.md M1: shutdown-on-stdin-close,
+    # the orphan flagship, no-process-leak). This repo's CI is credential-free
+    # and opencode-free by decision (see header comment) and never installs or
+    # authenticates opencode, so those three cannot run honestly here.
+    #
+    # They also have NO graceful skip when the binary is absent: verified locally
+    # that `spawn opencode ENOENT` (lifecycle) and the MCP error it produces
+    # (mcp-client) are UNHANDLED and crash the whole process rather than being
+    # caught and reported as skipped. Running `npm test` as-is here would just
+    # fail the job — not silently pass — but running it and swallowing the
+    # failure, or trimming test/run.ts's suite list, would risk exactly the
+    # vacuous green this repo treats as the cardinal sin. So this job instead
+    # runs the six offline suites individually (each supports standalone
+    # execution via `tsx test/<name>.test.ts`) and states in its own step
+    # output which three are excluded and why, so a green run here always means
+    # those six suites actually executed — never a skipped-everything pass.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22 (matches the dev container's major)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Offline test suites (client, log, policy, config, consult, panel)
+        run: |
+          echo "Running 6/9 test/*.test.ts suites: client, log, policy, config, consult, panel."
+          echo "SKIPPED (need the real opencode binary; this CI never installs it):"
+          echo "  lifecycle, orphan, mcp-client — see job comment for why, and run"
+          echo "  these three locally (or in doctor.sh's --full path) instead."
+          echo
+          rc=0
+          for suite in client log policy config consult panel; do
+            echo "=== test/${suite}.test.ts ==="
+            npx tsx "test/${suite}.test.ts" || rc=1
+            echo
+          done
+          exit "$rc"
