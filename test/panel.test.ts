@@ -482,6 +482,90 @@ export async function run(): Promise<number> {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // 11. keepSessions (M7 / Option B — workshop round 1): each member's session is KEPT
+  //     and its DISTINCT id returned per-member, so round 2 can continue each via a
+  //     per-member consult loop. No deletes; each completed entry carries its member's
+  //     session id; the run verifies under BOTH verifiers with session ids present.
+  // -------------------------------------------------------------------------
+  {
+    const root = rootWithPolicy(""); // default-allow
+    const logDir = tmp("m6-logs-");
+    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const fake = await startFakeOpencode({ historyText: "plan voice", distinctSessions: true });
+    try {
+      const r = await panel(
+        { question: "draft a plan", models: ["alpha/m1", "beta/m2"], keepSessions: true },
+        { serve: fakeServe(fake), env, messageTimeoutMs: 5_000 },
+      );
+      c.check(r.ok, "keepSessions: panel ok");
+      if (r.ok) {
+        const [a, b] = r.results;
+        c.check(!!a.sessionId && !!b.sessionId, "keepSessions: both members returned a sessionId");
+        c.check(a.sessionId !== b.sessionId, "keepSessions: the two members' session ids are DISTINCT");
+        c.check(fake.recorded.deletes.length === 0, "keepSessions: NO sessions deleted (all kept for round 2)");
+        c.check(fake.recorded.createBodies.length === 2, "keepSessions: one create per member");
+
+        // Each member's completed entry carries that member's session id.
+        const entries = readEntries(logDir, r.runId);
+        for (const m of r.results) {
+          const completed = entries.find((e) => e.call_id === m.callId && e.status === "completed");
+          c.check(completed?.session_id === m.sessionId, `keepSessions: ${m.model} completed entry carries its session id`);
+        }
+        c.check(new EvidenceLog({ env }).verify(r.runId).code === 0, "keepSessions: run passes TS verify()");
+        c.check(bashVerify(r.runId, env) === 0, "keepSessions: run passes bash verify (exit 0)");
+      }
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 12. keepSessions with ONE FAILING member (error-path ownership): the failed member's
+  //     session is cleaned up (no orphan) and it returns NO fabricated sessionId, while
+  //     the succeeding sibling keeps its session and id. The failed member being
+  //     sessionId-less is exactly what makes the round-2 consult loop SKIP it.
+  // -------------------------------------------------------------------------
+  {
+    const root = rootWithPolicy(""); // default-allow
+    const logDir = tmp("m6-logs-");
+    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const fake = await startFakeOpencode({
+      historyText: "ok voice",
+      distinctSessions: true,
+      failMessageForModel: "beta/fail",
+    });
+    try {
+      const r = await panel(
+        { question: "draft", models: ["alpha/ok", "beta/fail"], keepSessions: true },
+        { serve: fakeServe(fake), env, messageTimeoutMs: 5_000 },
+      );
+      c.check(r.ok, "fail-member: panel itself ok (a member failure is data, not a panel abort)");
+      if (r.ok) {
+        const alpha = r.results.find((m) => m.model === "alpha/ok");
+        const beta = r.results.find((m) => m.model === "beta/fail");
+        // Sibling unaffected: succeeded, kept its session, has an id.
+        c.check(!!alpha && !alpha.error && !!alpha.text, "fail-member: sibling alpha succeeded");
+        c.check(!!alpha?.sessionId, "fail-member: sibling alpha kept its sessionId");
+        // Failed member: error, NO text, NO fabricated sessionId.
+        c.check(!!beta?.error && beta.error.kind === "call-failed", "fail-member: beta reports call-failed");
+        c.check(beta?.text === undefined, "fail-member: beta returned no text");
+        c.check(beta?.sessionId === undefined, "fail-member: beta has NO fabricated sessionId (round-2 skips it)");
+        // No orphan: both sessions were created; the failed one was deleted, the kept one not.
+        c.check(fake.recorded.createBodies.length === 2, "fail-member: both members created a session");
+        c.check(fake.recorded.deletes.length === 1, "fail-member: exactly one session deleted (the failed member's, no orphan)");
+        c.check(alpha?.sessionId !== undefined && !fake.recorded.deletes.includes(alpha.sessionId), "fail-member: the kept sibling session was NOT deleted");
+        // beta's failed capture is a real gap: verify FLAGS the run (code 7), so the
+        // witness sees the failed member rather than a false clean. (alpha's lifecycle is
+        // well-formed; the flag is specifically the failed capture, not a pairing error.)
+        c.check(new EvidenceLog({ env }).verify(r.runId).code === 7, "fail-member: verify FLAGS the failed member's gap (TS code 7)");
+        c.check(bashVerify(r.runId, env) === 7, "fail-member: bash verify FLAGS the same gap (exit 7)");
+      }
+    } finally {
+      await fake.close();
+    }
+  }
+
   // cleanup
   for (const d of tmpDirs) {
     try {

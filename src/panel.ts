@@ -64,6 +64,18 @@ export interface PanelParams {
   runId?: string;
   /** Human approval for ANY ask-tier member of this panel call (panel-wide scope). */
   confirmed?: boolean;
+  /**
+   * ROUND 1 of `/collab:workshop` (M7 / Option B). Keep every member's session alive
+   * and return its id per-member (`PanelMemberResult.sessionId`), so round 2 can CONTINUE
+   * each member's own session. Round 2 is NOT a panel feature: it is N independent
+   * continuations, each threading a distinct sessionId with a distinct prompt — that is
+   * exactly `collab_consult({ sessionId, keepSession? })`. Keeping panel a fan-out-only
+   * primitive (same question → many FRESH models) and doing round 2 as a per-member
+   * consult loop avoids duplicating consult's continuation logic here and keeps each
+   * tool's identity crisp. The driver shares one `runId` across both rounds so the whole
+   * workshop is one auditable run. Default (unset) deletes each session after its turn.
+   */
+  keepSessions?: boolean;
 }
 
 export interface PanelDeps {
@@ -77,7 +89,12 @@ export interface PanelDeps {
 }
 
 // --- Result / error shapes -------------------------------------------------
-export type PanelMemberErrorKind = "model-id" | "policy-deny" | "policy-ask" | "call-failed";
+export type PanelMemberErrorKind =
+  | "model-id"
+  | "policy-deny"
+  | "policy-ask"
+  | "call-failed"
+  | "agent-mismatch";
 
 export interface PanelMemberError {
   kind: PanelMemberErrorKind;
@@ -98,6 +115,9 @@ export interface PanelMemberResult {
   /** Set once the member reached the lifecycle (success OR call-failed); absent for a
    * pre-log refusal (model-id/deny/ask), which writes no call. */
   callId?: string;
+  /** The member's opencode session id — present ONLY when `keepSessions` was requested
+   * AND the call succeeded. Pass it back as `collab_consult({ sessionId })` for round 2. */
+  sessionId?: string;
 }
 
 export interface PanelOk {
@@ -159,6 +179,7 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
   const log = deps.log ?? new EvidenceLog({ env, cwd, collabDir });
   const runId = params.runId && params.runId.length > 0 ? params.runId : log.newRun(PANEL_COMMAND);
   const confirmed = params.confirmed === true;
+  const keepSessions = params.keepSessions === true;
 
   // 4. Members run CONCURRENTLY; each is gated + logged independently. One member's
   //    refusal or failure never touches another's result (order preserved by Promise.all).
@@ -187,19 +208,36 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
           runId,
           tier: gate.tier,
           confirmed: gate.confirmed,
+          keepSession: keepSessions,
         },
         { serve: deps.serve, log, messageTimeoutMs: deps.messageTimeoutMs },
       );
       if (outcome.ok) {
-        return { model: outcome.actualModel, text: outcome.text, callId: outcome.callId };
+        const member: PanelMemberResult = {
+          model: outcome.actualModel,
+          text: outcome.text,
+          callId: outcome.callId,
+        };
+        // Return the id ONLY when kept — a deleted session's id is a dangling reference.
+        if (keepSessions) member.sessionId = outcome.sessionId;
+        return member;
       }
+      // A FAILED member (call-failed OR agent-mismatch) carries NO sessionId even under
+      // keepSessions — its session was cleaned up by the deletion matrix (or never usably
+      // created), so there is no live session to continue; fabricating an id would send a
+      // round-2 continuation at a dead/wrong session. The absent sessionId is exactly what
+      // makes the round-2 consult loop skip this member.
+      const message =
+        outcome.kind === "agent-mismatch"
+          ? outcome.reason
+          : `The panel call to '${model}' failed: ${outcome.reason}. No answer was produced.`;
       return {
         model,
         callId: outcome.callId,
         error: {
-          kind: "call-failed",
+          kind: outcome.kind,
           exitAnalogue: null,
-          message: `The panel call to '${model}' failed: ${outcome.reason}. No answer was produced.`,
+          message,
         },
       };
     }),

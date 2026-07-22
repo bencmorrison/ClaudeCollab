@@ -17,6 +17,7 @@ import {
   toolParts,
   splitModel,
   OpencodeHttpError,
+  AgentMismatchError,
   type ServeProvider,
 } from "../src/client.js";
 import type { ServeHandle } from "../src/lifecycle.js";
@@ -214,6 +215,159 @@ export async function run(): Promise<number> {
       }
       c.check(threw, "askViaAgent rejects when the history read fails");
       c.check(fake.recorded.deletes.includes("ses_fake"), "session STILL deleted on the error path (finally)");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // 8b. keepSession: returns the id and SKIPS the delete (M7 Option B) -----------
+  {
+    const fake = await startFakeOpencode({ historyText: "kept" });
+    try {
+      const r = await askViaAgent(fakeServe(fake), {
+        agent: "collab-read",
+        model: "openai/gpt-fake",
+        prompt: "q",
+        keepSession: true,
+      });
+      c.check(r.sessionId === "ses_fake", "keepSession returns the session id");
+      c.check(fake.recorded.deletes.length === 0, "keepSession skips the finally-delete");
+      c.check(fake.recorded.createBodies.length === 1, "keepSession still created the session (fresh)");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // 8c. sessionId: CONTINUES an existing session — NO create call (M7 Option B) ---
+  {
+    const fake = await startFakeOpencode({ historyText: "continued" });
+    try {
+      const r = await askViaAgent(fakeServe(fake), {
+        agent: "collab-read",
+        model: "openai/gpt-fake",
+        prompt: "the only new bytes",
+        sessionId: "ses_existing",
+      });
+      c.check(r.sessionId === "ses_existing", "continuation returns the continued session id");
+      c.check(fake.recorded.createBodies.length === 0, "continuation makes NO POST /session (no create)");
+      c.check(fake.recorded.messageBodies.length === 1, "continuation sends exactly one turn");
+      c.check(fake.recorded.historyGets.includes("ses_existing"), "history read against the continued id");
+      c.check(fake.recorded.deletes.includes("ses_existing"), "continued session deleted (keepSession not set)");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // 8d. sessionId + keepSession: continue AND keep alive (round-2 into round-3) ---
+  {
+    const fake = await startFakeOpencode({ historyText: "continued-kept" });
+    try {
+      const r = await askViaAgent(fakeServe(fake), {
+        agent: "collab-read",
+        model: "openai/gpt-fake",
+        prompt: "next turn",
+        sessionId: "ses_keep",
+        keepSession: true,
+      });
+      c.check(r.sessionId === "ses_keep", "continue+keep returns the id");
+      c.check(fake.recorded.createBodies.length === 0, "continue+keep makes no create call");
+      c.check(fake.recorded.deletes.length === 0, "continue+keep skips the delete");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // 8e. DELETION MATRIX — created-here + THROW + keepSession → DELETE (no orphan) ----
+  //     A kept session whose turn threw has an UNRETURNABLE id; keeping it would be a
+  //     durable on-disk orphan (sessions persist), so it MUST be torn down.
+  {
+    const fake = await startFakeOpencode({ historyText: "x", failHistory: true });
+    try {
+      let threw = false;
+      try {
+        await askViaAgent(fakeServe(fake), {
+          agent: "collab-read",
+          model: "openai/gpt-fake",
+          prompt: "q",
+          keepSession: true, // intent to keep — but the throw overrides it for a created session
+        });
+      } catch {
+        threw = true;
+      }
+      c.check(threw, "matrix: created+throw+keep rejects");
+      c.check(fake.recorded.deletes.includes("ses_fake"), "matrix: created+throw+keep DELETES (no orphan)");
+      c.check(fake.recorded.deletes.length === 1, "matrix: created+throw+keep deletes exactly once");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // 8f. DELETION MATRIX — CONTINUED + THROW → NEVER delete (caller owns the id) -------
+  //     The caller supplied the session and may retry; deleting it would destroy state we
+  //     did not create (e.g. a workshop round-1 session). True regardless of keepSession.
+  {
+    for (const keep of [false, true]) {
+      const fake = await startFakeOpencode({ historyText: "x", failHistory: true });
+      try {
+        let threw = false;
+        try {
+          await askViaAgent(fakeServe(fake), {
+            agent: "collab-read",
+            model: "openai/gpt-fake",
+            prompt: "q",
+            sessionId: "ses_owned",
+            keepSession: keep,
+          });
+        } catch {
+          threw = true;
+        }
+        c.check(threw, `matrix: continued+throw (keep=${keep}) rejects`);
+        c.check(fake.recorded.createBodies.length === 0, `matrix: continued+throw (keep=${keep}) made no create`);
+        c.check(fake.recorded.deletes.length === 0, `matrix: continued+throw (keep=${keep}) NEVER deletes (caller owns the id)`);
+      } finally {
+        await fake.close();
+      }
+    }
+  }
+
+  // 8g. AGENT MISMATCH — opencode serves a DIFFERENT agent than requested → throw ------
+  //     Fail closed: a served 'build' when 'collab-read' was requested is a masquerade.
+  {
+    const fake = await startFakeOpencode({ historyText: "wrong-agent answer", servedAgent: "build" });
+    try {
+      let mismatch = false;
+      try {
+        await askViaAgent(fakeServe(fake), {
+          agent: "collab-read",
+          model: "openai/gpt-fake",
+          prompt: "q",
+          expectedAgent: "collab-read",
+        });
+      } catch (err) {
+        mismatch = err instanceof AgentMismatchError;
+        if (mismatch) {
+          c.check((err as AgentMismatchError).requested === "collab-read", "mismatch: error names requested agent");
+          c.check((err as AgentMismatchError).actual === "build", "mismatch: error names actual served agent");
+        }
+      }
+      c.check(mismatch, "mismatch: askViaAgent throws AgentMismatchError on a wrong-agent answer");
+      c.check(fake.recorded.deletes.includes("ses_fake"), "mismatch: the wrong-agent session is cleaned up (created+throw)");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // 8h. AGENT MATCH — served agent equals requested → no throw, answer returned --------
+  {
+    const fake = await startFakeOpencode({ historyText: "right answer", servedAgent: "collab-read" });
+    try {
+      const r = await askViaAgent(fakeServe(fake), {
+        agent: "collab-read",
+        model: "openai/gpt-fake",
+        prompt: "q",
+        expectedAgent: "collab-read",
+      });
+      c.check(r.text === "right answer", "match: answer returned when the served agent matches");
     } finally {
       await fake.close();
     }

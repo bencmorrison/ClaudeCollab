@@ -27,8 +27,24 @@ export interface FakeOpencodeOpts {
   failHistory?: boolean;
   /** Return 500 on the POST message. */
   failMessage?: boolean;
+  /** Return 500 on the POST message ONLY when the request body's model id
+   * (`providerID/modelID`) equals this — so a panel can fail exactly ONE member while its
+   * siblings succeed against the same fake. */
+  failMessageForModel?: string;
   /** Session id to hand back from POST /session. */
   sessionId?: string;
+  /** Stamp `info.agent` on the served assistant messages (history). Used to prove the
+   * post-call agent-mismatch check: set it to a DIFFERENT agent than requested to force a
+   * mismatch, or to the SAME agent to prove the match case still passes. Unset ⇒ no agent
+   * field (older-opencode behaviour; the check is then skipped). */
+  servedAgent?: string;
+  /**
+   * Session-reuse mode (M7): when true, each POST /session returns a DISTINCT id
+   * (`<sessionId>-1`, `<sessionId>-2`, …) instead of a constant, so a panel's per-member
+   * `keepSessions` ids can be asserted distinct. The message/history/delete routes match
+   * any id, so continuation (`GET`/`POST /session/<id>/message`) still works unchanged.
+   */
+  distinctSessions?: boolean;
 }
 
 export interface FakeOpencode {
@@ -62,6 +78,8 @@ export function startFakeOpencode(opts: FakeOpencodeOpts): Promise<FakeOpencode>
     historyGets: [],
   };
 
+  let createCount = 0;
+
   const server: Server = createServer(async (req, res) => {
     const url = req.url ?? "";
     const method = req.method ?? "GET";
@@ -74,15 +92,27 @@ export function startFakeOpencode(opts: FakeOpencodeOpts): Promise<FakeOpencode>
       // POST /session
       if (method === "POST" && url === "/session") {
         recorded.createBodies.push(JSON.parse((await readBody(req)) || "{}"));
-        send(200, { id: sessionId, title: "fake", time: { created: Date.now() } });
+        createCount += 1;
+        const id = opts.distinctSessions ? `${sessionId}-${createCount}` : sessionId;
+        send(200, { id, title: "fake", time: { created: Date.now() } });
         return;
       }
 
       // POST /session/{id}/message
       const msgMatch = url.match(/^\/session\/([^/]+)\/message$/);
       if (method === "POST" && msgMatch) {
-        recorded.messageBodies.push(JSON.parse((await readBody(req)) || "{}"));
+        const body = JSON.parse((await readBody(req)) || "{}") as Record<string, unknown>;
+        recorded.messageBodies.push(body);
         if (opts.messageDelayMs) await new Promise((r) => setTimeout(r, opts.messageDelayMs));
+        // Per-model failure: 500 only for the targeted model (siblings still succeed).
+        if (opts.failMessageForModel) {
+          const m = (body.model ?? {}) as Record<string, unknown>;
+          const id = `${m.providerID ?? ""}/${m.modelID ?? ""}`;
+          if (id === opts.failMessageForModel) {
+            send(500, { error: `forced message failure for ${id}` });
+            return;
+          }
+        }
         if (opts.failMessage) {
           send(500, { error: "forced message failure" });
           return;
@@ -111,6 +141,8 @@ export function startFakeOpencode(opts: FakeOpencodeOpts): Promise<FakeOpencode>
           send(500, { error: "forced history failure" });
           return;
         }
+        // Optionally stamp info.agent on the assistant messages (agent-mismatch probe).
+        const agentField = opts.servedAgent !== undefined ? { agent: opts.servedAgent } : {};
         send(200, [
           {
             info: { id: "msg_user", role: "user", time: { created: 1 } },
@@ -120,6 +152,7 @@ export function startFakeOpencode(opts: FakeOpencodeOpts): Promise<FakeOpencode>
             info: {
               id: "msg_asst_tool",
               role: "assistant",
+              ...agentField,
               providerID: "openai",
               modelID: "gpt-fake",
               cost: 0.0042,
@@ -146,6 +179,7 @@ export function startFakeOpencode(opts: FakeOpencodeOpts): Promise<FakeOpencode>
             info: {
               id: "msg_asst_final",
               role: "assistant",
+              ...agentField,
               providerID: "openai",
               modelID: "gpt-fake",
               cost: 0.0042,

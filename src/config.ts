@@ -86,6 +86,49 @@ export function candidateRoots(
 }
 
 /* ---------------------------------------------------------------------------
+ * Agent-def-dir resolution + hardened-def presence (CONTRACT.md C16 lever).
+ *
+ * bash `ask.sh` computes `agent_def_dir="${COLLAB_AGENT_DIR:-$(conf_get COLLAB_AGENT_DIR)}"`
+ * and falls back to the sibling `$(dirname "$0")/../.opencode/agent`, then checks
+ * `[ -f "$agent_def_dir/<agent>.md" ]`. The TS server has no fixed sibling, so the
+ * "sibling" here is the serve's PROJECT dir (`$COLLAB_PROJECT_DIR` else cwd — the exact
+ * value `lifecycle.ts` spawns `opencode serve` from) plus `.opencode/agent`.
+ *
+ * WHAT THIS ACTUALLY OBSERVES (the honest bound). This is a FILESYSTEM presence check of
+ * the def FILE — the same and only lever bash's C16 uses. It does NOT — and cannot —
+ * observe opencode's own `--agent` resolution: opencode resolves the agent from ITS OWN
+ * config, independently. So if `COLLAB_AGENT_DIR` points somewhere other than where
+ * opencode actually resolves defs, this check and opencode can disagree (a caveat bash
+ * carries too — AGENTS.md). It governs the tool's refusal decision ONLY, exactly as C16
+ * says the bash check governs only the fallback decision.
+ * --------------------------------------------------------------------------- */
+export function resolveAgentDefDir(opts: {
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  confContents?: string;
+}): string {
+  const env = opts.env ?? process.env;
+  const cwd = opts.cwd ?? process.cwd();
+  const override = env.COLLAB_AGENT_DIR;
+  if (override && override.length > 0) return override;
+  const fromConf = confGet(opts.confContents ?? "", "COLLAB_AGENT_DIR");
+  if (fromConf.length > 0) return fromConf;
+  // The sibling: the project dir the serve is spawned from (matches lifecycle.ts).
+  const projectDir = env.COLLAB_PROJECT_DIR && env.COLLAB_PROJECT_DIR.length > 0
+    ? env.COLLAB_PROJECT_DIR
+    : cwd;
+  return path.join(projectDir, ".opencode", "agent");
+}
+
+/** True iff the hardened agent's def file (`<agent>.md`) exists in the resolved dir. */
+export function hardenedDefPresent(
+  agent: string,
+  agentDefDir: string,
+): boolean {
+  return existsSync(path.join(agentDefDir, `${agent}.md`));
+}
+
+/* ---------------------------------------------------------------------------
  * Config-file resolution (C9): `$COLLAB_CONF` if set, else `<root>/collab.conf.local`.
  * Parsed, NEVER sourced.
  * --------------------------------------------------------------------------- */

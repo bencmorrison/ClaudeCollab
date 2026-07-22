@@ -339,6 +339,52 @@ export function finalAssistantText(history: SessionHistory): string {
   return "";
 }
 
+/**
+ * The agent that actually SERVED the answer, read from the answer-producing assistant
+ * message's `info.agent` (opencode 1.18.2 populates it — verified live: a `collab-read`
+ * call reports `info.agent === "collab-read"`). Returns `undefined` when opencode does
+ * not report an agent (older/other builds), so a caller can DISTINGUISH "served a
+ * different agent" (a real mismatch to fail closed on) from "opencode didn't say" (which
+ * must not be treated as a mismatch — the check is only as strong as the field's
+ * presence, and inventing a mismatch on absence would break on a build that drops it).
+ */
+export function servingAgent(history: SessionHistory): string | undefined {
+  for (let i = history.messages.length - 1; i >= 0; i--) {
+    const m = history.messages[i];
+    if (m.role !== "assistant") continue;
+    const textParts = m.parts.filter(
+      (p) => p.type === "text" && typeof p.text === "string",
+    );
+    if (textParts.length === 0) continue;
+    const agent = m.info.agent;
+    return typeof agent === "string" && agent.length > 0 ? agent : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Raised when opencode served a DIFFERENT agent than the one requested — e.g. a silent
+ * fallback to the full-access built-in `build` when a hardened def didn't resolve, which
+ * would be full-access output masquerading as the read-only/hardened agent's. Thrown from
+ * `askViaAgent` right after the history read (`expectedAgent` set), so the session-deletion
+ * matrix cleans up correctly (a mismatch is treated as a failed turn). Carries the served
+ * session id so a higher layer can record which session produced the wrong-agent output.
+ */
+export class AgentMismatchError extends Error {
+  constructor(
+    readonly requested: string,
+    readonly actual: string,
+    readonly sessionId: string,
+  ) {
+    super(
+      `agent mismatch: requested '${requested}' but opencode served '${actual}' — ` +
+        `refusing to return the wrong agent's output as if it were the requested one ` +
+        `(a silent fallback to a weaker/full-access agent is a masquerade).`,
+    );
+    this.name = "AgentMismatchError";
+  }
+}
+
 /** Every tool invocation across the exchange, flattened to `ToolPartView`. */
 export function toolParts(history: SessionHistory): ToolPartView[] {
   const out: ToolPartView[] = [];
@@ -400,6 +446,29 @@ export interface AskViaAgentOpts {
   messageTimeoutMs?: number;
   shortTimeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * SESSION CONTINUATION (M7 / Option B). Continue an EXISTING opencode session
+   * instead of creating a fresh one: the session already carries the peer's prior
+   * turns, so the ONLY new bytes sent are `prompt`/`parts` — the driver never
+   * re-transmits another model's words (PLAN.md "Option B" construction guarantee).
+   * When set, `createSession` is NOT called; the id is used as-is.
+   */
+  sessionId?: string;
+  /**
+   * Keep the session alive for further continuation: skip the `finally`-delete and
+   * return the id in `AskResult.sessionId`. Default (unset/false) deletes the session
+   * after the turn — the single-shot behaviour M5/M6 relied on. This expresses INTENT;
+   * ownership (created-here vs continued) and outcome (success vs throw) also decide
+   * deletion — see the matrix in `askViaAgent`.
+   */
+  keepSession?: boolean;
+  /**
+   * The agent name that MUST have served the answer. When set, `askViaAgent` reads the
+   * served agent from history after the turn and throws `AgentMismatchError` if opencode
+   * served a different one — closing the "silent fallback to a weaker agent" hole. Left
+   * unset (e.g. low-level client tests), no check is done.
+   */
+  expectedAgent?: string;
 }
 
 export interface AskResult {
@@ -415,11 +484,15 @@ export interface AskResult {
 }
 
 /**
- * The composed happy path: ensure a serve is up (M1 lifecycle), create a session
- * on `agent`, send the turn, read the answer from history, and ALWAYS delete the
- * session — including when the send or history read throws. The session is torn
- * down in a `finally`; a failed delete is swallowed (best-effort) so it never
- * masks the real error.
+ * The composed happy path: ensure a serve is up (M1 lifecycle), obtain a session on
+ * `agent` (create a fresh one, OR continue `opts.sessionId` when given — M7 Option B),
+ * send the turn, read the answer from history, and — UNLESS `keepSession` — delete the
+ * session even when the send or history read throws. Teardown is in a `finally`; a
+ * failed delete is swallowed (best-effort) so it never masks the real error.
+ *
+ * When continuing (`sessionId` set), `createSession` is NOT called: the peer's earlier
+ * turns live in opencode's session, so only this turn's `parts` are transmitted — the
+ * fidelity guarantee is by construction, not by the driver re-quoting the peer.
  */
 export async function askViaAgent(serve: ServeProvider, opts: AskViaAgentOpts): Promise<AskResult> {
   const parts: MessagePartInput[] =
@@ -427,20 +500,29 @@ export async function askViaAgent(serve: ServeProvider, opts: AskViaAgentOpts): 
   const shortMs = opts.shortTimeoutMs ?? SHORT_HTTP_MS;
   const messageMs = opts.messageTimeoutMs ?? MESSAGE_HTTP_MS;
 
-  return serve.withServe(async (h) => {
-    const session = await createSession({
-      baseUrl: h.baseUrl,
-      agent: opts.agent,
-      title: opts.title,
-      model: opts.model,
-      timeoutMs: shortMs,
-      signal: opts.signal,
-    });
+  // Ownership: did WE create this session, or are we continuing the caller's?
+  const continued = opts.sessionId !== undefined;
 
+  return serve.withServe(async (h) => {
+    // Continue an existing session (no create) or mint a fresh one.
+    const sessionId =
+      opts.sessionId ??
+      (
+        await createSession({
+          baseUrl: h.baseUrl,
+          agent: opts.agent,
+          title: opts.title,
+          model: opts.model,
+          timeoutMs: shortMs,
+          signal: opts.signal,
+        })
+      ).id;
+
+    let succeeded = false;
     try {
       const metadata = await sendMessage({
         baseUrl: h.baseUrl,
-        sessionId: session.id,
+        sessionId,
         agent: opts.agent,
         model: opts.model,
         parts,
@@ -450,25 +532,53 @@ export async function askViaAgent(serve: ServeProvider, opts: AskViaAgentOpts): 
 
       const history = await fetchHistory({
         baseUrl: h.baseUrl,
-        sessionId: session.id,
+        sessionId,
         timeoutMs: shortMs,
         signal: opts.signal,
       });
 
-      return {
+      // Fail closed if opencode served a DIFFERENT agent than requested (a masquerade).
+      // Thrown here — BEFORE `succeeded` is set — so the deletion matrix treats a
+      // mismatch as a failed turn (a created-here session gets cleaned up, not orphaned).
+      if (opts.expectedAgent !== undefined) {
+        const actual = servingAgent(history);
+        if (actual !== undefined && actual !== opts.expectedAgent) {
+          throw new AgentMismatchError(opts.expectedAgent, actual, sessionId);
+        }
+      }
+
+      const result: AskResult = {
         text: finalAssistantText(history),
-        sessionId: session.id,
+        sessionId,
         metadata,
         toolParts: toolParts(history),
         history,
       };
+      succeeded = true;
+      return result;
     } finally {
-      // Best-effort teardown: never let a cleanup failure mask a real error.
-      await deleteSession({
-        baseUrl: h.baseUrl,
-        sessionId: session.id,
-        timeoutMs: shortMs,
-      }).catch(() => {});
+      // DELETION MATRIX (ownership × outcome × intent). Deletion means "we tear this
+      // session down"; a delete failure is swallowed so it never masks a real error.
+      //
+      //   created here + success + keepSession   → KEEP  (return the id for reuse)
+      //   created here + success + !keepSession  → DELETE (single-shot default)
+      //   created here + THROW   (any keep)      → DELETE (id is unreturnable — keeping
+      //                                             it would be a durable on-disk orphan)
+      //   continued + success + keepSession      → KEEP  (caller wants more turns)
+      //   continued + success + !keepSession     → DELETE (documented final-turn behaviour)
+      //   continued + THROW     (any keep)       → KEEP  (the CALLER owns the id and may
+      //                                             retry; deleting destroys e.g. workshop
+      //                                             round-1 state we did not create)
+      const shouldDelete = continued
+        ? succeeded && !opts.keepSession
+        : !succeeded || !opts.keepSession;
+      if (shouldDelete) {
+        await deleteSession({
+          baseUrl: h.baseUrl,
+          sessionId,
+          timeoutMs: shortMs,
+        }).catch(() => {});
+      }
     }
   });
 }

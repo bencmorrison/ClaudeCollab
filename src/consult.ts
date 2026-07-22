@@ -31,7 +31,7 @@
 
 import { randomBytes } from "node:crypto";
 import os from "node:os";
-import { askViaAgent, type ServeProvider } from "./client.js";
+import { askViaAgent, AgentMismatchError, type ServeProvider } from "./client.js";
 import { EvidenceLog } from "./log.js";
 import {
   resolveCollabRoot,
@@ -130,7 +130,12 @@ export function collabDoctorSeed(
 }
 
 // --- Result / error shapes -------------------------------------------------
-export type ConsultErrorKind = "model-id" | "policy-deny" | "policy-ask" | "call-failed";
+export type ConsultErrorKind =
+  | "model-id"
+  | "policy-deny"
+  | "policy-ask"
+  | "call-failed"
+  | "agent-mismatch";
 
 export interface ConsultAttribution {
   /** The EXACT model id used (consult.md reports the model id used — area-F command
@@ -167,6 +172,14 @@ export interface ConsultOk {
   attribution: ConsultAttribution;
   /** Multi-root conflict note, if any (surfaced, never fatal). */
   rootConflict?: string;
+  /**
+   * The opencode session id, returned ONLY when `keepSession` was requested (a deleted
+   * session's id is useless). This is the sole way a caller threads a follow-up turn:
+   * pass it back as `sessionId`. There is deliberately NO parameter for handing back the
+   * peer's previous ANSWER — continuation is by session id, never by re-transmitting the
+   * other model's words (PLAN.md "Option B" guarantee).
+   */
+  sessionId?: string;
 }
 export interface ConsultFail {
   ok: false;
@@ -182,6 +195,15 @@ export interface ConsultParams {
   model?: string;
   runId?: string;
   confirmed?: boolean;
+  /**
+   * Continue an EXISTING opencode session (Option B). The peer's prior turns already
+   * live in that session, so `question` is the only new text sent — the driver never
+   * re-quotes the other model. This is the round-2 primitive for `/collab:workshop`
+   * (each panel member continues its OWN round-1 session; see panel.ts keepSessions).
+   */
+  sessionId?: string;
+  /** Keep the session alive after this turn and return its id (for a further turn). */
+  keepSession?: boolean;
 }
 
 export interface ConsultDeps {
@@ -305,6 +327,14 @@ export interface LifecycleParams {
   runId: string;
   tier: PolicyTier;
   confirmed: boolean;
+  /**
+   * SESSION CONTINUATION (M7 / Option B). Continue this EXISTING opencode session
+   * (skip create); its id is known up front so it is recorded on the `started` entry
+   * too, letting the witness see which turns shared a session. Omit to mint a fresh one.
+   */
+  sessionId?: string;
+  /** Keep the session alive after the turn (return its id); default deletes it. */
+  keepSession?: boolean;
 }
 
 export interface LifecycleDeps {
@@ -314,8 +344,8 @@ export interface LifecycleDeps {
 }
 
 export type LifecycleOutcome =
-  | { ok: true; text: string; callId: string; actualModel: string }
-  | { ok: false; callId: string; reason: string };
+  | { ok: true; text: string; callId: string; actualModel: string; sessionId: string }
+  | { ok: false; callId: string; reason: string; kind: "call-failed" | "agent-mismatch" };
 
 /**
  * The evidence spine every model turn shares: mint a call id, write expect→started
@@ -346,7 +376,9 @@ export async function runAgentLifecycle(
     agent: p.agent,
     run: p.runId,
   });
-  const started = await d.log.started({ ...common, prompt: p.question });
+  // On a continuation the session id is known before the call, so it is stamped on
+  // `started` too (a fresh session is only known post-call and lands on `completed`).
+  const started = await d.log.started({ ...common, session: p.sessionId, prompt: p.question });
   try {
     const result = await askViaAgent(d.serve, {
       agent: p.agent,
@@ -354,6 +386,10 @@ export async function runAgentLifecycle(
       prompt: p.question,
       title: p.title,
       messageTimeoutMs: d.messageTimeoutMs,
+      sessionId: p.sessionId,
+      keepSession: p.keepSession,
+      // Fail closed if opencode serves a different agent than the hardened one requested.
+      expectedAgent: p.agent,
     });
     await d.log.completed({
       ...common,
@@ -368,16 +404,22 @@ export async function runAgentLifecycle(
       text: result.text,
       callId,
       actualModel: actualModel(p.requestedModel, result.metadata.providerID, result.metadata.modelID),
+      sessionId: result.sessionId,
     };
   } catch (err) {
+    const mismatch = err instanceof AgentMismatchError;
     const reason = err instanceof Error ? err.message : String(err);
     await d.log.completed({
       ...common,
       exit: 1,
       turn: started.turn,
+      // Record the session id we know: the served one on a mismatch, else the continued
+      // id (item 4 — a failed continuation must still record which session it was; null
+      // for a fresh session whose id we never learned before the throw).
+      session: mismatch ? err.sessionId : p.sessionId,
       captureState: "failed",
     });
-    return { ok: false, callId, reason };
+    return { ok: false, callId, reason, kind: mismatch ? "agent-mismatch" : "call-failed" };
   }
 }
 
@@ -448,12 +490,14 @@ export async function consult(params: ConsultParams, deps: ConsultDeps): Promise
       runId,
       tier: gate.tier,
       confirmed: gate.confirmed,
+      sessionId: params.sessionId,
+      keepSession: params.keepSession === true,
     },
     { serve: deps.serve, log, messageTimeoutMs: deps.messageTimeoutMs },
   );
 
   if (outcome.ok) {
-    return {
+    const ok: ConsultOk = {
       ok: true,
       answer: outcome.text,
       rootConflict,
@@ -465,19 +509,30 @@ export async function consult(params: ConsultParams, deps: ConsultDeps): Promise
         callId: outcome.callId,
       },
     };
+    // Only expose the session id when the caller asked to keep it — otherwise the
+    // session is deleted and its id is a dangling reference.
+    if (params.keepSession === true) ok.sessionId = outcome.sessionId;
+    return ok;
   }
   const modelLabel = requestedModel === "" ? "(opencode default)" : requestedModel;
+  // agent-mismatch is a positive-direction addition over bash (which has no post-call
+  // agent check); it has NO bash exit analogue, so exitAnalogue stays null like
+  // call-failed — the kind + isError carry the fail-closed signal.
+  const message =
+    outcome.kind === "agent-mismatch"
+      ? outcome.reason
+      : `The consult call to '${modelLabel}' failed: ${outcome.reason}. No answer was produced.`;
   return {
     ok: false,
     rootConflict,
     error: {
-      kind: "call-failed",
+      kind: outcome.kind,
       model: requestedModel,
       // null, NOT 0: bash propagates opencode's own non-zero status verbatim (C53) and
       // 0 means success — a numeric analogue here would collide with that. The failure
       // signal is kind + isError; the reason rides in `message`.
       exitAnalogue: null,
-      message: `The consult call to '${modelLabel}' failed: ${outcome.reason}. No answer was produced.`,
+      message,
     },
   };
 }
@@ -506,6 +561,8 @@ export function consultToToolResult(r: ConsultResult): McpToolResult {
   if (r.ok) {
     const structured: Record<string, unknown> = { answer: r.answer, ...r.attribution };
     if (r.rootConflict) structured.rootConflict = r.rootConflict;
+    // Surface the kept session id so the driver can thread a follow-up turn by id.
+    if (r.sessionId) structured.sessionId = r.sessionId;
     return { content: [{ type: "text", text: r.answer }], structuredContent: structured };
   }
   const structured: Record<string, unknown> = { error: r.error };

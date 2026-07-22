@@ -477,6 +477,123 @@ export async function run(): Promise<number> {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Session continuation (M7 / Option B): consult keepSession → id returned + session
+  // KEPT; a follow-up consult threads that sessionId (no re-transmitting the peer's
+  // words) and carries the session id on BOTH its started and completed entries; the
+  // one threaded run verifies under BOTH verifiers with session ids present.
+  // -------------------------------------------------------------------------
+  {
+    const root = tmp("m5-collab-"); // no policy ⇒ default-allow
+    const logDir = tmp("m5-logs-");
+    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const fake = await startFakeOpencode({ historyText: "turn answer" });
+    try {
+      // Round 1: keepSession → session id returned, session NOT deleted yet.
+      const r1 = await consult(
+        { question: "round 1 question", model: "openai/gpt-fake", keepSession: true },
+        { serve: fakeServe(fake), env, messageTimeoutMs: 5_000 },
+      );
+      c.check(r1.ok, "session: round-1 consult ok");
+      const runId = r1.ok ? r1.attribution.runId : "";
+      const sid = r1.ok ? r1.sessionId : undefined;
+      c.check(!!sid && sid === "ses_fake", "session: keepSession returned the session id");
+      c.check(fake.recorded.deletes.length === 0, "session: round-1 kept the session (no delete)");
+      const wire1 = consultToToolResult(r1);
+      c.check(
+        (wire1.structuredContent as Record<string, unknown>)?.sessionId === "ses_fake",
+        "session: MCP result surfaces the kept sessionId",
+      );
+
+      // Round 2: CONTINUE that session (sessionId only — the peer's prior turn is NOT
+      // re-sent), threaded into the same run.
+      const r2 = await consult(
+        { question: "round 2 — my new turn only", model: "openai/gpt-fake", runId, sessionId: sid },
+        { serve: fakeServe(fake), env, messageTimeoutMs: 5_000 },
+      );
+      c.check(r2.ok, "session: round-2 continuation ok");
+      c.check(fake.recorded.createBodies.length === 1, "session: continuation made NO new create (still just round-1's)");
+      c.check(fake.recorded.messageBodies.length === 2, "session: two turns total went to the session");
+      c.check(fake.recorded.deletes.length === 1 && fake.recorded.deletes[0] === "ses_fake", "session: round-2 (keepSession off) deleted the continued session once");
+
+      // The continuation's started AND completed both carry the session id.
+      const call2Id = r2.ok ? r2.attribution.callId : "";
+      const entries = readEntries(logDir, runId);
+      const started2 = entries.find((e) => e.call_id === call2Id && e.status === "started");
+      const completed2 = entries.find((e) => e.call_id === call2Id && e.status === "completed");
+      c.check(started2?.session_id === "ses_fake", "session: round-2 STARTED entry carries session_id");
+      c.check(completed2?.session_id === "ses_fake", "session: round-2 COMPLETED entry carries session_id");
+
+      // The single threaded run verifies under BOTH verifiers, session ids present.
+      c.check(new EvidenceLog({ env }).verify(runId).code === 0, "session: threaded run passes TS verify()");
+      c.check(bashVerify(runId, env) === 0, "session: threaded run passes bash verify (exit 0)");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Agent MISMATCH (positive-direction over bash C16): opencode serves a DIFFERENT
+  // agent than requested → fail closed. No answer returned; completed recorded as
+  // capture_state:failed; the run is still well-formed (verify passes — a failed
+  // capture is legitimate, an unpaired entry is not).
+  // -------------------------------------------------------------------------
+  {
+    const root = tmp("m5-collab-"); // default-allow
+    const logDir = tmp("m5-logs-");
+    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const fake = await startFakeOpencode({ historyText: "FULL-ACCESS ANSWER", servedAgent: "build" });
+    try {
+      const r = await consult(
+        { question: "q", model: "openai/gpt-fake" },
+        { serve: fakeServe(fake), env, messageTimeoutMs: 5_000 },
+      );
+      c.check(!r.ok, "mismatch: consult fails closed");
+      if (!r.ok) {
+        c.check(r.error.kind === "agent-mismatch", "mismatch: kind is agent-mismatch");
+        c.check(r.error.message.includes("collab-read") && r.error.message.includes("build"), "mismatch: message names requested (collab-read) and served (build)");
+        c.check(!("answer" in r), "mismatch: NO answer field on the failure result");
+      }
+      const wire = consultToToolResult(r);
+      c.check(wire.isError === true, "mismatch: MCP result flags isError");
+      c.check(!wire.content[0].text.includes("FULL-ACCESS ANSWER"), "mismatch: the wrong-agent answer is NOT surfaced");
+
+      // The run recorded exactly one started + one completed(failed). A failed capture is
+      // a real evidence GAP: verify must FLAG it (code 7), not report clean — the witness
+      // has to see the wrong-agent call failed, never a false all-good. (The `latest`
+      // symlink also lives in logDir, so filter it out to find the single run dir.)
+      const dirs = readdirSync(logDir).filter((d) => d !== "latest");
+      c.check(dirs.length === 1, "mismatch: exactly one run dir was written (call gated-open, then failed closed)");
+      const rid = dirs[0];
+      const entries = readEntries(logDir, rid);
+      const completed = entries.find((e) => e.type === "call" && e.status === "completed");
+      c.check(completed?.capture_state === "failed", "mismatch: completed entry is capture_state:failed");
+      c.check(completed?.raw_response === "", "mismatch: NO wrong-agent response captured");
+      c.check(new EvidenceLog({ env }).verify(rid).code === 7, "mismatch: verify FLAGS the failed capture (TS code 7) — the gap is visible");
+      c.check(bashVerify(rid, env) === 7, "mismatch: bash verify FLAGS the same gap (exit 7)");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // MATCH: served agent equals requested → normal success (the check is not a false trip).
+  {
+    const root = tmp("m5-collab-");
+    const logDir = tmp("m5-logs-");
+    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const fake = await startFakeOpencode({ historyText: "read-only answer", servedAgent: "collab-read" });
+    try {
+      const r = await consult(
+        { question: "q", model: "openai/gpt-fake" },
+        { serve: fakeServe(fake), env, messageTimeoutMs: 5_000 },
+      );
+      c.check(r.ok, "match: consult succeeds when the served agent matches");
+      c.check(r.ok && r.answer === "read-only answer", "match: the answer is returned");
+    } finally {
+      await fake.close();
+    }
+  }
+
   // cleanup
   for (const d of tmpDirs) {
     try {
