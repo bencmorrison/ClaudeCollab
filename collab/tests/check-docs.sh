@@ -37,19 +37,41 @@ if grep -RIn --include='*.md' 'Bash(bash collab/log\.sh:\*)' .claude/commands/co
   bad "broad log.sh grant found; allow only required subcommands"
 fi
 
+# MCP-era command shape (M10): the multi-call workflows drive the MCP tools, not
+# `ask.sh`, and touch ZERO collab bash — subagent-voice logging retired with the
+# witness (a subagent voice was Claude's own captured:false transcription, testimony
+# for the cancelled witness; the log's receipts are the external models' auto-captured
+# responses). Assert each grants the MCP tool(s) it invokes. (bash 3.2 has no
+# associative arrays — the macOS CI job runs this lint — so use a case, not declare -A.)
 for command in panel workshop collaborate; do
   file=".claude/commands/collab/$command.md"
-  if ! grep -Fq 'allowed-tools:' "$file" || ! grep -Fq 'Bash(RUN=$(bash collab/log.sh new-run:*))' "$file"; then
-    bad "$command must grant the exact RUN=\$(bash collab/log.sh new-run ...) command"
-  fi
-  if ! grep -Fq 'RUN=$(bash collab/log.sh new-run' "$file"; then
-    bad "$command no longer documents the new-run assignment its frontmatter grants"
-  fi
-  combined_grant="Bash(COLLAB_RUN_ID=* COLLAB_COMMAND=/collab:$command COLLAB_CONFIRMED=1 bash collab/ask.sh:*)"
-  grep -m1 '^allowed-tools:' "$file" | grep -Fq "$combined_grant" \
-    || bad "$command must grant the exact combined run-id, command, and confirmation invocation"
+  grep -Fq 'allowed-tools:' "$file" || bad "$command has no allowed-tools frontmatter"
+  case "$command" in
+    panel)       mcp_grants="mcp__claudecollab__collab_panel" ;;
+    workshop)    mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_consult" ;;
+    collaborate) mcp_grants="mcp__claudecollab__collab_consult" ;;
+    *)           mcp_grants="" ;;
+  esac
+  fm_line="$(grep -m1 '^allowed-tools:' "$file")"
+  for g in $mcp_grants; do
+    printf '%s' "$fm_line" | grep -Fq "$g" \
+      || bad "$command must grant the MCP tool $g in allowed-tools"
+  done
 done
 
+# The 7 migrated command docs must touch ZERO collab bash (M10): no ask.sh, no log.sh,
+# no panel-models.sh, and none of the old env-var invocation forms. witness.md and
+# configure.md are intentionally excluded — they keep their bash until M11/M12.
+migrated_cmds=(consult panel research delegate review workshop collaborate)
+for command in "${migrated_cmds[@]}"; do
+  file=".claude/commands/collab/$command.md"
+  if grep -nE 'collab/ask\.sh|collab/log\.sh|panel-models\.sh|COLLAB_RUN_ID|COLLAB_CONFIRMED' "$file"; then
+    bad "$command still references collab bash; the migrated docs drive the MCP tools only"
+  fi
+done
+
+# The bash wrapper layer still ships until the v1.0.0 retirement (PLAN.md M12), so
+# README continues to document its optional pre-approval grants.
 grep -Fq '"Bash(COLLAB_RUN_ID=* COLLAB_COMMAND=/collab:* COLLAB_CONFIRMED=1 bash collab/ask.sh:*)"' README.md \
   || bad "README optional permissions omit the combined run-id, command, and confirmation invocation"
 
@@ -131,15 +153,21 @@ if [ "${1:-}" = "--self-test" ]; then
   printf '\nRun `/review` for details.\n' >> "$fixture/README.md"
   expect_rejected "obsolete command name" "$fixture"
 
-  fixture="$tmp/command-grant-mismatch"
+  fixture="$tmp/missing-mcp-grant"
   cp -a "$baseline" "$fixture"
   cat > "$fixture/.claude/commands/collab/panel.md" <<'EOF'
 ---
-allowed-tools: Bash(RUN=$(bash collab/log.sh new-run:*)), Bash(COLLAB_RUN_ID=* COLLAB_COMMAND=/collab:workshop COLLAB_CONFIRMED=1 bash collab/ask.sh:*)
+allowed-tools: mcp__claudecollab__collab_consult, Task
 ---
-RUN=$(bash collab/log.sh new-run)
+Ask the panel.
 EOF
-  expect_rejected "command/grant mismatch" "$fixture"
+  expect_rejected "panel missing its collab_panel MCP grant" "$fixture"
+
+  fixture="$tmp/migrated-doc-collab-bash"
+  cp -a "$baseline" "$fixture"
+  printf '\nRun `COLLAB_COMMAND=/collab:consult bash collab/ask.sh "q"`.\n' \
+    >> "$fixture/.claude/commands/collab/consult.md"
+  expect_rejected "collab bash in a migrated command doc" "$fixture"
 
   fixture="$tmp/stale-lifecycle"
   cp -a "$baseline" "$fixture"
