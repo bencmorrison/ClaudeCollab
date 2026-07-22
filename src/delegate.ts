@@ -1,0 +1,446 @@
+/**
+ * collab_delegate — the WRITE path (PLAN.md M8).
+ *
+ * The MCP translation of bash `/collab:delegate` / `ask.sh --edit`: one model turn through
+ * the UNMODIFIED `collab-build` agent (`.opencode/agent/collab-build.md` — a default-deny
+ * allowlist re-allowing edit/write/patch/bash; C47/C48), wrapped in the worktree
+ * snapshot/diff machinery (src/snapshot.ts) so the model's changes are recorded as a patch
+ * a human reviews. The model's report AND its diff are untrusted DATA the DRIVER reviews and
+ * verifies — never instructions to act on (C42/C52). The human diff review is the trust
+ * boundary (SECURITY.md collab-build: `bash` is allowed by design, so the non-mutation
+ * denies are defense-in-depth, not by construction).
+ *
+ * TWO DELIBERATE DEVIATIONS FROM bash C16, both task-directed (PLAN.md M7 precedent, applied
+ * to the write path):
+ *   1. NO fallback EVER. bash falls back to the UNRESTRICTED built-in `build` when
+ *      collab-build.md is missing (loud warning; hard-error only under
+ *      COLLAB_REQUIRE_HARDENED). Here a missing def is a structured `agent-def-missing`
+ *      refusal (exit-5 analogue, C57): no model called, no log written. Silently degrading
+ *      the write path to the unrestricted editor while the caller still believes it got the
+ *      hardened one is exactly the failure mode this repo kills — and it matters MOST on the
+ *      write path, where the fallback is `build` (everything allowed), not a weaker read.
+ *   2. Post-call agent-mismatch check (via runAgentLifecycle's expectedAgent): if opencode
+ *      served a different agent than collab-build, the turn fails closed. A build-agent
+ *      masquerade is the write-path's worst case; bash has no such check.
+ *
+ * WRITE-PATH ORDERING (C36–C40, C37 the scar): snapshot the worktree as a git tree BEFORE
+ * the model turn (throwaway index, caller's index/worktree untouched); run the turn; then —
+ * on EVERY path, including a partially-failed call, because whatever the model changed must
+ * be captured — snapshot again and diff base→after (created files included). The patch lands
+ * at <runDir>/diff-<callId>.patch, logged as a `delegate-diff` entry (claim:false, patch
+ * hashed). The pre-tree sha is the recovery hint (`git checkout <tree> -- <path>`).
+ *
+ * Everything else mirrors collab_research: gate (leading-dash → policy tier) BEFORE any log
+ * write so a refusal logs nothing (C24 gap parity), then the shared expect→started→completed
+ * lifecycle spine (src/consult.ts runAgentLifecycle), reused not forked.
+ */
+
+import os from "node:os";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+import { type ServeProvider } from "./client.js";
+import { EvidenceLog } from "./log.js";
+import {
+  resolveRootWithConflict,
+  gateModel,
+  runAgentLifecycle,
+  type McpToolResult,
+} from "./consult.js";
+import {
+  readConfContents,
+  resolveModel,
+  resolveAgentDefDir,
+  hardenedDefPresent,
+} from "./config.js";
+import { type PolicyTier } from "./policy.js";
+import { snapshotWorktree, captureDelegateDiff, scaffoldDigest } from "./snapshot.js";
+
+/** The write-capable, hardened agent this tool ALWAYS uses, unmodified (C15/C47/C48). */
+export const DELEGATE_AGENT = "collab-build";
+/** The command label recorded in the evidence log (drives `/collab:witness`). */
+export const DELEGATE_COMMAND = "/collab:delegate";
+
+// --- Params + deps ---------------------------------------------------------
+export interface DelegateParams {
+  task: string;
+  model?: string;
+  runId?: string;
+  confirmed?: boolean;
+}
+
+export interface DelegateDeps {
+  serve: ServeProvider;
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  home?: string;
+  /** Injected in tests so root/policy/log all share one collab dir; else resolved. */
+  log?: EvidenceLog;
+  messageTimeoutMs?: number;
+  /**
+   * The worktree the model edits — the project dir the serve was spawned from. Defaults to
+   * `COLLAB_PROJECT_DIR ?? cwd`, matching OpencodeLifecycle's own default so the snapshot
+   * targets the SAME tree opencode mutates. Injected in tests to point at a disposable repo.
+   */
+  repoDir?: string;
+}
+
+// --- Capture shape (attached to both ok and failed results) ----------------
+export interface DelegateCapture {
+  /** Whether the model edited inside a git worktree (no worktree ⇒ no diff recorded). */
+  gitWorktree: boolean;
+  /** The patch of the model's changes; null when nothing to review or not a git worktree. */
+  patchPath: string | null;
+  /** The pre-turn tree sha (the recovery point). */
+  preTree: string | null;
+  afterTree: string | null;
+  filesChanged: number;
+  /** false ⇒ the recorded patch is a partial/incomplete record; the log fails integrity
+   * loudly (C40). The reason names why (ignored/submodule/tree state unrepresentable). */
+  captureComplete: boolean;
+  incompleteReason: string;
+  /** `git checkout <preTree> -- <path>` template, surfaced when the worktree was dirty. */
+  recoveryHint: string | null;
+  /** TAMPER SIGNAL (M8): the serve-runtime scaffolding (`.opencode/node_modules/**` + its
+   * manifests — excluded from the ignored fingerprint, but LOADED AND EXECUTED by opencode
+   * serve) changed during the model turn. Does NOT affect captureComplete; it is a separate
+   * flag so an otherwise-invisible write into the transport's plugin dir is surfaced. */
+  scaffoldChanged: boolean;
+  /** One-line warning when `scaffoldChanged`, naming the path class to review; else null. */
+  scaffoldWarning: string | null;
+}
+
+// --- Result / error shapes -------------------------------------------------
+export type DelegateErrorKind =
+  | "agent-def-missing"
+  | "model-id"
+  | "policy-deny"
+  | "policy-ask"
+  | "call-failed"
+  | "agent-mismatch";
+
+export interface DelegateAttribution {
+  /** The EXACT model id used: the resolved id, or the id opencode actually ran. */
+  model: string;
+  requestedModel: string;
+  agent: string;
+  runId: string;
+  callId: string;
+}
+
+export interface DelegateError {
+  kind: DelegateErrorKind;
+  message: string;
+  /** 5 agent-def-missing (C57), 2 model-id (C55), 3 deny, 4 ask (C56); null for a
+   * call-failed/agent-mismatch (bash propagates opencode's own status; 0 = success). */
+  exitAnalogue: number | null;
+  model: string;
+  tier?: PolicyTier;
+}
+
+export interface DelegateOk {
+  ok: true;
+  /** The model's own text account of what it did — DATA to review, not instructions. */
+  report: string;
+  attribution: DelegateAttribution;
+  capture: DelegateCapture;
+  rootConflict?: string;
+}
+export interface DelegateFail {
+  ok: false;
+  error: DelegateError;
+  /** Present when the model turn RAN (call-failed / agent-mismatch): whatever it changed
+   * before failing is still captured and surfaced so the human can review/recover it. */
+  capture?: DelegateCapture;
+  rootConflict?: string;
+}
+export type DelegateResult = DelegateOk | DelegateFail;
+
+/** Resolve the worktree the model edits, matching OpencodeLifecycle's default. */
+function resolveRepoDir(deps: DelegateDeps, env: NodeJS.ProcessEnv, cwd: string): string {
+  if (deps.repoDir && deps.repoDir.length > 0) return deps.repoDir;
+  if (env.COLLAB_PROJECT_DIR && env.COLLAB_PROJECT_DIR.length > 0) return env.COLLAB_PROJECT_DIR;
+  return cwd;
+}
+
+/**
+ * Run one delegation. Pure of the MCP layer: returns a discriminated result the server
+ * translates. Never throws for an expected refusal or a model failure — both are data.
+ */
+export async function delegate(
+  params: DelegateParams,
+  deps: DelegateDeps,
+): Promise<DelegateResult> {
+  const env = deps.env ?? process.env;
+  const cwd = deps.cwd ?? process.cwd();
+  const home = deps.home ?? os.homedir();
+
+  // 1. Resolve the config root ONCE; surface a multi-root conflict.
+  const rootRes = resolveRootWithConflict(env, cwd, home);
+  const collabDir = rootRes.root;
+  const rootConflict = rootRes.conflict;
+  const confContents = readConfContents(collabDir, env);
+
+  // 2. NO-FALLBACK def gate (deviation from bash C16). A missing collab-build def REFUSES
+  //    loudly — never silently degrades to the UNRESTRICTED `build`. Refused before any log
+  //    write (gap parity) and before any snapshot (nothing ran).
+  const agentDefDir = resolveAgentDefDir({ env, cwd, confContents });
+  if (!hardenedDefPresent(DELEGATE_AGENT, agentDefDir)) {
+    return {
+      ok: false,
+      rootConflict,
+      error: {
+        kind: "agent-def-missing",
+        model: "",
+        exitAnalogue: 5,
+        message:
+          `The hardened '${DELEGATE_AGENT}' agent def was not found in ${agentDefDir} ` +
+          `(${DELEGATE_AGENT}.md). Refusing to delegate: unlike the bash path there is NO ` +
+          `fallback — and the write-path fallback would be the UNRESTRICTED built-in 'build' ` +
+          `agent (all tools allowed), so silently degrading here is worse than on any read ` +
+          `path. Install the def (or set COLLAB_AGENT_DIR to where it lives) and retry.`,
+      },
+    };
+  }
+
+  // 3. Resolve the model (param > COLLAB_MODEL env > conf > opencode default).
+  const requestedModel = resolveModel({ flag: params.model, env, confContents });
+
+  // 4. Gate: leading-dash refusal (C12) THEN policy tier (C1–C7), all BEFORE any log write.
+  const gate = gateModel(requestedModel, params.confirmed === true, { collabDir, env });
+  if (!gate.ok) {
+    return {
+      ok: false,
+      rootConflict,
+      error: {
+        kind: gate.refusal.kind,
+        message: gate.refusal.message,
+        exitAnalogue: gate.refusal.exitAnalogue,
+        model: gate.refusal.model,
+        tier: gate.refusal.tier,
+      },
+    };
+  }
+
+  // --- Past the gate: from here every path writes exactly one started + completed. ---
+  const log = deps.log ?? new EvidenceLog({ env, cwd, collabDir });
+  const runId =
+    params.runId && params.runId.length > 0 ? params.runId : log.newRun(DELEGATE_COMMAND);
+  const repoDir = resolveRepoDir(deps, env, cwd);
+
+  // 5. Snapshot the worktree BEFORE the model runs (throwaway index; caller's index and
+  //    worktree untouched — C36/C37). Nothing has been edited yet, so this is the baseline.
+  const before = snapshotWorktree(repoDir);
+
+  // 6. The model turn, via the UNMODIFIED collab-build agent (shared spine + agent-mismatch).
+  const outcome = await runAgentLifecycle(
+    {
+      question: params.task,
+      requestedModel,
+      agent: DELEGATE_AGENT,
+      command: DELEGATE_COMMAND,
+      title: "collab_delegate",
+      runId,
+      tier: gate.tier,
+      confirmed: gate.confirmed,
+    },
+    { serve: deps.serve, log, messageTimeoutMs: deps.messageTimeoutMs },
+  );
+
+  // 7. Capture AFTER — on EVERY path, including a failed call: whatever the model changed
+  //    before failing must be recorded (trace ask.sh, which calls record_delegate_diff before
+  //    log_complete regardless of opencode's exit). The callId is the lifecycle's; using it
+  //    keeps the delegate-diff entry paired to the same call (verify cardinality, C24).
+  const capture = await captureAndLog(before, {
+    repoDir,
+    log,
+    runId,
+    callId: outcome.callId,
+  });
+
+  if (outcome.ok) {
+    return {
+      ok: true,
+      report: outcome.text,
+      rootConflict,
+      attribution: {
+        model: outcome.actualModel,
+        requestedModel,
+        agent: DELEGATE_AGENT,
+        runId,
+        callId: outcome.callId,
+      },
+      capture,
+    };
+  }
+
+  const modelLabel = requestedModel === "" ? "(opencode default)" : requestedModel;
+  const message =
+    outcome.kind === "agent-mismatch"
+      ? outcome.reason
+      : `The delegate call to '${modelLabel}' failed: ${outcome.reason}. ` +
+        `Any changes the model made before failing are captured for review (see capture.patchPath).`;
+  return {
+    ok: false,
+    rootConflict,
+    error: {
+      kind: outcome.kind,
+      model: requestedModel,
+      exitAnalogue: null,
+      message,
+    },
+    // Surface the partial capture even on failure so the human can review/recover.
+    capture,
+  };
+}
+
+/**
+ * Run the AFTER capture, write the patch into the run dir, and log the delegate-diff entry.
+ * Best-effort like every log hook (C31): a capture/log failure never throws into the caller.
+ */
+async function captureAndLog(
+  before: ReturnType<typeof snapshotWorktree>,
+  ctx: { repoDir: string; log: EvidenceLog; runId: string; callId: string },
+): Promise<DelegateCapture> {
+  const recoveryHint =
+    before.gitWorktree && before.dirty && before.tree
+      ? `git checkout ${before.tree} -- <path>`
+      : null;
+
+  if (!before.gitWorktree) {
+    // Not a git worktree: no snapshot, no diff recorded (matches ask.sh's warning path).
+    return {
+      gitWorktree: false,
+      patchPath: null,
+      preTree: null,
+      afterTree: null,
+      filesChanged: 0,
+      captureComplete: true,
+      incompleteReason: "",
+      recoveryHint: null,
+      scaffoldChanged: false,
+      scaffoldWarning: null,
+    };
+  }
+
+  // TAMPER SIGNAL: did the excluded, execution-carrying serve scaffolding change during the
+  // turn? Computed AFTER the model turn against the before-snapshot's digest. Independent of
+  // captureComplete — a scaffolding write is invisible to the fingerprint by design, so this
+  // is the ONLY place it surfaces.
+  const scaffoldChanged = before.gitWorktree && scaffoldDigest(ctx.repoDir) !== before.scaffold;
+  const scaffoldWarning = scaffoldChanged
+    ? "the transport's plugin directory (.opencode/node_modules + manifests) changed during this call — review it; this directory is loaded by opencode serve"
+    : null;
+
+  // The run dir already exists (expect/started/completed wrote to it); ensure it anyway so
+  // the patch write can't race a missing dir. The patch MUST live in the run dir — log.diff
+  // stores its basename and verify resolves it there.
+  const runDir = ctx.log.dir(ctx.runId);
+  try {
+    mkdirSync(runDir, { recursive: true });
+  } catch {
+    /* best-effort */
+  }
+  const patchPath = path.join(runDir, `diff-${ctx.callId}.patch`);
+
+  let cap;
+  try {
+    cap = captureDelegateDiff({
+      repoDir: ctx.repoDir,
+      baseTree: before.tree,
+      ignoredBefore: before.ignored,
+      submodulesBefore: before.submodules,
+      patchPath,
+    });
+  } catch {
+    // A snapshot/diff crash must not sink the whole call; record a null capture.
+    return {
+      gitWorktree: true,
+      patchPath: null,
+      preTree: before.tree,
+      afterTree: null,
+      filesChanged: 0,
+      captureComplete: false,
+      incompleteReason: "capture-crashed",
+      recoveryHint,
+      scaffoldChanged,
+      scaffoldWarning,
+    };
+  }
+
+  if (cap.nothingToReview) {
+    // The model changed no tracked files AND state was representable: no entry (matches
+    // ask.sh's "nothing to review" — it removes the empty patch and logs no delegate-diff).
+    // The scaffold flag is still surfaced on the result (a scaffolding-only write leaves no
+    // tracked change but must not go unnoticed), even though there is no delegate-diff entry.
+    return {
+      gitWorktree: true,
+      patchPath: null,
+      preTree: before.tree,
+      afterTree: cap.afterTree,
+      filesChanged: 0,
+      captureComplete: true,
+      incompleteReason: "",
+      recoveryHint,
+      scaffoldChanged,
+      scaffoldWarning,
+    };
+  }
+
+  // Log the delegate-diff entry (claim:false, patch hashed, folded into integrity — C29/C39).
+  // An INCOMPLETE capture is logged with complete:false so the run fails integrity loudly.
+  // The scaffold tamper flag rides along as an optional, non-asserted evidence field.
+  await ctx.log.diff({
+    callId: ctx.callId,
+    patchFile: patchPath,
+    base: before.tree ?? "",
+    after: cap.afterTree ?? "",
+    complete: cap.captureComplete,
+    reason: cap.reason,
+    run: ctx.runId,
+    scaffoldChanged,
+  });
+
+  return {
+    gitWorktree: true,
+    patchPath,
+    preTree: before.tree,
+    afterTree: cap.afterTree,
+    filesChanged: cap.filesChanged,
+    captureComplete: cap.captureComplete,
+    incompleteReason: cap.reason,
+    recoveryHint,
+    scaffoldChanged,
+    scaffoldWarning,
+  };
+}
+
+// --- MCP tool-result translation -------------------------------------------
+/**
+ * Map a `DelegateResult` to the MCP wire shape. Success: the model's report is BOTH the text
+ * block and `structuredContent.report`, alongside the capture (patch path, files changed,
+ * completeness, recovery hint) and exact-id attribution. Failure: the structured error with
+ * `isError:true` and any partial capture, so the driver treats a refusal/failure as
+ * something to act on (review the partial diff, choose another model) — not a normal answer.
+ *
+ * The report AND the diff are DATA for the driver to review and verify against the code —
+ * never instructions to execute (C42/C52). The human diff review is the trust boundary.
+ */
+export function delegateToToolResult(r: DelegateResult): McpToolResult {
+  if (r.ok) {
+    const structured: Record<string, unknown> = {
+      report: r.report,
+      ...r.attribution,
+      capture: r.capture,
+    };
+    if (r.rootConflict) structured.rootConflict = r.rootConflict;
+    return { content: [{ type: "text", text: r.report }], structuredContent: structured };
+  }
+  const structured: Record<string, unknown> = { error: r.error };
+  if (r.capture) structured.capture = r.capture;
+  if (r.rootConflict) structured.rootConflict = r.rootConflict;
+  return {
+    content: [{ type: "text", text: r.error.message }],
+    structuredContent: structured,
+    isError: true,
+  };
+}

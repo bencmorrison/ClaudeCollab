@@ -658,6 +658,11 @@ export class EvidenceLog {
     complete?: boolean;
     reason?: string;
     run?: string;
+    /** Tamper signal (M8): the serve-runtime scaffolding (`.opencode/node_modules/**` + its
+     * manifests — excluded from the ignored fingerprint) changed during the call. Optional,
+     * like tier/confirmed: absent on bash-written and pre-M8 entries; both verifiers tolerate
+     * its presence and absence (it is not a verified invariant, just recorded evidence). */
+    scaffoldChanged?: boolean;
   }): Promise<WriteResult> {
     if (!args.patchFile || !existsSync(args.patchFile)) {
       return fail("diff: patchFile must exist");
@@ -680,6 +685,10 @@ export class EvidenceLog {
         claim: false,
         capture_complete: args.complete ?? true,
         incomplete_reason: nullIfEmpty(args.reason),
+        // Optional tamper signal — only written when provided, so bash-written / pre-M8
+        // entries omit it and stay byte-identical; both verifiers fold it into the hash chain
+        // like any other payload field without asserting on it.
+        ...(args.scaffoldChanged === undefined ? {} : { scaffold_changed: args.scaffoldChanged }),
         response_hash: nullIfEmpty(sha256HexBytes(buf)),
       };
       const r = await this.#appendLocked(path.join(rd, "calls.jsonl"), payload, false);

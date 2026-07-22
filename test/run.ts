@@ -13,6 +13,7 @@ import { run as config } from "./config.test.js";
 import { run as consult } from "./consult.test.js";
 import { run as panel } from "./panel.test.js";
 import { run as research } from "./research.test.js";
+import { run as delegate } from "./delegate.test.js";
 
 const suites: Array<[string, () => Promise<number>]> = [
   ["lifecycle", lifecycle],
@@ -25,6 +26,7 @@ const suites: Array<[string, () => Promise<number>]> = [
   ["consult", consult],
   ["panel", panel],
   ["research", research],
+  ["delegate", delegate],
 ];
 
 let total = 0;
