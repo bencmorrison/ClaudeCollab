@@ -133,7 +133,8 @@ export function collabDoctorSeed(
 export type ConsultErrorKind = "model-id" | "policy-deny" | "policy-ask" | "call-failed";
 
 export interface ConsultAttribution {
-  /** The EXACT model id used (C45): the resolved id, or the id opencode actually ran
+  /** The EXACT model id used (consult.md reports the model id used — area-F command
+   * surface; NOT C45, which is verify-not-relay): the resolved id, or the id opencode actually ran
    * (from the turn metadata) when the caller left it to opencode's default. */
   model: string;
   /** The id we resolved and asked for — `""` means "opencode's own default". */
@@ -208,6 +209,178 @@ function actualModel(requested: string, providerID?: string, modelID?: string): 
   return "(opencode default)";
 }
 
+// ===========================================================================
+// SHARED FLOW (factored so collab_panel — M6 — reuses the exact same gating and
+// lifecycle as collab_consult, rather than a divergent second copy). The gate is
+// pure (no logging, no run); the lifecycle is the expect→started→completed spine.
+// ===========================================================================
+
+/** A refusal produced by `gateModel` BEFORE any log write. A model-id/deny/ask
+ * refusal is identical whether it comes from consult or a panel member — the
+ * caller maps it into its own error envelope. */
+export interface GateRefusal {
+  kind: "model-id" | "policy-deny" | "policy-ask";
+  message: string;
+  /** bash exit analogue: 2 model-id (C55), 3 deny, 4 ask (C56). */
+  exitAnalogue: number;
+  model: string;
+  /** Present on policy refusals: the tier that refused. */
+  tier?: PolicyTier;
+}
+
+export type GateOutcome =
+  | { ok: true; tier: PolicyTier; confirmed: boolean }
+  | { ok: false; refusal: GateRefusal };
+
+/**
+ * The pre-log gate shared by every model-touching call: the leading-dash model-id
+ * refusal (C12) THEN the policy tier gate (C1–C7). Deterministic ordering — model-id
+ * is checked first, so a dash-leading id that a `deny -*` rule would also match is
+ * refused as `model-id`, not `policy-deny`. Pure: it writes NOTHING, so a refusal
+ * logs nothing (C24 gap parity), exactly like ask.sh refusing before it logs.
+ *
+ * `confirmed` is the human-approval flag for an ask-tier model. It only unlocks an
+ * ask-tier call; on allow/deny it is simply recorded (allow) or irrelevant (deny).
+ */
+export function gateModel(
+  requestedModel: string,
+  confirmed: boolean,
+  deps: { collabDir: string; env: NodeJS.ProcessEnv },
+): GateOutcome {
+  const idCheck = checkResolvedModelId(requestedModel);
+  if (!idCheck.ok) {
+    return {
+      ok: false,
+      refusal: {
+        kind: "model-id",
+        message: idCheck.reason ?? `refusing model id '${requestedModel}'.`,
+        exitAnalogue: idCheck.exitCode ?? 2,
+        model: requestedModel,
+      },
+    };
+  }
+  const decision = policyTier(requestedModel, { collabDir: deps.collabDir, env: deps.env });
+  const modelLabel = requestedModel === "" ? "(opencode default)" : requestedModel;
+  if (decision.tier === "deny") {
+    return {
+      ok: false,
+      refusal: {
+        kind: "policy-deny",
+        model: requestedModel,
+        tier: "deny",
+        exitAnalogue: 3,
+        message:
+          decision.reason ??
+          `Model '${modelLabel}' is DENIED by the model policy (${decision.source} policy at ${decision.policyFile}). ` +
+            `Not consulting it. Choose an allowed model or change the policy.`,
+      },
+    };
+  }
+  if (decision.tier === "ask" && confirmed !== true) {
+    return {
+      ok: false,
+      refusal: {
+        kind: "policy-ask",
+        model: requestedModel,
+        tier: "ask",
+        exitAnalogue: 4,
+        message:
+          `Model '${modelLabel}' is gated ASK by the model policy (${decision.source} policy at ${decision.policyFile}). ` +
+          `This tool will NOT consult it until the human user explicitly approves. ` +
+          `Ask the user whether to consult '${modelLabel}', and only if they say yes, retry with confirmed:true. ` +
+          `Do not set confirmed yourself — it represents the user's approval, not yours.`,
+      },
+    };
+  }
+  return { ok: true, tier: decision.tier, confirmed: confirmed === true };
+}
+
+export interface LifecycleParams {
+  question: string;
+  requestedModel: string;
+  agent: string;
+  command: string;
+  /** Session title recorded by opencode (diagnostic only). */
+  title: string;
+  runId: string;
+  tier: PolicyTier;
+  confirmed: boolean;
+}
+
+export interface LifecycleDeps {
+  serve: ServeProvider;
+  log: EvidenceLog;
+  messageTimeoutMs?: number;
+}
+
+export type LifecycleOutcome =
+  | { ok: true; text: string; callId: string; actualModel: string }
+  | { ok: false; callId: string; reason: string };
+
+/**
+ * The evidence spine every model turn shares: mint a call id, write expect→started
+ * BEFORE the call, run the model turn via the UNMODIFIED agent, then write completed
+ * on EVERY path (success or thrown). A thrown call records `completed` with
+ * `capture_state:failed` and NO fabricated answer, closing the expected-call gap
+ * (C24/C25). Assumes the run is already resolved and the gate already passed — so it
+ * always writes exactly one started + one completed for its call id.
+ */
+export async function runAgentLifecycle(
+  p: LifecycleParams,
+  d: LifecycleDeps,
+): Promise<LifecycleOutcome> {
+  const callId = newCallId();
+  const common = {
+    callId,
+    command: p.command,
+    model: p.requestedModel,
+    agent: p.agent,
+    tier: p.tier,
+    confirmed: p.confirmed,
+    run: p.runId,
+  };
+  await d.log.expect({
+    callId,
+    command: p.command,
+    model: p.requestedModel,
+    agent: p.agent,
+    run: p.runId,
+  });
+  const started = await d.log.started({ ...common, prompt: p.question });
+  try {
+    const result = await askViaAgent(d.serve, {
+      agent: p.agent,
+      model: p.requestedModel === "" ? undefined : p.requestedModel,
+      prompt: p.question,
+      title: p.title,
+      messageTimeoutMs: d.messageTimeoutMs,
+    });
+    await d.log.completed({
+      ...common,
+      exit: 0,
+      turn: started.turn,
+      session: result.sessionId,
+      captureState: "complete",
+      response: result.text,
+    });
+    return {
+      ok: true,
+      text: result.text,
+      callId,
+      actualModel: actualModel(p.requestedModel, result.metadata.providerID, result.metadata.modelID),
+    };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    await d.log.completed({
+      ...common,
+      exit: 1,
+      turn: started.turn,
+      captureState: "failed",
+    });
+    return { ok: false, callId, reason };
+  }
+}
+
 /**
  * Run one consult. Pure of the MCP layer: returns a discriminated result the server
  * translates into an MCP tool result. Never throws for an expected refusal or a model
@@ -224,174 +397,89 @@ export async function consult(params: ConsultParams, deps: ConsultDeps): Promise
   const collabDir = rootRes.root;
   const rootConflict = rootRes.conflict;
 
-  // 2. Resolve the model (param > COLLAB_MODEL env > conf > opencode default) and apply
-  //    the leading-dash refusal (C12).
+  // 2. Resolve the model (param > COLLAB_MODEL env > conf > opencode default).
   const confContents = readConfContents(collabDir, env);
   const requestedModel = resolveModel({ flag: params.model, env, confContents });
-  const idCheck = checkResolvedModelId(requestedModel);
-  if (!idCheck.ok) {
-    return {
-      ok: false,
-      rootConflict,
-      error: {
-        kind: "model-id",
-        message: idCheck.reason ?? `refusing model id '${requestedModel}'.`,
-        exitAnalogue: idCheck.exitCode ?? 2,
-        model: requestedModel,
-      },
-    };
-  }
 
-  // 3. Policy gate (C1–C7). deny → structured error (exit-3 analogue); ask without
-  //    confirmed → structured error instructing the DRIVER to ask the human (exit-4
-  //    analogue); ask+confirmed or allow → proceed. All of this is BEFORE any log write,
-  //    so a refusal logs nothing (C24 gap parity).
-  const decision = policyTier(requestedModel, { collabDir, env });
-  const modelLabel = requestedModel === "" ? "(opencode default)" : requestedModel;
-  if (decision.tier === "deny") {
-    return {
-      ok: false,
-      rootConflict,
-      error: {
-        kind: "policy-deny",
-        model: requestedModel,
-        tier: "deny",
-        exitAnalogue: 3,
-        message:
-          decision.reason ??
-          `Model '${modelLabel}' is DENIED by the model policy (${decision.source} policy at ${decision.policyFile}). ` +
-            `Not consulting it. Choose an allowed model or change the policy.`,
-      },
-    };
-  }
+  // 3. Gate: the leading-dash refusal (C12) THEN the policy tier gate (C1–C7). deny →
+  //    exit-3 analogue; ask without confirmed → exit-4 analogue instructing the DRIVER to
+  //    ask the human; ask+confirmed or allow → proceed. All BEFORE any log write, so a
+  //    refusal logs nothing (C24 gap parity).
+  //
   // HONESTY BOUND (design input for M9): the MCP surface has NO per-argument permission
   // gate, so `confirmed:true` cannot be made to force a user prompt the way witness.md's
   // allowed-tools OMISSION of the COLLAB_CONFIRMED form makes Claude-auditing-Claude
-  // impossible to self-authorise. Here the ask gate is instruction-layer (this error text
+  // impossible to self-authorise. Here the ask gate is instruction-layer (the error text
   // telling the driver the user must approve) PLUS the mechanical backstop that a
-  // non-confirmed call cannot proceed, PLUS the (new) tier/confirmed audit trail written
-  // into the evidence entries so /collab:witness can check after the fact whether an
-  // ask-tier consult claimed approval. That is NOT witness-grade parity — a driver that
-  // sets confirmed:true without asking is caught only by audit, not prevented — and must
-  // not be claimed as such.
-  if (decision.tier === "ask" && params.confirmed !== true) {
+  // non-confirmed call cannot proceed, PLUS the tier/confirmed audit trail written into
+  // the evidence entries so /collab:witness can check after the fact whether an ask-tier
+  // consult claimed approval. That is NOT witness-grade parity — a driver that sets
+  // confirmed:true without asking is caught only by audit, not prevented.
+  const gate = gateModel(requestedModel, params.confirmed === true, { collabDir, env });
+  if (!gate.ok) {
     return {
       ok: false,
       rootConflict,
       error: {
-        kind: "policy-ask",
-        model: requestedModel,
-        tier: "ask",
-        exitAnalogue: 4,
-        message:
-          `Model '${modelLabel}' is gated ASK by the model policy (${decision.source} policy at ${decision.policyFile}). ` +
-          `This tool will NOT consult it until the human user explicitly approves. ` +
-          `Ask the user whether to consult '${modelLabel}', and only if they say yes, retry collab_consult with confirmed:true. ` +
-          `Do not set confirmed yourself — it represents the user's approval, not yours.`,
+        kind: gate.refusal.kind,
+        message: gate.refusal.message,
+        exitAnalogue: gate.refusal.exitAnalogue,
+        model: gate.refusal.model,
+        tier: gate.refusal.tier,
       },
     };
   }
 
   // --- Past the gate: from here every path writes exactly one started + completed. ---
   const log = deps.log ?? new EvidenceLog({ env, cwd, collabDir });
-  // Record the tier the call ran under and whether the human approved it (ask-tier) —
-  // the audit trail /collab:witness needs. Reaching here means the tier is allow or
-  // ask+confirmed; `confirmed` is only meaningful for ask but is recorded either way.
-  const tier = decision.tier; // "allow" | "ask"
-  const confirmed = params.confirmed === true;
 
   // 4. Evidence lifecycle. Mint a fresh run only when the caller did not thread one; a
   //    provided runId reuses that run (so a workflow's calls share one auditable unit).
   const runId = params.runId && params.runId.length > 0 ? params.runId : log.newRun(CONSULT_COMMAND);
-  const callId = newCallId();
 
-  await log.expect({
-    callId,
-    command: CONSULT_COMMAND,
-    model: requestedModel,
-    agent: CONSULT_AGENT,
-    run: runId,
-  });
-  const started = await log.started({
-    callId,
-    command: CONSULT_COMMAND,
-    model: requestedModel,
-    agent: CONSULT_AGENT,
-    prompt: params.question, // the FULL prompt (C26 full mode stores text + digest)
-    tier,
-    confirmed,
-    run: runId,
-  });
-
-  // 5. The model turn, via the UNMODIFIED collab-read agent.
-  try {
-    const result = await askViaAgent(deps.serve, {
+  // 5. The model turn, via the UNMODIFIED collab-read agent (shared spine).
+  const outcome = await runAgentLifecycle(
+    {
+      question: params.question,
+      requestedModel,
       agent: CONSULT_AGENT,
-      model: requestedModel === "" ? undefined : requestedModel,
-      prompt: params.question,
-      title: "collab_consult",
-      messageTimeoutMs: deps.messageTimeoutMs,
-    });
-
-    // Byte-exact response recorded; an empty-but-present answer stays `complete`
-    // (raw_response "", response_hash = sha256("")) — the log layer draws that line.
-    await log.completed({
-      callId,
-      exit: 0,
-      turn: started.turn,
-      session: result.sessionId,
       command: CONSULT_COMMAND,
-      model: requestedModel,
-      agent: CONSULT_AGENT,
-      captureState: "complete",
-      response: result.text,
-      tier,
-      confirmed,
-      run: runId,
-    });
+      title: "collab_consult",
+      runId,
+      tier: gate.tier,
+      confirmed: gate.confirmed,
+    },
+    { serve: deps.serve, log, messageTimeoutMs: deps.messageTimeoutMs },
+  );
 
+  if (outcome.ok) {
     return {
       ok: true,
-      answer: result.text,
+      answer: outcome.text,
       rootConflict,
       attribution: {
-        model: actualModel(requestedModel, result.metadata.providerID, result.metadata.modelID),
+        model: outcome.actualModel,
         requestedModel,
         agent: CONSULT_AGENT,
         runId,
-        callId,
-      },
-    };
-  } catch (err) {
-    // The call threw: record completed/failed (NOT a fabricated answer) and return a
-    // structured error carrying the reason. The expected-call gap is still closed.
-    const reason = err instanceof Error ? err.message : String(err);
-    await log.completed({
-      callId,
-      exit: 1,
-      turn: started.turn,
-      command: CONSULT_COMMAND,
-      model: requestedModel,
-      agent: CONSULT_AGENT,
-      captureState: "failed",
-      tier,
-      confirmed,
-      run: runId,
-    });
-    return {
-      ok: false,
-      rootConflict,
-      error: {
-        kind: "call-failed",
-        model: requestedModel,
-        // null, NOT 0: bash propagates opencode's own non-zero status verbatim (C53) and
-        // 0 means success — a numeric analogue here would collide with that. The failure
-        // signal is kind + isError; the reason rides in `message`.
-        exitAnalogue: null,
-        message: `The consult call to '${modelLabel}' failed: ${reason}. No answer was produced.`,
+        callId: outcome.callId,
       },
     };
   }
+  const modelLabel = requestedModel === "" ? "(opencode default)" : requestedModel;
+  return {
+    ok: false,
+    rootConflict,
+    error: {
+      kind: "call-failed",
+      model: requestedModel,
+      // null, NOT 0: bash propagates opencode's own non-zero status verbatim (C53) and
+      // 0 means success — a numeric analogue here would collide with that. The failure
+      // signal is kind + isError; the reason rides in `message`.
+      exitAnalogue: null,
+      message: `The consult call to '${modelLabel}' failed: ${outcome.reason}. No answer was produced.`,
+    },
+  };
 }
 
 // --- MCP tool-result translation -------------------------------------------
