@@ -14,6 +14,8 @@ import { run as consult } from "./consult.test.js";
 import { run as panel } from "./panel.test.js";
 import { run as research } from "./research.test.js";
 import { run as delegate } from "./delegate.test.js";
+import { run as modelsSuite } from "./models.test.js";
+import { run as initSuite } from "./init.test.js";
 
 const suites: Array<[string, () => Promise<number>]> = [
   ["lifecycle", lifecycle],
@@ -27,6 +29,8 @@ const suites: Array<[string, () => Promise<number>]> = [
   ["panel", panel],
   ["research", research],
   ["delegate", delegate],
+  ["models", modelsSuite],
+  ["init", initSuite],
 ];
 
 let total = 0;

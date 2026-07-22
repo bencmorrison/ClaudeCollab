@@ -1,0 +1,157 @@
+/**
+ * `claudecollab init` test (PLAN.md M11), in the spirit of collab/tests/test-install.sh:
+ * install into throwaway temp dirs and assert the file / .mcp.json / ownership behaviour,
+ * idempotency, the merge-not-clobber guarantee, hash-verified uninstall, and that the
+ * bash wrappers are NOT installed. Offline, no model call. packageRoot is the repo root
+ * (the payload assets live there — the same files npm's `files` allowlist ships).
+ */
+
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Checker, repoRoot } from "./harness.js";
+import { init, type ServerLaunch } from "../src/init.js";
+
+// The shipped default launch line: portable, non-interactive npx form.
+const LAUNCH: ServerLaunch = { command: "npx", args: ["-y", "claudecollab", "serve"] };
+
+function tempProject(): string {
+  // realpath: macOS /tmp is a symlink; safeJoin refuses symlink components, so canonicalize.
+  return realpathSync(mkdtempSync(path.join(os.tmpdir(), "cc-init-")));
+}
+
+function readJson(p: string): any {
+  return JSON.parse(readFileSync(p, "utf8"));
+}
+
+export async function run(): Promise<number> {
+  const c = new Checker();
+  console.log("== init.test ==");
+
+  // --- fresh install -------------------------------------------------------
+  const T = tempProject();
+  const res = init({ targetDir: T, packageRoot: repoRoot, serverLaunch: LAUNCH });
+
+  c.check(res.installed.length === 13, `installs 13 files (8 docs + 3 agents + 2 templates) (got ${res.installed.length})`);
+  c.check(existsSync(path.join(T, ".claude/commands/collab/consult.md")), "places a command doc");
+  c.check(existsSync(path.join(T, ".claude/commands/collab/configure.md")), "places configure.md (the 8th doc)");
+  c.check(existsSync(path.join(T, ".opencode/agent/collab-read.md")), "places collab-read agent def");
+  c.check(existsSync(path.join(T, ".opencode/agent/collab-research.md")), "places collab-research agent def");
+  c.check(existsSync(path.join(T, ".opencode/agent/collab-build.md")), "places collab-build agent def");
+  c.check(existsSync(path.join(T, "collab/models.policy")), "places models.policy template");
+  c.check(existsSync(path.join(T, "collab/collab.conf.example")), "places collab.conf.example template");
+  c.check(existsSync(path.join(T, "collab/.claudecollab-install.json")), "writes the ownership record file");
+
+  // The MCP-era payload must NOT ship the bash wrappers or witness.md.
+  c.check(!existsSync(path.join(T, "collab/ask.sh")), "does NOT install collab/ask.sh");
+  c.check(!existsSync(path.join(T, "collab/log.sh")), "does NOT install collab/log.sh");
+  c.check(!existsSync(path.join(T, "collab/panel-models.sh")), "does NOT install panel-models.sh");
+  c.check(!existsSync(path.join(T, ".claude/commands/collab/witness.md")), "does NOT install witness.md");
+  c.check(!existsSync(path.join(T, ".opencode/agent/collab-watch.md")), "does NOT install collab-watch (witness) agent");
+
+  // --- .mcp.json under the exact key the command grants require ------------
+  c.check(res.mcpAction === "created", ".mcp.json reported as created");
+  const mcp = readJson(path.join(T, ".mcp.json"));
+  c.check(
+    !!mcp.mcpServers && Object.prototype.hasOwnProperty.call(mcp.mcpServers, "claudecollab"),
+    ".mcp.json has the 'claudecollab' key (matches mcp__claudecollab__* grants)",
+  );
+  const entry = mcp.mcpServers.claudecollab;
+  c.check(
+    entry.command === "npx" &&
+      JSON.stringify(entry.args) === JSON.stringify(["-y", "claudecollab", "serve"]),
+    "launch line is the portable non-interactive default `npx -y claudecollab serve`",
+  );
+  c.check(entry.env?.COLLAB_PROJECT_DIR === T, ".mcp.json entry sets COLLAB_PROJECT_DIR to the target dir");
+
+  // --- gitignore -----------------------------------------------------------
+  const gi = readFileSync(path.join(T, ".gitignore"), "utf8");
+  c.check(gi.includes("ClaudeCollab >>>") && gi.includes("collab/logs/"), "gitignore block written");
+
+  // --- idempotent re-run ---------------------------------------------------
+  const res2 = init({ targetDir: T, packageRoot: repoRoot, serverLaunch: LAUNCH });
+  c.check(res2.installed.length === 0 && res2.skipped.length === 0, "re-run writes 0 files (idempotent)");
+  const giCount = (readFileSync(path.join(T, ".gitignore"), "utf8").match(/ClaudeCollab >>>/g) || []).length;
+  c.check(giCount === 1, "re-run keeps exactly one gitignore block");
+
+  // --- upgrade: a stale-but-owned file is overwritten ----------------------
+  const consultPath = path.join(T, ".claude/commands/collab/consult.md");
+  const original = readFileSync(consultPath);
+  // Simulate a prior-version file: overwrite its bytes AND record the new hash as ours,
+  // so the ownership check treats it as owned (it matches the recorded hash).
+  writeFileSync(consultPath, "OLD OWNED CONTENT\n");
+  const recPath = path.join(T, "collab/.claudecollab-install.json");
+  const rec = readJson(recPath);
+  const { createHash } = await import("node:crypto");
+  rec.files[".claude/commands/collab/consult.md"] = createHash("sha256").update("OLD OWNED CONTENT\n").digest("hex");
+  writeFileSync(recPath, JSON.stringify(rec, null, 2) + "\n");
+  const res3 = init({ targetDir: T, packageRoot: repoRoot, serverLaunch: LAUNCH });
+  c.check(res3.installed.includes(".claude/commands/collab/consult.md"), "an owned-but-stale file is upgraded");
+  c.check(readFileSync(consultPath).equals(original), "upgrade restores the current payload bytes");
+
+  // --- merge-not-clobber: a user-edited file is left untouched + shadow-warned
+  writeFileSync(consultPath, "MY OWN COMMAND — DO NOT TOUCH\n");
+  const res4 = init({ targetDir: T, packageRoot: repoRoot, serverLaunch: LAUNCH });
+  c.check(
+    readFileSync(consultPath, "utf8") === "MY OWN COMMAND — DO NOT TOUCH\n",
+    "a user-edited command doc is NOT clobbered",
+  );
+  c.check(res4.skipped.includes(".claude/commands/collab/consult.md"), "the edited file is reported skipped");
+  c.check(res4.shadowed.includes(".claude/commands/collab/consult.md"), "an unowned command doc raises a shadow warning");
+
+  // --- .mcp.json merge preserves a sibling server --------------------------
+  const T2 = tempProject();
+  writeFileSync(
+    path.join(T2, ".mcp.json"),
+    JSON.stringify({ mcpServers: { other: { command: "x", args: [] } }, someOtherKey: 1 }, null, 2),
+  );
+  const resm = init({ targetDir: T2, packageRoot: repoRoot, serverLaunch: LAUNCH });
+  c.check(resm.mcpAction === "merged", "existing .mcp.json without our key → merged");
+  const mcp2 = readJson(path.join(T2, ".mcp.json"));
+  c.check(!!mcp2.mcpServers.other && !!mcp2.mcpServers.claudecollab, "merge keeps the sibling server AND adds ours");
+  c.check(mcp2.someOtherKey === 1, "merge preserves unrelated top-level keys");
+
+  // --- invalid .mcp.json is refused, not clobbered -------------------------
+  const T3 = tempProject();
+  writeFileSync(path.join(T3, ".mcp.json"), "{ not json");
+  let refused = false;
+  try {
+    init({ targetDir: T3, packageRoot: repoRoot, serverLaunch: LAUNCH });
+  } catch {
+    refused = true;
+  }
+  c.check(refused, "invalid .mcp.json is refused rather than overwritten");
+  c.check(readFileSync(path.join(T3, ".mcp.json"), "utf8") === "{ not json", "the invalid .mcp.json is left untouched");
+
+  // --- uninstall: hash-verified removal ------------------------------------
+  const T4 = tempProject();
+  init({ targetDir: T4, packageRoot: repoRoot, serverLaunch: LAUNCH });
+  // A user file the installer never wrote must survive.
+  writeFileSync(path.join(T4, ".claude/commands/collab/mine.md"), "keep me\n");
+  // A user EDIT to one of our files must survive uninstall (hash no longer matches).
+  writeFileSync(path.join(T4, ".claude/commands/collab/panel.md"), "edited by user\n");
+  const resu = init({ targetDir: T4, packageRoot: repoRoot, serverLaunch: LAUNCH, uninstall: true });
+  c.check(resu.removed.includes(".claude/commands/collab/consult.md"), "uninstall removes a pristine owned file");
+  c.check(!existsSync(path.join(T4, ".opencode/agent/collab-read.md")), "uninstall removes agent defs");
+  c.check(existsSync(path.join(T4, ".claude/commands/collab/mine.md")), "uninstall keeps a user's own file");
+  c.check(
+    existsSync(path.join(T4, ".claude/commands/collab/panel.md")),
+    "uninstall keeps a file the user edited (hash mismatch → not ours to delete)",
+  );
+  c.check(resu.mcpAction === "removed", "uninstall removes the claudecollab .mcp.json key");
+  const mcpu = readJson(path.join(T4, ".mcp.json"));
+  c.check(
+    !mcpu.mcpServers || !Object.prototype.hasOwnProperty.call(mcpu.mcpServers, "claudecollab"),
+    "the claudecollab key is gone after uninstall",
+  );
+  c.check(!existsSync(path.join(T4, "collab/.claudecollab-install.json")), "uninstall removes the ownership record");
+  const giu = existsSync(path.join(T4, ".gitignore")) ? readFileSync(path.join(T4, ".gitignore"), "utf8") : "";
+  c.check(!giu.includes("ClaudeCollab >>>"), "uninstall strips the gitignore block");
+
+  console.log(`init.test: ${c.passes} passed, ${c.failures} failed`);
+  return c.failures;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  run().then((f) => process.exit(f > 0 ? 1 : 0));
+}

@@ -22,12 +22,14 @@ import { consult, consultToToolResult, collabDoctorSeed, type CollabDoctorSeed }
 import { panel, panelToToolResult } from "./panel.js";
 import { research, researchToToolResult } from "./research.js";
 import { delegate, delegateToToolResult } from "./delegate.js";
+import { models, modelsToToolResult } from "./models.js";
 
 const STATUS_TOOL = "collab_status";
 const CONSULT_TOOL = "collab_consult";
 const PANEL_TOOL = "collab_panel";
 const RESEARCH_TOOL = "collab_research";
 const DELEGATE_TOOL = "collab_delegate";
+const MODELS_TOOL = "collab_models";
 const HTTP_MS = 10_000;
 
 const lifecycle = new OpencodeLifecycle();
@@ -87,6 +89,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         "port, pid, and agent count, PLUS the doctor-seed checks (which collab root is in " +
         "effect and whether roots conflict, the active model-policy file, logging on/off " +
         "and the log dir). Takes no arguments.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    },
+    {
+      name: MODELS_TOOL,
+      description:
+        "List the provider/model ids the caller's opencode can actually reach (from the " +
+        "running serve's authed provider config — the same set `opencode models` prints, " +
+        "plus each provider's default). Read-only enumeration: NO policy check, NO model " +
+        "call, no cost. Use it to pick a model/panel for collab_consult, collab_panel, " +
+        "collab_research, or collab_delegate. Returns structuredContent.models (flat sorted " +
+        "ids), .providers (grouped, with each provider's default), and .defaults. Takes no " +
+        "arguments. It does NOT report policy tiers — a listed model may still be deny/ask " +
+        "under the model policy; the per-call tool enforces that.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {
@@ -303,6 +318,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (name === STATUS_TOOL) {
     const status = await collabStatus();
     return { content: [{ type: "text", text: JSON.stringify(status) }] };
+  }
+
+  if (name === MODELS_TOOL) {
+    const result = await models({ serve: lifecycle });
+    return modelsToToolResult(result);
   }
 
   if (name === CONSULT_TOOL) {

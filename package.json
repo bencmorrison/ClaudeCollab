@@ -1,15 +1,38 @@
 {
   "name": "claudecollab",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
-  "description": "TS/MCP rewrite (in development): an MCP server fronting `opencode serve`, letting Claude Code collaborate with other LLMs. Coexists with the bash layer in collab/. See PLAN.md milestone M1.",
+  "description": "An MCP server fronting `opencode serve`, letting Claude Code collaborate with other LLMs (consult, panel, research, review, delegate). Ships slash commands + hardened opencode agents; `npx claudecollab init` wires it into a project. Coexists with the retiring bash layer in collab/ until v1.0.0 (PLAN.md M12).",
+  "license": "MIT",
+  "bin": {
+    "claudecollab": "dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    ".claude/commands/collab/consult.md",
+    ".claude/commands/collab/panel.md",
+    ".claude/commands/collab/research.md",
+    ".claude/commands/collab/review.md",
+    ".claude/commands/collab/delegate.md",
+    ".claude/commands/collab/workshop.md",
+    ".claude/commands/collab/collaborate.md",
+    ".claude/commands/collab/configure.md",
+    ".opencode/agent/collab-read.md",
+    ".opencode/agent/collab-build.md",
+    ".opencode/agent/collab-research.md",
+    "collab/models.policy",
+    "collab/collab.conf.example"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/server.ts",
     "test": "tsx test/run.ts",
-    "test:live": "tsx test/client.live.ts && tsx test/consult.live.ts && tsx test/panel.live.ts && tsx test/research.live.ts && tsx test/delegate.live.ts && tsx test/session.live.ts"
+    "test:live": "tsx test/client.live.ts && tsx test/consult.live.ts && tsx test/panel.live.ts && tsx test/research.live.ts && tsx test/delegate.live.ts && tsx test/session.live.ts",
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

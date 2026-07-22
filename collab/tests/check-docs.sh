@@ -46,10 +46,12 @@ fi
 for command in panel workshop collaborate; do
   file=".claude/commands/collab/$command.md"
   grep -Fq 'allowed-tools:' "$file" || bad "$command has no allowed-tools frontmatter"
+  # collab_models (M11) replaced the `Bash(opencode models:*)` binary shell-out in every
+  # doc that enumerates models — assert it is granted where it belongs.
   case "$command" in
-    panel)       mcp_grants="mcp__claudecollab__collab_panel" ;;
-    workshop)    mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_consult" ;;
-    collaborate) mcp_grants="mcp__claudecollab__collab_consult" ;;
+    panel)       mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_models" ;;
+    workshop)    mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_consult mcp__claudecollab__collab_models" ;;
+    collaborate) mcp_grants="mcp__claudecollab__collab_consult mcp__claudecollab__collab_models" ;;
     *)           mcp_grants="" ;;
   esac
   fm_line="$(grep -m1 '^allowed-tools:' "$file")"
@@ -62,11 +64,16 @@ done
 # The 7 migrated command docs must touch ZERO collab bash (M10): no ask.sh, no log.sh,
 # no panel-models.sh, and none of the old env-var invocation forms. witness.md and
 # configure.md are intentionally excluded — they keep their bash until M11/M12.
+# M11 also retires the LAST opencode-binary shell-out (`Bash(opencode models:*)`),
+# replaced by the collab_models MCP tool — so a migrated doc must not grant `Bash(opencode`.
 migrated_cmds=(consult panel research delegate review workshop collaborate)
 for command in "${migrated_cmds[@]}"; do
   file=".claude/commands/collab/$command.md"
   if grep -nE 'collab/ask\.sh|collab/log\.sh|panel-models\.sh|COLLAB_RUN_ID|COLLAB_CONFIRMED' "$file"; then
     bad "$command still references collab bash; the migrated docs drive the MCP tools only"
+  fi
+  if grep -nE 'Bash\(opencode' "$file"; then
+    bad "$command still grants an opencode-binary Bash shell-out; use the collab_models MCP tool"
   fi
 done
 
@@ -168,6 +175,16 @@ EOF
   printf '\nRun `COLLAB_COMMAND=/collab:consult bash collab/ask.sh "q"`.\n' \
     >> "$fixture/.claude/commands/collab/consult.md"
   expect_rejected "collab bash in a migrated command doc" "$fixture"
+
+  fixture="$tmp/migrated-doc-opencode-bash"
+  cp -a "$baseline" "$fixture"
+  cat > "$fixture/.claude/commands/collab/consult.md" <<'EOF'
+---
+allowed-tools: mcp__claudecollab__collab_consult, Bash(opencode models:*), Task
+---
+Consult.
+EOF
+  expect_rejected "opencode-binary Bash grant in a migrated command doc" "$fixture"
 
   fixture="$tmp/stale-lifecycle"
   cp -a "$baseline" "$fixture"
