@@ -136,9 +136,20 @@ EOF
     esac
   done
 
-  # read map. Either shape must leave every representative secret effectively denied.
-  local rm; rm="$(printf '%s\n' "$fm" | read_map)"
+  # read map handling depends on the readspec shape.
+  local rm s; rm="$(printf '%s\n' "$fm" | read_map)"
   case "$readspec" in
+    plain)
+      # Loosened read path (collab-read/collab-research, 2026-07-22 permission realignment):
+      # read is a plain top-level `read: allow` with NO secret-glob submap. The secret
+      # fences were removed as vendor-asymmetry bias — a review subagent reads the repo,
+      # dotfiles included. Assert read resolves to allow at top level AND there is no submap;
+      # a re-added secret-glob carve-out (a read submap) is now itself a regression.
+      [ "$(effective "$tp" read)" = "allow" ] \
+        || bad "$label" "read resolves to '$(effective "$tp" read)', expected a plain top-level 'read: allow'"
+      [ -z "$rm" ] \
+        || bad "$label" "read has a submap; the loosened path expects a plain 'read: allow' with NO secret-glob carve-outs (removed 2026-07-22 — do not re-fence a read-only reviewer)"
+      ;;
     scoped:*)
       local scope="${readspec#scoped:}"
       [ "$(effective "$rm" '*')" = "deny" ] \
@@ -149,32 +160,41 @@ EOF
         [ "$(effective "$rm" "**/collab/logs/**")" = "allow" ] \
           || bad "$label" "read map: absolute log scope '**/collab/logs/**' resolves to '$(effective "$rm" "**/collab/logs/**")', expected allow (/collab:witness passes an absolute path)"
       fi
+      # Secrets are denied by the deny floor here; assert it (listing them would imply
+      # the floor were allow, but "secrets unreadable" is the guarantee either way).
+      for s in $SECRET_GLOBS; do
+        [ "$(effective "$rm" "$s")" = "deny" ] \
+          || bad "$label" "read map: secret '$s' resolves to '$(effective "$rm" "$s")', expected deny (scoped agent's deny floor)"
+      done
       ;;
-    *)
+    nonsecret|*)
+      # collab-build: `*` allows, each secret glob denies (defense-in-depth on the read TOOL).
       [ "$(effective "$rm" '*')" = "allow" ] \
         || bad "$label" "read map: '*' resolves to '$(effective "$rm" '*')', expected allow (agent can't read non-secret files)"
+      for s in $SECRET_GLOBS; do
+        [ "$(effective "$rm" "$s")" = "deny" ] \
+          || bad "$label" "read map: secret '$s' resolves to '$(effective "$rm" "$s")', expected deny (last-match-wins — is a '\"*\": allow' after it?)"
+      done
       ;;
   esac
-  local s
-  for s in $SECRET_GLOBS; do
-    [ "$(effective "$rm" "$s")" = "deny" ] \
-      || bad "$label" "read map: secret '$s' resolves to '$(effective "$rm" "$s")', expected deny (last-match-wins — is a '\"*\": allow' after it?)"
-  done
 
   [ "$fail" -eq "$f0" ] && pass "$label: allowlist invariants hold (frontmatter-bounded, effective/last-match-aware)"
 }
 
-echo "== collab-read (allowlist: webfetch/websearch) =="
-check_agent "$AGENT_DIR/collab-read.md" "webfetch websearch"
+# collab-read: read-only reviewer ROLE (2026-07-22 realignment). read+grep+glob+web
+# ALLOWED like a Claude review subagent; read is a plain top-level allow (no secret
+# globs). no-write/no-task is the role. `plain` readspec asserts the no-submap shape.
+echo "== collab-read (allowlist: read/grep/glob/webfetch/websearch) =="
+check_agent "$AGENT_DIR/collab-read.md" "grep glob webfetch websearch" plain
 
 echo "== collab-build (allowlist: edit/write/patch/bash) =="
 check_agent "$AGENT_DIR/collab-build.md" "edit write patch bash"
 
-# collab-research is the source-backed /collab:research path.
-# `bash` must stay OUT of this allow-set — it's what keeps the secret-read and
-# grep/glob denies real on a path that can reach the network.
-echo "== collab-research (allowlist: webfetch/websearch) =="
-check_agent "$AGENT_DIR/collab-research.md" "webfetch websearch"
+# collab-research is the source-backed /collab:research path — now IDENTICAL to
+# collab-read (2026-07-22 realignment): read+grep+glob+web allowed, no-write/no-task.
+# `bash` stays OUT of the allow-set (that no-shell/no-write scoping is the ROLE).
+echo "== collab-research (allowlist: read/grep/glob/webfetch/websearch) =="
+check_agent "$AGENT_DIR/collab-research.md" "grep glob webfetch websearch" plain
 
 # collab-watch is the /collab:witness oversight path. Its read map is INVERTED (deny floor,
 # only collab/logs/** allowed) — that scoping is the construction guarantee that keeps

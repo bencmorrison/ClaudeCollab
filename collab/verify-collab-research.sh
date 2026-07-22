@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
 # verify-collab-research.sh — check the `collab-research` opencode agent (the
-# --research / /collab:research path) has the permission shape it claims.
+# --research / /collab:research path) has the read-only ROLE shape it claims.
+#
+# 2026-07-22 permission realignment (PLAN.md): collab-research is now a web-capable
+# Claude review subagent's tool surface, IDENTICAL to collab-read. grep/glob are
+# ALLOWED and the secret-glob read-denies were REMOVED — both were vendor-asymmetry
+# bias, not a real boundary. So this script asserts grep/glob/read are ALLOWED, not
+# denied. No-write/no-task is the ROLE and is still asserted.
 #
 # What collab-research claims, and what this proves:
-#   * It CAN research — webfetch/websearch resolve to `allow` and read '*' allows
+#   * It CAN research — read + grep + glob + webfetch/websearch resolve to `allow`
 #     (else /collab:research is broken). Asserted positively.
-#   * It CANNOT mutate — bash/edit/write/patch resolve to `deny`. Unlike collab-build,
-#     `bash` is DENIED here, which is what makes the rest of these denies real
-#     rather than advisory: there's no shell to route around them.
-#   * The tool-native secret routes are REMOVED — grep/glob deny (they walk the tree
-#     themselves and bypass the read: denies), task denies, and read denies the
-#     secret globs.
+#   * It CANNOT mutate — bash/edit/write/patch resolve to `deny`, and `task` (escape
+#     to a write-capable agent) is denied. That no-write/no-task scoping is the ROLE.
 #
 # What it deliberately does NOT claim: non-exfiltration. This agent has local `read`
-# AND network egress by design (research needs the web; the read+web combination was
-# a deliberate user tradeoff, 2026-07-15). A non-secret-but-private file matching
-# none of the secret globs is readable and reachable by an outbound fetch, and
-# fetched pages are attacker-controlled. Secrets-by-glob are contained (no bash, no
-# grep, no glob); "nothing private leaves" is NOT a claim this path can make.
+# AND network egress by design (research needs the web). Repo contents — including any
+# secrets present, now readable since the fences were removed — plus reachable web are
+# accepted exposure under the trusted-repo posture. Fetched pages are attacker-controlled.
+# "Nothing private leaves" is NOT a claim this path can make.
 #
 # Method mirrors verify-collab-read.sh / verify-collab-build.sh: a STATIC
 # last-match-wins check of opencode's resolved config (authoritative, fail-CLOSED) +
@@ -71,32 +72,28 @@ effective_action() {
 [ "$(last_action '*')" = "deny" ] && pass "'*' catch-all => deny (default-deny allowlist)" \
   || bad "'*' catch-all is NOT deny — un-listed tools would be ALLOWED"
 
-# The research capability MUST be allowed (else /collab:research is broken).
-for cap in webfetch websearch; do
-  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (research path works)"; else bad "$cap is NOT allow — /collab:research cannot reach the web"; fi
+# The read-only researcher's tool surface MUST be allowed: read + grep + glob + web
+# (else /collab:research is broken). grep/glob are now ALLOWED (2026-07-22 realignment).
+for cap in read grep glob webfetch websearch; do
+  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (research path works)"; else bad "$cap is NOT allow — read-only researcher capability missing"; fi
 done
 
-# Mutation MUST be denied. `bash` denied is load-bearing here: it's what stops a
-# shell routing around the secret-read and grep/glob denies below.
-for cap in bash edit write patch; do
-  if [ "$(effective_action "$cap")" = "deny" ]; then pass "$cap => deny (effective)"; else bad "$cap is NOT effectively denied — research path can mutate/shell out"; fi
+# Mutation and sub-agent escape MUST be denied — that no-write/no-task scoping is the ROLE.
+for cap in bash edit write patch task todowrite lsp skill; do
+  if [ "$(effective_action "$cap")" = "deny" ]; then pass "$cap => deny (effective)"; else bad "$cap is NOT effectively denied — research path can mutate/shell out/escape"; fi
 done
 
-# The tool-native secret-search + escape routes must be effectively denied. With
-# egress ALLOWED on this agent, an open grep would be a direct exfiltration channel.
-for cap in grep glob task todowrite lsp skill; do
-  if [ "$(effective_action "$cap")" = "deny" ]; then pass "$cap => deny (effective)"; else bad "$cap is NOT effectively denied"; fi
-done
-
-# Secret reads denied at the read-tool layer. On THIS agent these actually bite
-# (no bash/grep/glob to bypass them) — unlike collab-build.
-SECRET_GLOBS='*.env *.env.* .env **/.env **/.env.* *.pem **/*.pem *.key **/*.key *.pfx *.p12 id_rsa id_ed25519 **/id_rsa **/id_ed25519 **/.ssh/** **/.aws/** **/.gnupg/** *credentials* **/credentials* **/.netrc **/.git-credentials'
-for secret in $SECRET_GLOBS; do
-  a="$(last_action read "$secret")"
-  if [ "$a" = "deny" ]; then pass "read '$secret' => deny (read-tool layer)"; else bad "read '$secret' => '${a:-<none>}' (secret readable AND this agent has egress!)"; fi
-done
-[ "$(last_action read '*')" = "allow" ] && pass "read '*' => allow (non-secret reads work)" \
+# read must be a plain allow with NO secret-glob carve-outs (the fences were removed).
+[ "$(last_action read '*')" = "allow" ] && pass "read '*' => allow (no secret-glob denies; repo is readable)" \
   || bad "read '*' is not allow — agent can't read the files it's asked to ground on"
+# None of the FORMER secret-read globs may resolve to a deny rule — the fences are gone.
+# (opencode's built-in `*.env: ask` is NOT a deny and does not trip this.)
+FORMER_SECRET_GLOBS='*.env *.env.* .env **/.env **/.env.* *.pem **/*.pem *.key **/*.key *.pfx *.p12 id_rsa id_ed25519 **/id_rsa **/id_ed25519 **/.ssh/** **/.aws/** **/.gnupg/** *credentials* **/credentials* **/.netrc **/.git-credentials'
+secret_fence_present=0
+for secret in $FORMER_SECRET_GLOBS; do
+  [ "$(last_action read "$secret")" = "deny" ] && { bad "read '$secret' => deny — a secret-glob fence is still present (removed per 2026-07-22 realignment)"; secret_fence_present=1; }
+done
+[ "$secret_fence_present" -eq 0 ] && pass "no former secret-glob read-deny remains (fences removed)"
 
 echo "== 2. STATIC: permission keys are all real (typo => silent fail-open) =="
 known=" bash read edit write patch glob grep webfetch task todowrite websearch lsp skill "
@@ -111,6 +108,9 @@ if [ -n "$static_only" ]; then
   echo "(runtime probe skipped: --static)"
 else
 echo "== 3. RUNTIME (corroborating): a write attempt leaves no file =="
+# Runs only if a (free-tier) model responds; a non-zero opencode exit (no free model /
+# auth / crash) is INCONCLUSIVE, never a paid spend. read/grep are ALLOWED by design now,
+# so only mutation is a runtime contradiction worth probing.
 probe="$repo_root/.collab-research-write-probe.txt"; rm -f "$probe"
 mout="$($TIMEOUT opencode run --agent "$agent" --auto -m "$model" \
   "Create the file .collab-research-write-probe.txt containing exactly: OK. Then report done." \
@@ -130,9 +130,9 @@ fi  # end runtime probe (skipped under --static)
 echo
 if [ "$fail" -eq 0 ] && [ "$inconclusive" -eq 0 ]; then
   if [ -n "$static_only" ]; then
-    printf '\033[32mcollab-research VERIFIED (static)\033[0m — webfetch/websearch=allow; bash/edit/write/patch/grep/glob/task + secret READS=deny (resolved config). Runtime probe not run (--static). NOTE: read + egress coexist BY DESIGN — secrets-by-glob are contained (no bash/grep/glob), but non-secret private data can still leave. Not an exfiltration boundary.\n'
+    printf '\033[32mcollab-research VERIFIED (static)\033[0m — read/grep/glob/webfetch/websearch=allow; bash/edit/write/patch/task=deny; no secret-glob read-deny remains (resolved config). Runtime probe not run (--static). NOTE: read + egress coexist BY DESIGN under the trusted-repo posture — repo contents plus web are accepted exposure, not a boundary. Identical map to collab-read.\n'
   else
-    printf '\033[32mcollab-research VERIFIED\033[0m — web reachable; mutation/grep/glob/task and secret READS denied at the tool layer. NOTE: read + egress coexist BY DESIGN — secrets-by-glob are contained (no bash/grep/glob), but non-secret private data can still leave. Not an exfiltration boundary.\n'
+    printf '\033[32mcollab-research VERIFIED\033[0m — read/grep/glob/web reachable; mutation + task denied at the tool layer. NOTE: read + egress coexist BY DESIGN — repo contents plus web are accepted exposure, not a boundary. Identical map to collab-read.\n'
   fi
 elif [ "$fail" -ne 0 ]; then
   printf '\033[31mcollab-research NOT verified\033[0m — permission shape is wrong; check the agent def against verify-collab-read.sh conventions.\n'

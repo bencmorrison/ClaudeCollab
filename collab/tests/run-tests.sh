@@ -633,12 +633,15 @@ reset_agents() { cp "$repo_root/.opencode/agent/collab-read.md" "$repo_root/.ope
 reset_agents
 run_lint && ok "lint: real agents pass" || no "lint rejects the real agents (false positive)"
 
-# L2. read map with '*': allow AFTER the secret denies (last-match reopens .env) -> FAIL.
+# L2. collab-read with `write` re-added to the allow-set -> FAIL. Post-2026-07-22 the
+#     read path is a read-only reviewer (read/grep/glob/web); re-allowing write breaks
+#     the no-write ROLE. This is the realistic regression against the NEW shape (the old
+#     "secret-glob reopened" regression is moot — there are no secret globs on this path).
 reset_agents
-printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  "*": deny' '  read:' \
-  '    ".env": deny' '    "*.env": deny' '    "*.key": deny' '    "*.pem": deny' '    "*credentials*": deny' \
-  '    "*": allow' '---' 'body' > "$lintdir/.opencode/agent/collab-read.md"
-run_lint && no "lint MISSED read-map reorder (secret reopened)" || ok "lint: catches read-map '*': allow after secret denies"
+printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  "*": deny' \
+  '  read: allow' '  grep: allow' '  glob: allow' '  webfetch: allow' '  websearch: allow' \
+  '  write: allow' '---' 'body' > "$lintdir/.opencode/agent/collab-read.md"
+run_lint && no "lint MISSED write re-added to collab-read (no-write ROLE broken)" || ok "lint: catches write re-added to the read-only collab-read allow-set"
 
 # L3. Unprotected frontmatter (no floor) with a valid-looking block in the BODY -> FAIL.
 reset_agents
@@ -678,11 +681,14 @@ printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  "*": deny' '  
 run_lint && no "lint MISSED bash re-allowed on collab-watch (read scope bypassable via shell)" \
          || ok "lint: catches bash re-allowed on collab-watch"
 
-# L7. Every intended secret glob is guarded from one canonical set in the lint.
+# L7. Every intended secret glob is guarded from one canonical set in the lint. Vehicle is
+#     collab-build: it still carries the secret-glob carve-outs (defense-in-depth on its
+#     read TOOL). collab-read/research dropped them in the 2026-07-22 realignment, so they
+#     can no longer host this check.
 reset_agents
-grep -v '"\*\*/\.gnupg/\*\*": deny' "$repo_root/.opencode/agent/collab-read.md" > "$lintdir/.opencode/agent/collab-read.md"
+grep -v '"\*\*/\.gnupg/\*\*": deny' "$repo_root/.opencode/agent/collab-build.md" > "$lintdir/.opencode/agent/collab-build.md"
 run_lint && no "lint MISSED a removed secret glob from the canonical set" \
-         || ok "lint: guards the full canonical secret-glob set"
+         || ok "lint: guards the full canonical secret-glob set (collab-build)"
 rm -rf "$lintdir"
 
 # --- doctor.sh "Agent guide" meta-tests ----------------------------------------
@@ -1303,12 +1309,11 @@ cp "$repo_root/.opencode/agent/collab-read.md" "$vfix/.opencode/agent/"
 cat > "$vfix/bin/opencode" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = agent ] && [ "${2:-}" = list ]; then
-  set -f
-  globs='*.env *.env.* .env **/.env **/.env.* *.pem **/*.pem *.key **/*.key *.pfx *.p12 id_rsa id_ed25519 **/id_rsa **/id_ed25519 **/.ssh/** **/.aws/** **/.gnupg/** *credentials* **/credentials* **/.netrc **/.git-credentials'
-  # shellcheck disable=SC2086 # Deliberately split the fixed fixture glob list.
-  set -- $globs
+  # Post-2026-07-22 read-path shape: read/grep/glob/web allowed, NO secret-glob denies.
+  # The static portion of verify-collab-read.sh must PASS on this, so the ONLY failure
+  # below is the created-mutation contradiction the fixture exists to prove.
   printf 'collab-read (all)\n'
-  jq -nc --args '$ARGS.positional as $g | [{permission:"*",pattern:"*",action:"deny"},{permission:"read",pattern:"*",action:"allow"},{permission:"webfetch",pattern:"*",action:"allow"},{permission:"websearch",pattern:"*",action:"allow"}] + ($g | map({permission:"read",pattern:.,action:"deny"}))' "$@"
+  jq -nc '[{permission:"*",pattern:"*",action:"deny"},{permission:"read",pattern:"*",action:"allow"},{permission:"grep",pattern:"*",action:"allow"},{permission:"glob",pattern:"*",action:"allow"},{permission:"webfetch",pattern:"*",action:"allow"},{permission:"websearch",pattern:"*",action:"allow"}]'
   exit 0
 fi
 prompt="${!#}"
