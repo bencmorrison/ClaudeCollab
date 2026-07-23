@@ -34,8 +34,6 @@ ModelGuild adds to a project:
 
 Exactly what you do, start to finish. It's six steps: **(1)** prerequisites, **(2)** install the payload (`init`), **(3)** register the MCP server yourself, **(4)** restart Claude Code so it loads it, **(5)** verify, **(6)** configure which models it uses. Steps 2 and 3 are **separate**: `init` copies the command docs / agent defs / policy template but **does not touch `.mcp.json`** — *you* register the server (step 3), so you choose global vs per-project scope. Step 6 configures *which models* it uses. You want all of them.
 
-> **Read this first — the package is not on npm yet.** The intended install is `npx modelguild init`, but ModelGuild **hasn't been published to npm** (0.5.0 isn't out). Until it is, `npx modelguild …` fails with "package not found". **Today you build it locally and run `init` from the checkout, then register with an absolute launch line** — steps 2a and 3a below, fully supported (not a hack). The published `npx` path (2b/3b) is documented so it's ready when 0.5.0 ships; it will not work before then.
-
 ### 1. Prerequisites
 
 - **[Node.js](https://nodejs.org)** (ships with `npm`/`npx`) — ModelGuild is a TypeScript CLI + MCP server; you need Node to build and run it.
@@ -197,7 +195,7 @@ These take effect immediately — no restart. (The matching env vars still work 
 
 ## Troubleshooting
 
-- **`npx modelguild …` says "package not found".** Expected — it isn't published to npm yet. Use the local build path: `npm run build` in the ModelGuild checkout, then `node dist/cli.js init --dir <project>` (see [Setup step 2a](#2a-now-works-today--build-locally-run-init-from-the-checkout)).
+- **`npx modelguild …` says "package not found".** `modelguild` is published to npm, so check spelling and your network (or a stale npm cache — `npm cache verify`). If you're intentionally running an unreleased build, use the from-source path instead: `npm run build` in the checkout, then `node dist/cli.js init --dir <project>` (see [Setup step 2b](#2b-from-source-contributors-or-to-run-an-unreleased-build)).
 - **The `/guild:*` commands don't appear in Claude Code.** Restart Claude Code — it only reads its MCP registrations at session start (Setup step 4). Still missing? Confirm the server is registered — `claude mcp get modelguild` (any scope) — and run `doctor` (step 5) to check registration and payload.
 - **A `guild_*` tool call errors about opencode.** opencode isn't installed on PATH or isn't authenticated. Run `opencode auth login`, and `opencode models` to confirm at least one provider answers. If you built locally and moved the checkout, the launch `args` path is stale — re-run `claude mcp add` (or edit the registration) with the new path.
 - **A model is denied / not allowed.** That's the model policy. Run `/guild:configure`, or edit `modelguild/models.policy.local` (Setup step 6).
