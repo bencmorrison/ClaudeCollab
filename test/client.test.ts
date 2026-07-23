@@ -66,12 +66,12 @@ export async function run(): Promise<number> {
   {
     const fake = await startFakeOpencode({ historyText: "x" });
     try {
-      await createSession({ baseUrl: fake.baseUrl, agent: "collab-read", title: "t", model: "openai/gpt-5" });
+      await createSession({ baseUrl: fake.baseUrl, agent: "guild-read", title: "t", model: "openai/gpt-5" });
       const body = fake.recorded.createBodies[0];
       const model = body.model as Record<string, unknown> | undefined;
       c.check(!!model && model.id === "gpt-5" && model.providerID === "openai", "createSession model = {id, providerID}");
       c.check(!!model && !("modelID" in model), "createSession model has NO modelID key (not swapped)");
-      c.check(body.agent === "collab-read", "createSession threads the agent");
+      c.check(body.agent === "guild-read", "createSession threads the agent");
       c.check(body.title === "t", "createSession sends the title");
     } finally {
       await fake.close();
@@ -85,7 +85,7 @@ export async function run(): Promise<number> {
       await sendMessage({
         baseUrl: fake.baseUrl,
         sessionId: "ses_fake",
-        agent: "collab-read",
+        agent: "guild-read",
         model: "openai/gpt-5",
         parts: [{ type: "text", text: "hi" }],
       });
@@ -93,7 +93,7 @@ export async function run(): Promise<number> {
       const model = body.model as Record<string, unknown> | undefined;
       c.check(!!model && model.providerID === "openai" && model.modelID === "gpt-5", "sendMessage model = {providerID, modelID}");
       c.check(!!model && !("id" in model), "sendMessage model has NO id key (not swapped)");
-      c.check(body.agent === "collab-read", "sendMessage threads the agent");
+      c.check(body.agent === "guild-read", "sendMessage threads the agent");
       const parts = body.parts as Array<Record<string, unknown>>;
       c.check(Array.isArray(parts) && parts[0]?.text === "hi", "sendMessage forwards the parts");
     } finally {
@@ -140,7 +140,7 @@ export async function run(): Promise<number> {
   {
     const fake = await startFakeOpencode({ historyText: AWKWARD });
     try {
-      const r = await askViaAgent(fakeServe(fake), { agent: "collab-read", model: "openai/gpt-fake", prompt: "q" });
+      const r = await askViaAgent(fakeServe(fake), { agent: "guild-read", model: "openai/gpt-fake", prompt: "q" });
       c.check(r.text === AWKWARD, "askViaAgent returns byte-identical text (newlines/quotes/unicode)");
       c.check(r.text.length === AWKWARD.length, `text length preserved (${r.text.length} chars)`);
       c.check(r.text.endsWith("\n"), "trailing newline preserved (no $(cat)-style stripping)");
@@ -159,7 +159,7 @@ export async function run(): Promise<number> {
   {
     const fake = await startFakeOpencode({ historyText: "HISTORY-RIGHT-ANSWER", syncText: "SYNC-WRONG-ANSWER" });
     try {
-      const r = await askViaAgent(fakeServe(fake), { agent: "collab-read", model: "openai/gpt-fake", prompt: "q" });
+      const r = await askViaAgent(fakeServe(fake), { agent: "guild-read", model: "openai/gpt-fake", prompt: "q" });
       c.check(r.text === "HISTORY-RIGHT-ANSWER", "final text comes from GET history");
       c.check(r.text !== "SYNC-WRONG-ANSWER", "final text is NOT the sync POST body");
       // And directly on the extractor, independent of the compose path.
@@ -192,7 +192,7 @@ export async function run(): Promise<number> {
   {
     const fake = await startFakeOpencode({ historyText: "ok" });
     try {
-      await askViaAgent(fakeServe(fake), { agent: "collab-read", model: "openai/gpt-fake", prompt: "q" });
+      await askViaAgent(fakeServe(fake), { agent: "guild-read", model: "openai/gpt-fake", prompt: "q" });
       c.check(fake.recorded.deletes.includes("ses_fake"), "session deleted after a successful ask");
       c.check(fake.recorded.deletes.length === 1, "session deleted exactly once");
     } finally {
@@ -206,7 +206,7 @@ export async function run(): Promise<number> {
     try {
       let threw = false;
       try {
-        await askViaAgent(fakeServe(fake), { agent: "collab-read", model: "openai/gpt-fake", prompt: "q" });
+        await askViaAgent(fakeServe(fake), { agent: "guild-read", model: "openai/gpt-fake", prompt: "q" });
       } catch (err) {
         threw = true;
         c.check(err instanceof OpencodeHttpError, "history failure surfaces an OpencodeHttpError");
@@ -225,7 +225,7 @@ export async function run(): Promise<number> {
     const fake = await startFakeOpencode({ historyText: "kept" });
     try {
       const r = await askViaAgent(fakeServe(fake), {
-        agent: "collab-read",
+        agent: "guild-read",
         model: "openai/gpt-fake",
         prompt: "q",
         keepSession: true,
@@ -243,7 +243,7 @@ export async function run(): Promise<number> {
     const fake = await startFakeOpencode({ historyText: "continued" });
     try {
       const r = await askViaAgent(fakeServe(fake), {
-        agent: "collab-read",
+        agent: "guild-read",
         model: "openai/gpt-fake",
         prompt: "the only new bytes",
         sessionId: "ses_existing",
@@ -263,7 +263,7 @@ export async function run(): Promise<number> {
     const fake = await startFakeOpencode({ historyText: "continued-kept" });
     try {
       const r = await askViaAgent(fakeServe(fake), {
-        agent: "collab-read",
+        agent: "guild-read",
         model: "openai/gpt-fake",
         prompt: "next turn",
         sessionId: "ses_keep",
@@ -286,7 +286,7 @@ export async function run(): Promise<number> {
       let threw = false;
       try {
         await askViaAgent(fakeServe(fake), {
-          agent: "collab-read",
+          agent: "guild-read",
           model: "openai/gpt-fake",
           prompt: "q",
           keepSession: true, // intent to keep — but the throw overrides it for a created session
@@ -312,7 +312,7 @@ export async function run(): Promise<number> {
         let threw = false;
         try {
           await askViaAgent(fakeServe(fake), {
-            agent: "collab-read",
+            agent: "guild-read",
             model: "openai/gpt-fake",
             prompt: "q",
             sessionId: "ses_owned",
@@ -331,22 +331,22 @@ export async function run(): Promise<number> {
   }
 
   // 8g. AGENT MISMATCH — opencode serves a DIFFERENT agent than requested → throw ------
-  //     Fail closed: a served 'build' when 'collab-read' was requested is a masquerade.
+  //     Fail closed: a served 'build' when 'guild-read' was requested is a masquerade.
   {
     const fake = await startFakeOpencode({ historyText: "wrong-agent answer", servedAgent: "build" });
     try {
       let mismatch = false;
       try {
         await askViaAgent(fakeServe(fake), {
-          agent: "collab-read",
+          agent: "guild-read",
           model: "openai/gpt-fake",
           prompt: "q",
-          expectedAgent: "collab-read",
+          expectedAgent: "guild-read",
         });
       } catch (err) {
         mismatch = err instanceof AgentMismatchError;
         if (mismatch) {
-          c.check((err as AgentMismatchError).requested === "collab-read", "mismatch: error names requested agent");
+          c.check((err as AgentMismatchError).requested === "guild-read", "mismatch: error names requested agent");
           c.check((err as AgentMismatchError).actual === "build", "mismatch: error names actual served agent");
         }
       }
@@ -359,13 +359,13 @@ export async function run(): Promise<number> {
 
   // 8h. AGENT MATCH — served agent equals requested → no throw, answer returned --------
   {
-    const fake = await startFakeOpencode({ historyText: "right answer", servedAgent: "collab-read" });
+    const fake = await startFakeOpencode({ historyText: "right answer", servedAgent: "guild-read" });
     try {
       const r = await askViaAgent(fakeServe(fake), {
-        agent: "collab-read",
+        agent: "guild-read",
         model: "openai/gpt-fake",
         prompt: "q",
-        expectedAgent: "collab-read",
+        expectedAgent: "guild-read",
       });
       c.check(r.text === "right answer", "match: answer returned when the served agent matches");
     } finally {

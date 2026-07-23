@@ -6,12 +6,12 @@
  * can PROVE the writers ran simultaneously rather than in series.
  *
  * Run as a separate process on purpose: the mkdir lock's cross-process serialization is
- * only exercised when writers genuinely race. The hold (COLLAB_TEST_HOLD_MS) happens
+ * only exercised when writers genuinely race. The hold (GUILD_TEST_HOLD_MS) happens
  * OUTSIDE the lock, so it does not block a sibling's append — it only guarantees the
  * children are alive at the same time, which is the overlap the parent asserts.
  *
  * Output (stdout, one line): `START <ms> END <ms>` (epoch milliseconds).
- * Env: COLLAB_LOG_DIR, COLLAB_RUN_ID, CHILD_CALL_ID, COLLAB_TEST_HOLD_MS.
+ * Env: GUILD_LOG_DIR, GUILD_RUN_ID, CHILD_CALL_ID, GUILD_TEST_HOLD_MS.
  */
 
 import { EvidenceLog } from "../src/log.js";
@@ -22,16 +22,16 @@ function sleep(ms: number): Promise<void> {
 
 async function main(): Promise<void> {
   const callId = process.env.CHILD_CALL_ID ?? "child";
-  const hold = Number(process.env.COLLAB_TEST_HOLD_MS ?? "120");
+  const hold = Number(process.env.GUILD_TEST_HOLD_MS ?? "120");
   const log = new EvidenceLog({ env: process.env });
   const start = Date.now();
-  await log.expect({ callId, command: "/collab:panel", model: "m/x", agent: "collab-read" });
+  await log.expect({ callId, command: "/guild:panel", model: "m/x", agent: "guild-read" });
   await sleep(hold);
   const st = await log.started({
     callId,
-    command: "/collab:panel",
+    command: "/guild:panel",
     model: "m/x",
-    agent: "collab-read",
+    agent: "guild-read",
     prompt: `prompt for ${callId}`,
   });
   await sleep(hold);
@@ -39,9 +39,9 @@ async function main(): Promise<void> {
     callId,
     exit: 0,
     turn: st.turn,
-    command: "/collab:panel",
+    command: "/guild:panel",
     model: "m/x",
-    agent: "collab-read",
+    agent: "guild-read",
     captureState: "complete",
     response: `answer for ${callId}`,
   });

@@ -1,7 +1,7 @@
 /**
  * MCP client test (PLAN.md M1): drive the server through the real MCP SDK client over
- * stdio — collab_status is listed, its call returns coherent data, and NO `opencode
- * serve` process survives the client's close. Offline (collab_status makes no model
+ * stdio — guild_status is listed, its call returns coherent data, and NO `opencode
+ * serve` process survives the client's close. Offline (guild_status makes no model
  * call; it only reads /doc, /global/health, /agent).
  */
 
@@ -19,24 +19,24 @@ export async function run(): Promise<number> {
     command: tsxBin,
     args: [serverEntry],
     cwd: repoRoot,
-    env: { ...process.env, COLLAB_PROJECT_DIR: repoRoot } as Record<string, string>,
+    env: { ...process.env, GUILD_PROJECT_DIR: repoRoot } as Record<string, string>,
   });
-  const client = new Client({ name: "claudecollab-m1-test", version: "0.0.0" });
+  const client = new Client({ name: "modelguild-m1-test", version: "0.0.0" });
 
   let servePid: number | undefined;
   try {
     await client.connect(transport);
 
     const tools = await client.listTools();
-    const tool = tools.tools.find((t) => t.name === "collab_status");
-    c.check(tool !== undefined, "collab_status is listed");
+    const tool = tools.tools.find((t) => t.name === "guild_status");
+    c.check(tool !== undefined, "guild_status is listed");
     c.check(
       tool?.inputSchema?.type === "object",
-      "collab_status inputSchema.type is 'object'",
+      "guild_status inputSchema.type is 'object'",
     );
 
     const result = await client.callTool(
-      { name: "collab_status", arguments: {} },
+      { name: "guild_status", arguments: {} },
       undefined,
       { timeout: CALL_MS },
     );
@@ -58,7 +58,7 @@ export async function run(): Promise<number> {
     c.check(typeof status.pid === "number" && status.pid > 0, `pid is a positive number (${status.pid})`);
     c.check(
       typeof status.agentCount === "number" && status.agentCount > 0,
-      `agentCount is positive (${status.agentCount}) — the collab-* defs are present`,
+      `agentCount is positive (${status.agentCount}) — the guild-* defs are present`,
     );
     // The reported serve must actually be the live process.
     if (typeof status.pid === "number") {

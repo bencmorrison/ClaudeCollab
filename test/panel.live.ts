@@ -1,8 +1,8 @@
 /**
  * M6 live smoke (NOT part of `npm test` — run via `npm run test:live`).
  *
- * Drives the REAL production path for collab_panel: two FREE models, asked the SAME
- * question CONCURRENTLY through the UNMODIFIED read-only `collab-read` agent against one
+ * Drives the REAL production path for guild_panel: two FREE models, asked the SAME
+ * question CONCURRENTLY through the UNMODIFIED read-only `guild-read` agent against one
  * `opencode serve`, in a disposable scratch project carrying a planted marker file. We
  * assert both voices round-trip the marker byte-exact, the single tool-produced run holds
  * both members' lifecycles and verifies under the TS verifier, and no `opencode serve`
@@ -37,17 +37,17 @@ async function main(): Promise<number> {
   const lc = new OpencodeLifecycle({ projectDir: scratch, idleMs: 0 });
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    COLLAB_ROOT: scratch, // no policy file ⇒ default-allow
-    COLLAB_LOG_DIR: logDir,
-    COLLAB_LOG_PROMPTS: "full",
+    GUILD_ROOT: scratch, // no policy file ⇒ default-allow
+    GUILD_LOG_DIR: logDir,
+    GUILD_LOG_PROMPTS: "full",
   };
   let servePid: number | undefined;
 
   try {
     await mkdir(path.join(scratch, ".opencode", "agent"), { recursive: true });
     await copyFile(
-      path.join(repoRoot, ".opencode", "agent", "collab-read.md"),
-      path.join(scratch, ".opencode", "agent", "collab-read.md"),
+      path.join(repoRoot, ".opencode", "agent", "guild-read.md"),
+      path.join(scratch, ".opencode", "agent", "guild-read.md"),
     );
     await writeFile(
       path.join(scratch, "marker.txt"),

@@ -1,6 +1,6 @@
 ---
 description: >-
-  ClaudeCollab delegated-editor agent. Default-deny allowlist that ALLOWS
+  ModelGuild delegated-editor agent. Default-deny allowlist that ALLOWS
   edit/write/patch and shell (bash) so another model can carry out a coding task in
   this repo; everything else — sub-agent spawning (task), content search/glob,
   network (webfetch/websearch), and any future tool — is denied, and secret files
@@ -9,10 +9,10 @@ description: >-
   tool-native paths a compliant model defaults to) — NOT a by-construction guarantee:
   a determined model can `cat .env` / `curl` / grep via bash, or even launch a fresh
   unrestricted opencode. The trust boundary is the human diff review, not the
-  permission map. Used by /collab:delegate (--edit).
+  permission map. Used by /guild:delegate (--edit).
 mode: all
 permission:
-  # DEFAULT-DENY ALLOWLIST (same construction as collab-read). `"*": deny` flips
+  # DEFAULT-DENY ALLOWLIST (same construction as guild-read). `"*": deny` flips
   # opencode's built-in `"*": allow`, so every tool is denied unless re-allowed
   # below — including task, grep, glob, webfetch, websearch, and anything a future
   # opencode adds. We then re-allow exactly the mutation set a delegated coding task
@@ -57,7 +57,7 @@ permission:
     "**/.netrc": deny
     "**/.git-credentials": deny
 ---
-You are a delegated engineer working inside the ClaudeCollab repository. You have
+You are a delegated engineer working inside the ModelGuild repository. You have
 edit, write, patch, and shell (bash) tools and may change files and run commands
 to carry out the coding task you are given. Constraints enforced at the tool layer:
 every other tool is denied — you cannot spawn sub-agents (task), fetch or search

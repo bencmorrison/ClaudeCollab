@@ -1,14 +1,14 @@
 /**
- * collab_consult — the first PRODUCTION tool (PLAN.md M5).
+ * guild_consult — the first PRODUCTION tool (PLAN.md M5).
  *
  * Composes the four committed layers into the read-only "second opinion" flow the bash
- * `/collab:consult` gives, translated to the MCP surface:
+ * `/guild:consult` gives, translated to the MCP surface:
  *
  *   config root (resolved ONCE, multi-root conflict surfaced)  ── config.ts
  *     → model resolution + leading-dash refusal (C12)          ── config.ts
  *     → policy gate deny/ask/allow (C1–C7)                     ── policy.ts
  *     → evidence lifecycle expect→started→completed (C22–C25)  ── log.ts
- *     → the model turn via the UNMODIFIED collab-read agent    ── client.ts
+ *     → the model turn via the UNMODIFIED guild-read agent    ── client.ts
  *
  * The bash exit codes (CONTRACT.md area H) become STRUCTURED tool errors, not process
  * exits: a denied model is exit 3 → a `policy-deny` error naming the model and tier; an
@@ -45,9 +45,9 @@ import {
 import { policyTier, resolvePolicyFile, type PolicyTier, type PolicySource } from "./policy.js";
 
 /** The read-only agent this tool ALWAYS uses, unmodified (C15/C47/C48). */
-export const CONSULT_AGENT = "collab-read";
-/** The command label recorded in the evidence log (drives `/collab:witness`). */
-export const CONSULT_COMMAND = "/collab:consult";
+export const CONSULT_AGENT = "guild-read";
+/** The command label recorded in the evidence log (drives `/guild:witness`). */
+export const CONSULT_COMMAND = "/guild:consult";
 
 // --- Root resolution + conflict surfacing (M4 "doctor MUST warn") ----------
 export interface RootResolution {
@@ -61,7 +61,7 @@ export interface RootResolution {
 
 /**
  * Resolve the collab root ONCE and, if more than one root exists on disk, describe the
- * conflict so the caller (consult metadata + collab_status) can surface it. The chosen
+ * conflict so the caller (consult metadata + guild_status) can surface it. The chosen
  * root is `resolveCollabRoot`'s (env > project > home); when >1 candidate exists the
  * winner is `candidates[0]` and equals the chosen root.
  */
@@ -72,10 +72,10 @@ export function resolveRootWithConflict(
 ): RootResolution {
   const chosen = resolveCollabRoot(env, cwd, home);
   const candidates = candidateRoots(env, cwd, home);
-  const override = env.COLLAB_ROOT;
+  const override = env.GUILD_ROOT;
   const hasOverride = override !== undefined && override.length > 0;
   let conflict: string | undefined;
-  // An explicit $COLLAB_ROOT is a deliberate disambiguation — the winner is unambiguous
+  // An explicit $GUILD_ROOT is a deliberate disambiguation — the winner is unambiguous
   // and no root is *silently* shadowed, so it is NOT a conflict. The warning exists for
   // the fail-open case where a policy in one root silently doesn't bind because a
   // different root won WITHOUT the user having chosen (project vs home), so only report
@@ -86,12 +86,12 @@ export function resolveRootWithConflict(
     conflict =
       `multiple collab roots exist on disk — using ${winner.source} (${winner.root}); ` +
       `shadowed: ${shadowed.join(", ")}. ` +
-      `The winning root's policy and config are the ones in effect; set $COLLAB_ROOT to choose deliberately.`;
+      `The winning root's policy and config are the ones in effect; set $GUILD_ROOT to choose deliberately.`;
   }
   return { root: chosen.root, source: chosen.source, candidates, conflict };
 }
 
-// --- Doctor-seed checks (M4 "doctor MUST warn"; surfaced by collab_status) --
+// --- Doctor-seed checks (M4 "doctor MUST warn"; surfaced by guild_status) --
 export interface CollabDoctorSeed {
   /** Which collab root is in effect, and — if >1 exists on disk — the conflict note. */
   collabRoot: { root: string; source: RootSource; conflict: string | null };
@@ -104,9 +104,9 @@ export interface CollabDoctorSeed {
 /**
  * The filesystem/env checks M4 made a precondition for production: multi-root conflict,
  * the active policy file + source, and logging on/off + effective dir. No serve needed.
- * Pure and injectable so `collab_status` and its test drive the SAME code.
+ * Pure and injectable so `guild_status` and its test drive the SAME code.
  *
- * CALLER-BEWARE (deliberate, not a bug): an explicit `$COLLAB_ROOT` pointing at a root
+ * CALLER-BEWARE (deliberate, not a bug): an explicit `$GUILD_ROOT` pointing at a root
  * that has NO policy file resolves to default-allow (C4) and reports NO conflict — the
  * override is trusted as the user's deliberate choice. So `policy.source` may read
  * `committed`/`local` for a file that does not exist there; every model is then allowed.
@@ -198,7 +198,7 @@ export interface ConsultParams {
   /**
    * Continue an EXISTING opencode session (Option B). The peer's prior turns already
    * live in that session, so `question` is the only new text sent — the driver never
-   * re-quotes the other model. This is the round-2 primitive for `/collab:workshop`
+   * re-quotes the other model. This is the round-2 primitive for `/guild:workshop`
    * (each panel member continues its OWN round-1 session; see panel.ts keepSessions).
    */
   sessionId?: string;
@@ -232,8 +232,8 @@ function actualModel(requested: string, providerID?: string, modelID?: string): 
 }
 
 // ===========================================================================
-// SHARED FLOW (factored so collab_panel — M6 — reuses the exact same gating and
-// lifecycle as collab_consult, rather than a divergent second copy). The gate is
+// SHARED FLOW (factored so guild_panel — M6 — reuses the exact same gating and
+// lifecycle as guild_consult, rather than a divergent second copy). The gate is
 // pure (no logging, no run); the lifecycle is the expect→started→completed spine.
 // ===========================================================================
 
@@ -439,7 +439,7 @@ export async function consult(params: ConsultParams, deps: ConsultDeps): Promise
   const collabDir = rootRes.root;
   const rootConflict = rootRes.conflict;
 
-  // 2. Resolve the model (param > COLLAB_MODEL env > conf > opencode default).
+  // 2. Resolve the model (param > GUILD_MODEL env > conf > opencode default).
   const confContents = readConfContents(collabDir, env);
   const requestedModel = resolveModel({ flag: params.model, env, confContents });
 
@@ -450,11 +450,11 @@ export async function consult(params: ConsultParams, deps: ConsultDeps): Promise
   //
   // HONESTY BOUND (design input for M9): the MCP surface has NO per-argument permission
   // gate, so `confirmed:true` cannot be made to force a user prompt the way witness.md's
-  // allowed-tools OMISSION of the COLLAB_CONFIRMED form makes Claude-auditing-Claude
+  // allowed-tools OMISSION of the GUILD_CONFIRMED form makes Claude-auditing-Claude
   // impossible to self-authorise. Here the ask gate is instruction-layer (the error text
   // telling the driver the user must approve) PLUS the mechanical backstop that a
   // non-confirmed call cannot proceed, PLUS the tier/confirmed audit trail written into
-  // the evidence entries so /collab:witness can check after the fact whether an ask-tier
+  // the evidence entries so /guild:witness can check after the fact whether an ask-tier
   // consult claimed approval. That is NOT witness-grade parity — a driver that sets
   // confirmed:true without asking is caught only by audit, not prevented.
   const gate = gateModel(requestedModel, params.confirmed === true, { collabDir, env });
@@ -479,14 +479,14 @@ export async function consult(params: ConsultParams, deps: ConsultDeps): Promise
   //    provided runId reuses that run (so a workflow's calls share one auditable unit).
   const runId = params.runId && params.runId.length > 0 ? params.runId : log.newRun(CONSULT_COMMAND);
 
-  // 5. The model turn, via the UNMODIFIED collab-read agent (shared spine).
+  // 5. The model turn, via the UNMODIFIED guild-read agent (shared spine).
   const outcome = await runAgentLifecycle(
     {
       question: params.question,
       requestedModel,
       agent: CONSULT_AGENT,
       command: CONSULT_COMMAND,
-      title: "collab_consult",
+      title: "guild_consult",
       runId,
       tier: gate.tier,
       confirmed: gate.confirmed,

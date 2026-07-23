@@ -37,26 +37,26 @@ export async function run(): Promise<number> {
 
   try {
     // ---- conf_get (C10/C11), re-pinning run-tests.sh 21b et al. -----------------
-    t.check(confGet("COLLAB_MODEL=openai/gpt-5\n", "COLLAB_MODEL") === "openai/gpt-5",
+    t.check(confGet("GUILD_MODEL=openai/gpt-5\n", "GUILD_MODEL") === "openai/gpt-5",
       "confGet: plain KEY=value");
-    t.check(confGet("COLLAB_MODEL=openai/commented   # my default\n", "COLLAB_MODEL") === "openai/commented",
+    t.check(confGet("GUILD_MODEL=openai/commented   # my default\n", "GUILD_MODEL") === "openai/commented",
       "confGet: inline '# comment' stripped (run-tests 21b)");
-    t.check(confGet('COLLAB_MODEL="openai/quoted"\n', "COLLAB_MODEL") === "openai/quoted",
+    t.check(confGet('GUILD_MODEL="openai/quoted"\n', "GUILD_MODEL") === "openai/quoted",
       "confGet: one layer of double quotes stripped");
-    t.check(confGet("COLLAB_MODEL=openai/a\nCOLLAB_MODEL=openai/b\n", "COLLAB_MODEL") === "openai/b",
+    t.check(confGet("GUILD_MODEL=openai/a\nGUILD_MODEL=openai/b\n", "GUILD_MODEL") === "openai/b",
       "confGet: last assignment wins");
-    t.check(confGet("   COLLAB_MODEL = openai/x\n", "COLLAB_MODEL") === "openai/x",
+    t.check(confGet("   GUILD_MODEL = openai/x\n", "GUILD_MODEL") === "openai/x",
       "confGet: leading whitespace + spaces around key/value tolerated");
-    t.check(confGet("# COLLAB_MODEL=nope\n", "COLLAB_MODEL") === "",
+    t.check(confGet("# GUILD_MODEL=nope\n", "GUILD_MODEL") === "",
       "confGet: commented line ignored");
-    t.check(confGet("", "COLLAB_MODEL") === "", "confGet: absent key → empty");
+    t.check(confGet("", "GUILD_MODEL") === "", "confGet: absent key → empty");
 
     // ---- resolveModel precedence (C8): flag > env > conf > "" -------------------
-    const conf = "COLLAB_MODEL=openai/from-conf\n";
-    t.check(resolveModel({ flag: "openai/from-flag", env: { COLLAB_MODEL: "openai/from-env" } as NodeJS.ProcessEnv, confContents: conf }) === "openai/from-flag",
+    const conf = "GUILD_MODEL=openai/from-conf\n";
+    t.check(resolveModel({ flag: "openai/from-flag", env: { GUILD_MODEL: "openai/from-env" } as NodeJS.ProcessEnv, confContents: conf }) === "openai/from-flag",
       "resolveModel: -m flag wins");
-    t.check(resolveModel({ env: { COLLAB_MODEL: "openai/from-env" } as NodeJS.ProcessEnv, confContents: conf }) === "openai/from-env",
-      "resolveModel: $COLLAB_MODEL over conf (run-tests 21)");
+    t.check(resolveModel({ env: { GUILD_MODEL: "openai/from-env" } as NodeJS.ProcessEnv, confContents: conf }) === "openai/from-env",
+      "resolveModel: $GUILD_MODEL over conf (run-tests 21)");
     t.check(resolveModel({ env: {} as NodeJS.ProcessEnv, confContents: conf }) === "openai/from-conf",
       "resolveModel: conf file supplies default (run-tests 21)");
     t.check(resolveModel({ env: {} as NodeJS.ProcessEnv, confContents: "" }) === "",
@@ -72,19 +72,19 @@ export async function run(): Promise<number> {
     // ---- collab-root resolution (M4 order: env > project > home) ----------------
     {
       const projBase = tmp();
-      mkdirSync(path.join(projBase, "collab"), { recursive: true });
+      mkdirSync(path.join(projBase, "modelguild"), { recursive: true });
       const home = tmp();
-      const r1 = resolveCollabRoot({ COLLAB_ROOT: "/explicit/root" } as NodeJS.ProcessEnv, projBase, home);
-      t.check(r1.source === "env" && r1.root === "/explicit/root", "collab-root: $COLLAB_ROOT wins");
+      const r1 = resolveCollabRoot({ GUILD_ROOT: "/explicit/root" } as NodeJS.ProcessEnv, projBase, home);
+      t.check(r1.source === "env" && r1.root === "/explicit/root", "collab-root: $GUILD_ROOT wins");
       const r2 = resolveCollabRoot({} as NodeJS.ProcessEnv, projBase, home);
-      t.check(r2.source === "project" && r2.root === path.join(projBase, "collab"),
-        "collab-root: project ./collab/ when it exists");
+      t.check(r2.source === "project" && r2.root === path.join(projBase, "modelguild"),
+        "collab-root: project ./modelguild/ when it exists");
       const noProj = tmp();
       const r3 = resolveCollabRoot({} as NodeJS.ProcessEnv, noProj, home);
-      t.check(r3.source === "home" && r3.root === path.join(home, ".claude", "collab"),
-        "collab-root: ~/.claude/collab fallback");
+      t.check(r3.source === "home" && r3.root === path.join(home, ".claude", "modelguild"),
+        "collab-root: ~/.claude/modelguild fallback");
       // conflict detection for doctor
-      const cands = candidateRoots({ COLLAB_ROOT: "/x" } as NodeJS.ProcessEnv, projBase, home);
+      const cands = candidateRoots({ GUILD_ROOT: "/x" } as NodeJS.ProcessEnv, projBase, home);
       t.check(cands.length >= 2 && cands[0].source === "env" && cands.some((c) => c.source === "project"),
         "candidateRoots: reports overlapping roots for doctor conflict warning");
     }
@@ -93,11 +93,11 @@ export async function run(): Promise<number> {
     {
       const root = tmp();
       mkdirSync(root, { recursive: true });
-      writeFileSync(path.join(root, "collab.conf.local"), "COLLAB_MODEL=openai/local\n");
-      t.check(resolveConfFile(root, {})?.endsWith("collab.conf.local") === true,
-        "resolveConfFile: <root>/collab.conf.local when present");
-      t.check(resolveConfFile(root, { COLLAB_CONF: "/custom/conf" } as NodeJS.ProcessEnv) === "/custom/conf",
-        "resolveConfFile: $COLLAB_CONF overrides");
+      writeFileSync(path.join(root, "modelguild.conf.local"), "GUILD_MODEL=openai/local\n");
+      t.check(resolveConfFile(root, {})?.endsWith("modelguild.conf.local") === true,
+        "resolveConfFile: <root>/modelguild.conf.local when present");
+      t.check(resolveConfFile(root, { GUILD_CONF: "/custom/conf" } as NodeJS.ProcessEnv) === "/custom/conf",
+        "resolveConfFile: $GUILD_CONF overrides");
       t.check(readConfContents(root, {}).includes("openai/local"),
         "readConfContents: reads the resolved file");
       t.check(readConfContents(tmp(), {}) === "", "readConfContents: missing file → empty string");
@@ -128,13 +128,13 @@ export async function run(): Promise<number> {
         "panel: comma/space separated, order preserved");
     }
 
-    // ---- panel precedence: args > $COLLAB_MODELS env > conf COLLAB_MODELS -------
+    // ---- panel precedence: args > $GUILD_MODELS env > conf GUILD_MODELS -------
     {
-      const confModels = "COLLAB_MODELS=openai/from-conf google/from-conf\n";
+      const confModels = "GUILD_MODELS=openai/from-conf google/from-conf\n";
       const fromConf = resolvePanelModels({ args: [], env: {} as NodeJS.ProcessEnv, confContents: confModels });
       t.check(fromConf.models.join(",") === "openai/from-conf,google/from-conf",
-        "panel: conf COLLAB_MODELS used when args/env absent");
-      const fromEnv = resolvePanelModels({ args: [], env: { COLLAB_MODELS: "openai/env google/env" } as NodeJS.ProcessEnv, confContents: confModels });
+        "panel: conf GUILD_MODELS used when args/env absent");
+      const fromEnv = resolvePanelModels({ args: [], env: { GUILD_MODELS: "openai/env google/env" } as NodeJS.ProcessEnv, confContents: confModels });
       t.check(fromEnv.models.join(",") === "openai/env,google/env", "panel: env overrides conf");
     }
 

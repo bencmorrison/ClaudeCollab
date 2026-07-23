@@ -18,7 +18,7 @@ sudo npm install -g @anthropic-ai/claude-code@latest opencode-ai@latest 2>&1 | t
 sudo chown node:node "$HOME/.claude" "$HOME/.local/share/opencode" "$HOME/.config/gh" 2>/dev/null || true
 # Keep the surviving shell (the verify/lint scripts) executable — the bash wrapper
 # layer was retired (PLAN.md M12); the product is the TypeScript/MCP server (npm).
-chmod +x collab/verify-collab-*.sh collab/tests/*.sh 2>/dev/null || true
+chmod +x modelguild/verify-guild-*.sh modelguild/tests/*.sh 2>/dev/null || true
 
 # Link the selected host Claude config snapshot into the active ~/.claude.
 # settings.json is copied only on a fresh volume because host hooks/statusLine/
@@ -48,7 +48,7 @@ if [ ! -L "$HOME/.claude.json" ]; then
   ln -sfn "$persist" "$HOME/.claude.json"
 fi
 
-echo "== ClaudeCollab dev container =="
+echo "== ModelGuild dev container =="
 printf 'node:     %s\n' "$(node --version 2>/dev/null || echo MISSING)"
 printf 'claude:   %s\n' "$(claude --version 2>/dev/null || echo MISSING)"
 printf 'opencode: %s\n' "$(opencode --version 2>/dev/null || echo MISSING)"
@@ -79,4 +79,4 @@ fi
 
 echo
 echo "Log in once (persists across rebuilds via named volumes), then try:"
-echo "  /collab:consult <question>   |   /collab:panel <question>   |   /collab:delegate <task>   |   /collab:collaborate <problem>"
+echo "  /guild:consult <question>   |   /guild:panel <question>   |   /guild:delegate <task>   |   /guild:collaborate <problem>"

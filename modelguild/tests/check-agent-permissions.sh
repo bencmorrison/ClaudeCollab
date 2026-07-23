@@ -2,7 +2,7 @@
 # check-agent-permissions.sh — SOURCE-level lint of the hardened agent defs'
 # permission maps. Opencode-free (bash/awk only), so CI can run it per-commit
 # without installing opencode. It does NOT prove opencode's resolved enforcement
-# (that's `verify-collab-*.sh`, which needs the opencode binary) — it guards the
+# (that's `verify-guild-*.sh`, which needs the opencode binary) — it guards the
 # realistic regression: a human edits `.opencode/agent/*.md` and weakens it.
 #
 # It asserts the default-deny-allowlist invariants, computed the way opencode
@@ -14,13 +14,13 @@
 #   - in the `read` map, `*` effectively allows and each secret glob effectively denies
 #
 # Order-aware + frontmatter-bounded on purpose: earlier presence-only checks on the
-# whole file were fooled three ways (found by dogfooding /collab:review 2026-07-15) — an
+# whole file were fooled three ways (found by dogfooding /guild:review 2026-07-15) — an
 # unprotected frontmatter passed via a look-alike block in the markdown BODY; a
 # `"*": deny` placed AFTER the allows (or a `"*": allow` after the secret denies)
 # passed while resolving the opposite way. This version reads only the frontmatter
 # and computes effective (last-match) actions, so those all fail as they should.
 #
-# Run:  bash collab/tests/check-agent-permissions.sh   (exit 0 = all invariants hold)
+# Run:  bash modelguild/tests/check-agent-permissions.sh   (exit 0 = all invariants hold)
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,9 +29,9 @@ cd "$repo_root" || exit 1
 
 # Where the hardened agent defs live. Default is the repo-relative .opencode/agent
 # (unchanged for CI and the checkout). A --global install places them in opencode's
-# global agent dir; doctor.sh passes that here via $COLLAB_AGENT_DIR so the SAME lint
+# global agent dir; doctor.sh passes that here via $GUILD_AGENT_DIR so the SAME lint
 # guards the globally-installed defs. An absolute override is cwd-independent.
-AGENT_DIR="${COLLAB_AGENT_DIR:-.opencode/agent}"
+AGENT_DIR="${GUILD_AGENT_DIR:-.opencode/agent}"
 
 fail=0
 pass() { printf '\033[32mok\033[0m   %s\n' "$*"; }
@@ -96,9 +96,9 @@ EOF
 #
 # read-spec describes the SHAPE of the read map, because they are not all alike:
 #   plain              read is a plain top-level `read: allow` with NO secret-glob submap
-#                      — the loosened read-only reviewer shape of collab-read/collab-research
+#                      — the loosened read-only reviewer shape of guild-read/guild-research
 #                      (2026-07-22 realignment): read the repo, dotfiles included.
-#   nonsecret          (default) `*` allows, each secret glob denies — collab-build's read
+#   nonsecret          (default) `*` allows, each secret glob denies — guild-build's read
 #                      TOOL (defense-in-depth): "read the repo, except secrets".
 check_agent() {
   local f="$1" expect="$2" readspec="${3:-nonsecret}" label f0="$fail"; label="$(basename "$f")"
@@ -138,7 +138,7 @@ EOF
   local rm s; rm="$(printf '%s\n' "$fm" | read_map)"
   case "$readspec" in
     plain)
-      # Loosened read path (collab-read/collab-research, 2026-07-22 permission realignment):
+      # Loosened read path (guild-read/guild-research, 2026-07-22 permission realignment):
       # read is a plain top-level `read: allow` with NO secret-glob submap. The secret
       # fences were removed as vendor-asymmetry bias — a review subagent reads the repo,
       # dotfiles included. Assert read resolves to allow at top level AND there is no submap;
@@ -149,7 +149,7 @@ EOF
         || bad "$label" "read has a submap; the loosened path expects a plain 'read: allow' with NO secret-glob carve-outs (removed 2026-07-22 — do not re-fence a read-only reviewer)"
       ;;
     nonsecret|*)
-      # collab-build: `*` allows, each secret glob denies (defense-in-depth on the read TOOL).
+      # guild-build: `*` allows, each secret glob denies (defense-in-depth on the read TOOL).
       [ "$(effective "$rm" '*')" = "allow" ] \
         || bad "$label" "read map: '*' resolves to '$(effective "$rm" '*')', expected allow (agent can't read non-secret files)"
       for s in $SECRET_GLOBS; do
@@ -163,7 +163,7 @@ EOF
 }
 
 # --self-test: prove THIS lint catches the realistic weakenings a human edit could make
-# (ported from the retired run-tests.sh meta-tests; the collab-watch cases went with the
+# (ported from the retired run-tests.sh meta-tests; the guild-watch cases went with the
 # retired witness agent). It re-invokes the lint against crafted agent dirs and asserts it
 # passes the real defs and fails each tampered one. Opencode-free; run in CI + doctor.sh.
 if [ "${1:-}" = "--self-test" ]; then
@@ -172,38 +172,38 @@ if [ "${1:-}" = "--self-test" ]; then
   st_fail=0
   st_ok() { printf '\033[32mok\033[0m   self-test: %s\n' "$1"; }
   st_no() { printf '\033[31mFAIL\033[0m self-test: %s\n' "$1"; st_fail=1; }
-  run_variant() { COLLAB_AGENT_DIR="$1" bash "$SELF" >/dev/null 2>&1; }
-  d="$(mktemp -d "${TMPDIR:-/tmp}/collab-aplint.XXXXXX")"; mkdir -p "$d/agent"
-  seed() { cp "$REAL/collab-read.md" "$REAL/collab-build.md" "$REAL/collab-research.md" "$d/agent/"; }
+  run_variant() { GUILD_AGENT_DIR="$1" bash "$SELF" >/dev/null 2>&1; }
+  d="$(mktemp -d "${TMPDIR:-/tmp}/modelguild-aplint.XXXXXX")"; mkdir -p "$d/agent"
+  seed() { cp "$REAL/guild-read.md" "$REAL/guild-build.md" "$REAL/guild-research.md" "$d/agent/"; }
 
   # S1. The real defs pass.
   seed
   run_variant "$d/agent" && st_ok "real agents pass" || st_no "lint rejects the real agents (false positive)"
 
-  # S2. `write` re-added to collab-read's allow-set (no-write ROLE broken) -> FAIL.
+  # S2. `write` re-added to guild-read's allow-set (no-write ROLE broken) -> FAIL.
   seed
   printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  "*": deny' \
     '  read: allow' '  grep: allow' '  glob: allow' '  webfetch: allow' '  websearch: allow' \
-    '  write: allow' '---' 'body' > "$d/agent/collab-read.md"
-  run_variant "$d/agent" && st_no "MISSED write re-added to collab-read" || st_ok "catches write re-added to the read-only collab-read allow-set"
+    '  write: allow' '---' 'body' > "$d/agent/guild-read.md"
+  run_variant "$d/agent" && st_no "MISSED write re-added to guild-read" || st_ok "catches write re-added to the read-only guild-read allow-set"
 
   # S3. Unprotected frontmatter (no floor) with a valid-looking block in the BODY -> FAIL.
   seed
   printf '%s\n' '---' 'description: x' 'mode: all' '---' 'Example (not real frontmatter):' \
-    'permission:' '  "*": deny' '  read:' '    "*": allow' > "$d/agent/collab-read.md"
+    'permission:' '  "*": deny' '  read:' '    "*": allow' > "$d/agent/guild-read.md"
   run_variant "$d/agent" && st_no "MISSED unprotected frontmatter (body block fooled it)" || st_ok "ignores body block, catches missing floor"
 
-  # S4. collab-build with '*': deny placed AFTER the allows (effective = all denied) -> FAIL.
+  # S4. guild-build with '*': deny placed AFTER the allows (effective = all denied) -> FAIL.
   seed
   printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  edit: allow' '  write: allow' \
     '  patch: allow' '  bash: allow' '  "*": deny' '  read:' '    "*": allow' '---' 'body' \
-    > "$d/agent/collab-build.md"
-  run_variant "$d/agent" && st_no "MISSED collab-build floor-after-allows (edit path dead)" || st_ok "catches '*': deny placed after the allows"
+    > "$d/agent/guild-build.md"
+  run_variant "$d/agent" && st_no "MISSED guild-build floor-after-allows (edit path dead)" || st_ok "catches '*': deny placed after the allows"
 
-  # S5. A secret glob removed from collab-build's canonical set -> FAIL.
+  # S5. A secret glob removed from guild-build's canonical set -> FAIL.
   seed
-  grep -v '"\*\*/\.gnupg/\*\*": deny' "$REAL/collab-build.md" > "$d/agent/collab-build.md"
-  run_variant "$d/agent" && st_no "MISSED a removed secret glob from the canonical set" || st_ok "guards the full canonical secret-glob set (collab-build)"
+  grep -v '"\*\*/\.gnupg/\*\*": deny' "$REAL/guild-build.md" > "$d/agent/guild-build.md"
+  run_variant "$d/agent" && st_no "MISSED a removed secret glob from the canonical set" || st_ok "guards the full canonical secret-glob set (guild-build)"
 
   rm -rf "$d"
   echo
@@ -212,20 +212,20 @@ if [ "${1:-}" = "--self-test" ]; then
   exit "$st_fail"
 fi
 
-# collab-read: read-only reviewer ROLE (2026-07-22 realignment). read+grep+glob+web
+# guild-read: read-only reviewer ROLE (2026-07-22 realignment). read+grep+glob+web
 # ALLOWED like a Claude review subagent; read is a plain top-level allow (no secret
 # globs). no-write/no-task is the role. `plain` readspec asserts the no-submap shape.
-echo "== collab-read (allowlist: read/grep/glob/webfetch/websearch) =="
-check_agent "$AGENT_DIR/collab-read.md" "grep glob webfetch websearch" plain
+echo "== guild-read (allowlist: read/grep/glob/webfetch/websearch) =="
+check_agent "$AGENT_DIR/guild-read.md" "grep glob webfetch websearch" plain
 
-echo "== collab-build (allowlist: edit/write/patch/bash) =="
-check_agent "$AGENT_DIR/collab-build.md" "edit write patch bash"
+echo "== guild-build (allowlist: edit/write/patch/bash) =="
+check_agent "$AGENT_DIR/guild-build.md" "edit write patch bash"
 
-# collab-research is the source-backed /collab:research path — now IDENTICAL to
-# collab-read (2026-07-22 realignment): read+grep+glob+web allowed, no-write/no-task.
+# guild-research is the source-backed /guild:research path — now IDENTICAL to
+# guild-read (2026-07-22 realignment): read+grep+glob+web allowed, no-write/no-task.
 # `bash` stays OUT of the allow-set (that no-shell/no-write scoping is the ROLE).
-echo "== collab-research (allowlist: read/grep/glob/webfetch/websearch) =="
-check_agent "$AGENT_DIR/collab-research.md" "grep glob webfetch websearch" plain
+echo "== guild-research (allowlist: read/grep/glob/webfetch/websearch) =="
+check_agent "$AGENT_DIR/guild-research.md" "grep glob webfetch websearch" plain
 
 echo
 if [ "$fail" -eq 0 ]; then printf '\033[32magent permissions: allowlist invariants hold\033[0m\n'

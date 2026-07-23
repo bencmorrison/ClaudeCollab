@@ -1,5 +1,5 @@
 /**
- * `claudecollab` CLI dispatcher (PLAN.md M11).
+ * `modelguild` CLI dispatcher (PLAN.md M11).
  *
  * The published npm package's `bin`. Subcommands:
  *   serve   (default) — start the MCP stdio server (what `.mcp.json` launches).
@@ -28,12 +28,12 @@ const PACKAGE_ROOT = path.resolve(path.dirname(SELF), "..");
  * `.mcp.json` line init writes is provably runnable (it just ran init). `.ts` ⇒ tsx
  * (dogfood/dev); `.js` ⇒ node (the built/installed artifact). */
 /** The SHIPPED DEFAULT: the portable, non-interactive published form
- * `npx -y claudecollab serve`. `-y` is load-bearing — an MCP server is launched on a
- * non-TTY, where a bare `npx claudecollab` would BLOCK on npm's "install this package?"
+ * `npx -y modelguild serve`. `-y` is load-bearing — an MCP server is launched on a
+ * non-TTY, where a bare `npx modelguild` would BLOCK on npm's "install this package?"
  * prompt with no way to answer. Requires the package to be resolvable (published, or a
  * project dependency). Also chosen explicitly with `--npx`. */
 function npxServeLaunch(): ServerLaunch {
-  return { command: "npx", args: ["-y", "claudecollab", "serve"] };
+  return { command: "npx", args: ["-y", "modelguild", "serve"] };
 }
 
 /** The pinned/offline form (`--abs`): an absolute path to the exact interpreter+entry
@@ -94,13 +94,13 @@ function runInit(argv: string[]): number {
   const res = init({ targetDir, packageRoot: PACKAGE_ROOT, serverLaunch: launch, uninstall, writeMcp });
 
   if (uninstall) {
-    console.log(`Uninstalled ClaudeCollab (MCP) from ${targetDir}`);
+    console.log(`Uninstalled ModelGuild (MCP) from ${targetDir}`);
     console.log(`  removed ${res.removed.length} file(s); .mcp.json ${res.mcpAction}`);
   } else {
-    console.log(`Installed ClaudeCollab (MCP) into ${targetDir}`);
+    console.log(`Installed ModelGuild (MCP) into ${targetDir}`);
     console.log(`  ${res.installed.length} file(s) written, ${res.skipped.length} skipped`);
     if (writeMcp) {
-      console.log(`  .mcp.json: ${res.mcpAction} — server key 'claudecollab'`);
+      console.log(`  .mcp.json: ${res.mcpAction} — server key 'modelguild'`);
     } else {
       console.log(`  .mcp.json: NOT written — register the server yourself (see below).`);
     }
@@ -110,8 +110,8 @@ function runInit(argv: string[]): number {
   if (res.shadowed.length > 0) {
     console.warn(
       `  ! ${res.shadowed.length} command(s) already existed at our path and are NOT ours ` +
-        `(shadowing): ${res.shadowed.join(", ")}. Those /collab:* commands are the user's, ` +
-        `not ClaudeCollab's — rename or remove them and re-run to use ours.`,
+        `(shadowing): ${res.shadowed.join(", ")}. Those /guild:* commands are the user's, ` +
+        `not ModelGuild's — rename or remove them and re-run to use ours.`,
     );
   }
   if (!uninstall && !writeMcp) printRegisterInstructions(targetDir, launch);
@@ -124,7 +124,7 @@ function runInit(argv: string[]): number {
       console.log("  2. (Done — --write-mcp wrote the project .mcp.json for you.)");
     }
     console.log("  3. Restart Claude Code so it picks up the MCP server.");
-    console.log("  4. Check the setup:        npx claudecollab doctor");
+    console.log("  4. Check the setup:        npx modelguild doctor");
   }
   return 0;
 }
@@ -139,14 +139,14 @@ function printRegisterInstructions(targetDir: string, launch: ServerLaunch): voi
   console.log("Register the MCP server (init did NOT write .mcp.json — you choose the scope):");
   console.log("");
   console.log("  Recommended — register with the Claude CLI:");
-  console.log(`    claude mcp add claudecollab -s user -- ${launchStr}`);
+  console.log(`    claude mcp add modelguild -s user -- ${launchStr}`);
   console.log(
     "    Swap -s user (global, all your projects) for -s project (committed to this " +
       "repo's .mcp.json) or -s local (this project only, private).",
   );
   console.log("");
   console.log("  Or hand-place this in the project's .mcp.json (project-scoped):");
-  const snippet = { mcpServers: { claudecollab: mcpServerEntry({ targetDir, packageRoot: PACKAGE_ROOT, serverLaunch: launch }) } };
+  const snippet = { mcpServers: { modelguild: mcpServerEntry({ targetDir, packageRoot: PACKAGE_ROOT, serverLaunch: launch }) } };
   for (const l of JSON.stringify(snippet, null, 2).split("\n")) console.log(`    ${l}`);
   console.log("");
 }
@@ -181,27 +181,27 @@ async function runDoctor(argv: string[]): Promise<number> {
       const root = JSON.parse(readFileSync(mcpPath, "utf8")) as {
         mcpServers?: Record<string, unknown>;
       };
-      projectHasKey = !!root.mcpServers && Object.prototype.hasOwnProperty.call(root.mcpServers, "claudecollab");
+      projectHasKey = !!root.mcpServers && Object.prototype.hasOwnProperty.call(root.mcpServers, "modelguild");
     } catch {
       /* invalid json → treated as no key */
     }
   }
-  const claudeGet = spawnSync("claude", ["mcp", "get", "claudecollab"], { encoding: "utf8" });
+  const claudeGet = spawnSync("claude", ["mcp", "get", "modelguild"], { encoding: "utf8" });
   const claudeOnPath = !claudeGet.error; // ENOENT sets .error
   if (claudeOnPath && claudeGet.status === 0) {
-    console.log("✓ MCP server 'claudecollab' registered (found via `claude mcp get`, any scope)");
+    console.log("✓ MCP server 'modelguild' registered (found via `claude mcp get`, any scope)");
   } else if (projectHasKey) {
-    console.log("✓ MCP server registered in project .mcp.json under key 'claudecollab'");
+    console.log("✓ MCP server registered in project .mcp.json under key 'modelguild'");
   } else if (claudeOnPath) {
     // claude answered, no registration in any scope — a real miss.
-    line(false, "MCP server 'claudecollab' not registered in any scope — run `claude mcp add claudecollab -s user -- npx -y claudecollab serve`");
+    line(false, "MCP server 'modelguild' not registered in any scope — run `claude mcp add modelguild -s user -- npx -y modelguild serve`");
   } else {
     // Can't check global scope (claude not on PATH) and no project key. Do NOT hard-fail: a
     // global/user-scope registration lives in ~/.claude.json, invisible here.
     console.warn(
-      "! MCP server 'claudecollab' not found in project .mcp.json, and the `claude` CLI isn't " +
+      "! MCP server 'modelguild' not found in project .mcp.json, and the `claude` CLI isn't " +
         "on PATH to check global/user scope. If you registered with `-s user`, that's expected — " +
-        "verify with `claude mcp get claudecollab`.",
+        "verify with `claude mcp get modelguild`.",
     );
   }
 
@@ -213,13 +213,13 @@ async function runDoctor(argv: string[]): Promise<number> {
     if (dest.startsWith(".claude/commands/")) docsPresent++;
     else if (dest.startsWith(".opencode/agent/")) agentsPresent++;
   }
-  line(docsPresent >= 7, `${docsPresent}/8 command docs present in .claude/commands/collab/`);
+  line(docsPresent >= 7, `${docsPresent}/8 command docs present in .claude/commands/guild/`);
   line(agentsPresent === 3, `${agentsPresent}/3 hardened agent defs present in .opencode/agent/`);
 
   // Policy / config templates present.
   line(
-    existsSync(path.join(targetDir, "collab/models.policy")),
-    "model policy present (collab/models.policy)",
+    existsSync(path.join(targetDir, "modelguild/models.policy")),
+    "model policy present (modelguild/models.policy)",
   );
 
   // opencode binary (best-effort; a missing binary is a warning, not a hard fail here).
@@ -245,19 +245,19 @@ async function main(): Promise<number> {
   if (cmd === "init") return runInit(argv.slice(1));
   if (cmd === "doctor") return runDoctor(argv.slice(1));
   if (cmd === "-h" || cmd === "--help" || cmd === "help") {
-    console.log("Usage: claudecollab <serve|init|doctor> [options]");
+    console.log("Usage: modelguild <serve|init|doctor> [options]");
     console.log("  serve            Start the MCP stdio server (default; what .mcp.json launches).");
     console.log("  init [--dir D]   Place the MCP-era payload into a project (--uninstall to remove).");
     console.log("                   Does NOT write .mcp.json by default — it prints how to register");
     console.log("                   the server yourself (`claude mcp add`, your choice of scope).");
     console.log("       [--write-mcp]  Opt in to the old behavior: write/merge the project .mcp.json.");
-    console.log("       [--npx]     Default launch line: `npx -y claudecollab serve`.");
+    console.log("       [--npx]     Default launch line: `npx -y modelguild serve`.");
     console.log("       [--abs]     Pin an absolute path to this interpreter+entry (offline/no-registry).");
     console.log("       [--server-command \"cmd args\"]  Override the launch command verbatim.");
     console.log("  doctor [--dir D] Token-free health check.");
     return 0;
   }
-  console.error(`claudecollab: unknown command '${cmd}' (see --help)`);
+  console.error(`modelguild: unknown command '${cmd}' (see --help)`);
   return 2;
 }
 
@@ -267,7 +267,7 @@ main().then(
     if (code !== 0) process.exitCode = code;
   },
   (err) => {
-    console.error(`claudecollab: ${(err as Error).message}`);
+    console.error(`modelguild: ${(err as Error).message}`);
     process.exitCode = 1;
   },
 );

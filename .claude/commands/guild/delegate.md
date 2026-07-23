@@ -1,7 +1,7 @@
 ---
 description: Delegate a coding task to another LLM agent (opencode) that can edit files, then review its work
 argument-hint: [coding task]
-allowed-tools: mcp__claudecollab__collab_delegate, Bash(git diff:*), Bash(git status:*), Bash(git grep:*), Read, Grep, Glob, Edit
+allowed-tools: mcp__modelguild__guild_delegate, Bash(git diff:*), Bash(git status:*), Bash(git grep:*), Read, Grep, Glob, Edit
 ---
 Delegate this coding task to another LLM via opencode, then review the result. The delegated model runs in this repo and CAN edit files.
 
@@ -9,7 +9,7 @@ Task:
 $ARGUMENTS
 
 1. **Work where you are — a dirty worktree is fine.** There is no clean-tree requirement: delegating onto live, uncommitted work is the point of this command. The tool snapshots the worktree as a git tree first, so (a) the recorded patch is the delegated model's changes only, with your in-progress work excluded rather than blended in, and (b) if the model overwrites something of yours, it is recoverable — the tool returns `structuredContent.capture.recoveryHint` (a `git checkout <tree> -- <path>` command). Nothing to commit, nothing to stash, nothing to override.
-2. Call the `collab_delegate` MCP tool with `task` = the task with full context: target files, constraints, and how to verify. It runs the `collab-build` agent (edit/write/patch/bash allowed; sub-agent spawning + web fetch/search + grep/glob denied, secret reads blocked via the read tool — defense-in-depth, see AGENTS.md), applying changes directly. If the hardened def is missing the tool **refuses** (no fallback to the unrestricted `build` agent) rather than silently degrading. The tool records the model's complete diff and returns its path as `structuredContent.capture.patchPath` — **that patch is what you review in step 3.** It also logs the call automatically and returns `.model`/`.requestedModel`, `.runId`, `.callId`.
+2. Call the `guild_delegate` MCP tool with `task` = the task with full context: target files, constraints, and how to verify. It runs the `guild-build` agent (edit/write/patch/bash allowed; sub-agent spawning + web fetch/search + grep/glob denied, secret reads blocked via the read tool — defense-in-depth, see AGENTS.md), applying changes directly. If the hardened def is missing the tool **refuses** (no fallback to the unrestricted `build` agent) rather than silently degrading. The tool records the model's complete diff and returns its path as `structuredContent.capture.patchPath` — **that patch is what you review in step 3.** It also logs the call automatically and returns `.model`/`.requestedModel`, `.runId`, `.callId`.
    - Pass `model: "provider/model"` to choose which model does the work.
     - **Model policy is enforced by the tool.** A `deny` model is refused; an `ask`-gated model returns an error telling you to get the user's approval, after which you retry with `confirmed: true` (never set `confirmed` yourself). State the exact model id used (`structuredContent.model`).
    - An **Anthropic model is a valid choice** here when you're coordinating — you're delegating and reviewing, not authoring, so an Anthropic agent doing the work is legitimate diversity, not redundancy.

@@ -1,12 +1,12 @@
 /**
- * collab_panel — multi-model orchestration over the committed substrate (PLAN.md M6).
+ * guild_panel — multi-model orchestration over the committed substrate (PLAN.md M6).
  *
- * Generalizes the single-call collab_consult flow (src/consult.ts) to a PANEL: ask the
+ * Generalizes the single-call guild_consult flow (src/consult.ts) to a PANEL: ask the
  * SAME question to 2–3 models from (ideally) different families, concurrently, each
- * through the UNMODIFIED read-only `collab-read` agent, and return every model's answer
+ * through the UNMODIFIED read-only `guild-read` agent, and return every model's answer
  * with EXACT-ID attribution (panel.md "Report the exact model ids used" — area-F command
  * surface; NOT C45, which is verify-not-relay). It is a TRANSPORT, not a synthesizer: there is no
- * tie-breaking or reconciliation here — the DRIVER (the `/collab:panel` command doc)
+ * tie-breaking or reconciliation here — the DRIVER (the `/guild:panel` command doc)
  * synthesizes and preserves disagreement. Keeping the tool a transport is what stops it
  * from silently substituting its own take for the panel's (the command doc's job).
  *
@@ -25,9 +25,9 @@
  *
  * CONFIRMED IS PANEL-WIDE (documented honestly): a single `confirmed:true` on the panel
  * call approves EVERY ask-tier member of THIS call — the human is asked once about "this
- * panel", not once per model. That is a deliberately wider scope than collab_consult's
+ * panel", not once per model. That is a deliberately wider scope than guild_consult's
  * single-model confirm; it is recorded per-member in the evidence entries (tier/confirmed)
- * so /collab:witness can still audit, after the fact, that an ask-tier member ran under a
+ * so /guild:witness can still audit, after the fact, that an ask-tier member ran under a
  * claimed approval. Same non-witness-grade bound as consult: a driver that sets confirmed
  * without asking is caught by audit, not prevented.
  *
@@ -51,25 +51,25 @@ import { readConfContents, resolvePanelModels } from "./config.js";
 import { type PolicyTier } from "./policy.js";
 
 /** The read-only agent every panel member uses, unmodified (C15/C47/C48). */
-export const PANEL_AGENT = "collab-read";
-/** The command label recorded in the evidence log (drives `/collab:witness`). */
-export const PANEL_COMMAND = "/collab:panel";
+export const PANEL_AGENT = "guild-read";
+/** The command label recorded in the evidence log (drives `/guild:witness`). */
+export const PANEL_COMMAND = "/guild:panel";
 
 // --- Params + deps ---------------------------------------------------------
 export interface PanelParams {
   question: string;
-  /** Explicit provider/model ids. Omit to fall back to $COLLAB_MODELS then conf (C13). */
+  /** Explicit provider/model ids. Omit to fall back to $GUILD_MODELS then conf (C13). */
   models?: string[];
   /** Thread this call into an existing run; omit to mint one for the whole panel. */
   runId?: string;
   /** Human approval for ANY ask-tier member of this panel call (panel-wide scope). */
   confirmed?: boolean;
   /**
-   * ROUND 1 of `/collab:workshop` (M7 / Option B). Keep every member's session alive
+   * ROUND 1 of `/guild:workshop` (M7 / Option B). Keep every member's session alive
    * and return its id per-member (`PanelMemberResult.sessionId`), so round 2 can CONTINUE
    * each member's own session. Round 2 is NOT a panel feature: it is N independent
    * continuations, each threading a distinct sessionId with a distinct prompt — that is
-   * exactly `collab_consult({ sessionId, keepSession? })`. Keeping panel a fan-out-only
+   * exactly `guild_consult({ sessionId, keepSession? })`. Keeping panel a fan-out-only
    * primitive (same question → many FRESH models) and doing round 2 as a per-member
    * consult loop avoids duplicating consult's continuation logic here and keeps each
    * tool's identity crisp. The driver shares one `runId` across both rounds so the whole
@@ -116,7 +116,7 @@ export interface PanelMemberResult {
    * pre-log refusal (model-id/deny/ask), which writes no call. */
   callId?: string;
   /** The member's opencode session id — present ONLY when `keepSessions` was requested
-   * AND the call succeeded. Pass it back as `collab_consult({ sessionId })` for round 2. */
+   * AND the call succeeded. Pass it back as `guild_consult({ sessionId })` for round 2. */
   sessionId?: string;
 }
 
@@ -155,7 +155,7 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
   const collabDir = rootRes.root;
   const rootConflict = rootRes.conflict;
 
-  // 2. Resolve the panel's model set (args > $COLLAB_MODELS > conf), WIRING C13/C14's
+  // 2. Resolve the panel's model set (args > $GUILD_MODELS > conf), WIRING C13/C14's
   //    resolvePanelModels — dedup, order, and the diversity/shape warnings intact.
   const confContents = readConfContents(collabDir, env);
   const panelRes = resolvePanelModels({ args: params.models, env, confContents });
@@ -168,7 +168,7 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
         kind: "no-models",
         message:
           panelRes.error ??
-          "no models resolved for the panel. Pass provider/model ids, set COLLAB_MODELS, or add a COLLAB_MODELS= line to collab.conf.local.",
+          "no models resolved for the panel. Pass provider/model ids, set GUILD_MODELS, or add a GUILD_MODELS= line to modelguild.conf.local.",
         exitAnalogue: panelRes.exitCode ?? 2,
       },
     };
@@ -204,7 +204,7 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
           requestedModel: model,
           agent: PANEL_AGENT,
           command: PANEL_COMMAND,
-          title: "collab_panel",
+          title: "guild_panel",
           runId,
           tier: gate.tier,
           confirmed: gate.confirmed,

@@ -1,5 +1,5 @@
 {
-  // ClaudeCollab dev container — Claude Code + opencode both run in here.
+  // ModelGuild dev container — Claude Code + opencode both run in here.
   //
   // Auth model: you log in ONCE inside the container. Login state is kept in the
   // named volumes below, so it survives rebuilds and the agents can refresh their
@@ -8,24 +8,24 @@
   //
   //   claude                 -> then /login  (device-code OAuth in your browser)
   //   opencode auth login    -> pick OpenAI / Copilot / Gemini
-  "name": "ClaudeCollab",
+  "name": "ModelGuild",
   "build": { "dockerfile": "Dockerfile" },
   "remoteUser": "node",
   "initializeCommand": "bash .devcontainer/prepare-host-config.sh",
 
   "features": {
     // GitHub CLI (gh) for repo / PR / Actions work. Installed as a Feature so it
-    // persists across rebuilds; its auth lives in the claudecollab-gh volume below.
+    // persists across rebuilds; its auth lives in the modelguild-gh volume below.
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
 
   "mounts": [
     // Persistent login/state volumes. Seeded node-owned from the image dirs on
     // first use (see the mkdir+chown in the Dockerfile), so the node user can write.
-    "source=claudecollab-claude,target=/home/node/.claude,type=volume",
-    "source=claudecollab-opencode,target=/home/node/.local/share/opencode,type=volume",
+    "source=modelguild-claude,target=/home/node/.claude,type=volume",
+    "source=modelguild-opencode,target=/home/node/.local/share/opencode,type=volume",
     // gh CLI auth (device-code login persists here across rebuilds).
-    "source=claudecollab-gh,target=/home/node/.config/gh,type=volume"
+    "source=modelguild-gh,target=/home/node/.config/gh,type=volume"
 
     // Host Claude config is not mounted. initializeCommand copies only selected
     // config paths into git-ignored .devcontainer/.host-config; postCreate imports
@@ -33,8 +33,8 @@
   ],
 
   "containerEnv": {
-    // Default model for /collab:consult (optional). Forwarded from host if set.
-    "COLLAB_MODEL": "${localEnv:COLLAB_MODEL}"
+    // Default model for /guild:consult (optional). Forwarded from host if set.
+    "GUILD_MODEL": "${localEnv:GUILD_MODEL}"
     // If your host Claude relies on a custom endpoint, add:
     // "ANTHROPIC_BASE_URL": "${localEnv:ANTHROPIC_BASE_URL}"
   },

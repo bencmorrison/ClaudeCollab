@@ -1,24 +1,24 @@
 /**
- * `claudecollab init` — the installer for the MCP era (PLAN.md M11).
+ * `modelguild init` — the installer for the MCP era (PLAN.md M11).
  *
  * Where the bash `install.sh` copies the whole bash payload (ask.sh/log.sh/… + all four
  * agent defs + witness.md) into a project, `init` places ONLY the MCP-era surface:
- *   (a) the 8 command docs (7 migrated + configure) → `.claude/commands/collab/`;
- *   (b) the 3 hardened agent defs the MCP tools resolve (`collab-read`/`collab-build`/
- *       `collab-research`) → `.opencode/agent/` (opencode serve resolves `--agent` from
+ *   (a) the 8 command docs (7 migrated + configure) → `.claude/commands/guild/`;
+ *   (b) the 3 hardened agent defs the MCP tools resolve (`guild-read`/`guild-build`/
+ *       `guild-research`) → `.opencode/agent/` (opencode serve resolves `--agent` from
  *       the project's `.opencode/`, and research/delegate REFUSE if their def is absent —
  *       so these are load-bearing, not optional);
- *   (c) the policy/config templates → `collab/` (where `resolveCollabRoot` reads them).
+ *   (c) the policy/config templates → `modelguild/` (where `resolveCollabRoot` reads them).
  * It does NOT install the bash wrappers or witness.md — those are retiring (M12).
  *
  * MCP REGISTRATION is user-driven by default: `init` does NOT touch `.mcp.json`. The user
- * registers the server themselves (`claude mcp add claudecollab -s <scope> -- …`), choosing
+ * registers the server themselves (`claude mcp add modelguild -s <scope> -- …`), choosing
  * per-project or global scope. The opt-in `--write-mcp` flag restores the old behavior —
- * writing/merging the project-scoped `.mcp.json` entry under the KEY `claudecollab` (the
- * exact key the command grants `mcp__claudecollab__<tool>` require).
+ * writing/merging the project-scoped `.mcp.json` entry under the KEY `modelguild` (the
+ * exact key the command grants `mcp__claudeguild__<tool>` require).
  *
  * OWNERSHIP is ported from `install.sh`'s SHA-256 model, not reinvented: every file we
- * write records the sha256 of its written bytes in `collab/.claudecollab-install.json`.
+ * write records the sha256 of its written bytes in `modelguild/.modelguild-install.json`.
  * A re-install UPGRADES a file only while its current bytes still match the hash we
  * recorded (or already equal the incoming payload); a file the user edited is SKIPPED
  * and left untouched (never clobbered), with a warning. `uninstall` removes only
@@ -55,8 +55,8 @@ const COMMAND_DOCS = [
   "configure",
 ] as const;
 /** The hardened agents the MCP tools resolve. collab-watch is witness-only (retired). */
-const AGENT_DEFS = ["collab-read", "collab-build", "collab-research"] as const;
-const TEMPLATES = ["models.policy", "collab.conf.example"] as const;
+const AGENT_DEFS = ["guild-read", "guild-build", "guild-research"] as const;
+const TEMPLATES = ["models.policy", "modelguild.conf.example"] as const;
 
 export interface PayloadEntry {
   /** Path relative to the package root (source). */
@@ -68,7 +68,7 @@ export interface PayloadEntry {
 export function payloadFiles(): PayloadEntry[] {
   const out: PayloadEntry[] = [];
   for (const c of COMMAND_DOCS) {
-    const rel = `.claude/commands/collab/${c}.md`;
+    const rel = `.claude/commands/guild/${c}.md`;
     out.push({ src: rel, dest: rel });
   }
   for (const a of AGENT_DEFS) {
@@ -76,7 +76,7 @@ export function payloadFiles(): PayloadEntry[] {
     out.push({ src: rel, dest: rel });
   }
   for (const t of TEMPLATES) {
-    const rel = `collab/${t}`;
+    const rel = `modelguild/${t}`;
     out.push({ src: rel, dest: rel });
   }
   return out;
@@ -84,31 +84,31 @@ export function payloadFiles(): PayloadEntry[] {
 
 /** The command docs, for the shadow warning (a same-named non-ours command is silent). */
 const COMMAND_DEST_RELS = new Set(
-  COMMAND_DOCS.map((c) => `.claude/commands/collab/${c}.md`),
+  COMMAND_DOCS.map((c) => `.claude/commands/guild/${c}.md`),
 );
 
 /** Deepest-first, pruned on uninstall only when empty (a user file keeps its dir). */
 const PRUNE_DIRS = [
-  ".claude/commands/collab",
+  ".claude/commands/guild",
   ".claude/commands",
   ".claude",
   ".opencode/agent",
   ".opencode",
-  "collab",
+  "modelguild",
 ];
 
-const RECORD_REL = "collab/.claudecollab-install.json";
-const MCP_KEY = "claudecollab";
+const RECORD_REL = "modelguild/.modelguild-install.json";
+const MCP_KEY = "modelguild";
 
-const GITIGNORE_BEGIN = "# >>> ClaudeCollab >>>";
-const GITIGNORE_END = "# <<< ClaudeCollab <<<";
+const GITIGNORE_BEGIN = "# >>> ModelGuild >>>";
+const GITIGNORE_END = "# <<< ModelGuild <<<";
 const GITIGNORE_BODY = [
   GITIGNORE_BEGIN,
-  "# Per-user config written by /collab:configure — never commit personal prefs.",
-  "collab/models.policy.local",
-  "collab/collab.conf.local",
-  "# The evidence layer: raw prompts/responses of every model call (collab/logs).",
-  "collab/logs/",
+  "# Per-user config written by /guild:configure — never commit personal prefs.",
+  "modelguild/models.policy.local",
+  "modelguild/modelguild.conf.local",
+  "# The evidence layer: raw prompts/responses of every model call (modelguild/logs).",
+  "modelguild/logs/",
   GITIGNORE_END,
   "",
 ].join("\n");
@@ -119,7 +119,7 @@ const GITIGNORE_BODY = [
 export interface ServerLaunch {
   command: string;
   args: string[];
-  /** Extra env keys to write into the `.mcp.json` server entry (COLLAB_PROJECT_DIR is
+  /** Extra env keys to write into the `.mcp.json` server entry (GUILD_PROJECT_DIR is
    * always added by init from the target dir). */
   env?: Record<string, string>;
 }
@@ -217,7 +217,7 @@ function ensureDir(p: string): void {
 // ---------------------------------------------------------------------------
 export function mcpServerEntry(opts: InitOptions): Record<string, unknown> {
   const env: Record<string, string> = {
-    COLLAB_PROJECT_DIR: opts.targetDir,
+    GUILD_PROJECT_DIR: opts.targetDir,
     ...(opts.serverLaunch.env ?? {}),
   };
   return {

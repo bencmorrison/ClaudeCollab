@@ -1,5 +1,5 @@
 /**
- * `claudecollab init` test (PLAN.md M11), in the spirit of collab/tests/test-install.sh:
+ * `modelguild init` test (PLAN.md M11), in the spirit of collab/tests/test-install.sh:
  * install into throwaway temp dirs and assert the file / .mcp.json / ownership behaviour,
  * idempotency, the merge-not-clobber guarantee, hash-verified uninstall, and that the
  * bash wrappers are NOT installed. Offline, no model call. packageRoot is the repo root
@@ -13,7 +13,7 @@ import { Checker, repoRoot } from "./harness.js";
 import { init, type ServerLaunch } from "../src/init.js";
 
 // The shipped default launch line: portable, non-interactive npx form.
-const LAUNCH: ServerLaunch = { command: "npx", args: ["-y", "claudecollab", "serve"] };
+const LAUNCH: ServerLaunch = { command: "npx", args: ["-y", "modelguild", "serve"] };
 
 function tempProject(): string {
   // realpath: macOS /tmp is a symlink; safeJoin refuses symlink components, so canonicalize.
@@ -33,21 +33,21 @@ export async function run(): Promise<number> {
   const res = init({ targetDir: T, packageRoot: repoRoot, serverLaunch: LAUNCH });
 
   c.check(res.installed.length === 13, `installs 13 files (8 docs + 3 agents + 2 templates) (got ${res.installed.length})`);
-  c.check(existsSync(path.join(T, ".claude/commands/collab/consult.md")), "places a command doc");
-  c.check(existsSync(path.join(T, ".claude/commands/collab/configure.md")), "places configure.md (the 8th doc)");
-  c.check(existsSync(path.join(T, ".opencode/agent/collab-read.md")), "places collab-read agent def");
-  c.check(existsSync(path.join(T, ".opencode/agent/collab-research.md")), "places collab-research agent def");
-  c.check(existsSync(path.join(T, ".opencode/agent/collab-build.md")), "places collab-build agent def");
-  c.check(existsSync(path.join(T, "collab/models.policy")), "places models.policy template");
-  c.check(existsSync(path.join(T, "collab/collab.conf.example")), "places collab.conf.example template");
-  c.check(existsSync(path.join(T, "collab/.claudecollab-install.json")), "writes the ownership record file");
+  c.check(existsSync(path.join(T, ".claude/commands/guild/consult.md")), "places a command doc");
+  c.check(existsSync(path.join(T, ".claude/commands/guild/configure.md")), "places configure.md (the 8th doc)");
+  c.check(existsSync(path.join(T, ".opencode/agent/guild-read.md")), "places guild-read agent def");
+  c.check(existsSync(path.join(T, ".opencode/agent/guild-research.md")), "places guild-research agent def");
+  c.check(existsSync(path.join(T, ".opencode/agent/guild-build.md")), "places guild-build agent def");
+  c.check(existsSync(path.join(T, "modelguild/models.policy")), "places models.policy template");
+  c.check(existsSync(path.join(T, "modelguild/modelguild.conf.example")), "places modelguild.conf.example template");
+  c.check(existsSync(path.join(T, "modelguild/.modelguild-install.json")), "writes the ownership record file");
 
   // The MCP-era payload must NOT ship the bash wrappers or witness.md.
-  c.check(!existsSync(path.join(T, "collab/ask.sh")), "does NOT install collab/ask.sh");
-  c.check(!existsSync(path.join(T, "collab/log.sh")), "does NOT install collab/log.sh");
-  c.check(!existsSync(path.join(T, "collab/panel-models.sh")), "does NOT install panel-models.sh");
-  c.check(!existsSync(path.join(T, ".claude/commands/collab/witness.md")), "does NOT install witness.md");
-  c.check(!existsSync(path.join(T, ".opencode/agent/collab-watch.md")), "does NOT install collab-watch (witness) agent");
+  c.check(!existsSync(path.join(T, "modelguild/ask.sh")), "does NOT install modelguild/ask.sh");
+  c.check(!existsSync(path.join(T, "modelguild/log.sh")), "does NOT install modelguild/log.sh");
+  c.check(!existsSync(path.join(T, "modelguild/panel-models.sh")), "does NOT install panel-models.sh");
+  c.check(!existsSync(path.join(T, ".claude/commands/guild/witness.md")), "does NOT install witness.md");
+  c.check(!existsSync(path.join(T, ".opencode/agent/guild-watch.md")), "does NOT install guild-watch (witness) agent");
 
   // --- DEFAULT: .mcp.json is NOT written; user registers the server -------
   c.check(res.mcpAction === "skipped", "default install reports .mcp.json 'skipped' (user registers it)");
@@ -59,40 +59,40 @@ export async function run(): Promise<number> {
   c.check(resw.mcpAction === "created", "--write-mcp reports .mcp.json created");
   const mcp = readJson(path.join(Tw, ".mcp.json"));
   c.check(
-    !!mcp.mcpServers && Object.prototype.hasOwnProperty.call(mcp.mcpServers, "claudecollab"),
-    "--write-mcp .mcp.json has the 'claudecollab' key (matches mcp__claudecollab__* grants)",
+    !!mcp.mcpServers && Object.prototype.hasOwnProperty.call(mcp.mcpServers, "modelguild"),
+    "--write-mcp .mcp.json has the 'modelguild' key (matches mcp__modelguild__* grants)",
   );
-  const entry = mcp.mcpServers.claudecollab;
+  const entry = mcp.mcpServers.modelguild;
   c.check(
     entry.command === "npx" &&
-      JSON.stringify(entry.args) === JSON.stringify(["-y", "claudecollab", "serve"]),
-    "launch line is the portable non-interactive default `npx -y claudecollab serve`",
+      JSON.stringify(entry.args) === JSON.stringify(["-y", "modelguild", "serve"]),
+    "launch line is the portable non-interactive default `npx -y modelguild serve`",
   );
-  c.check(entry.env?.COLLAB_PROJECT_DIR === Tw, "--write-mcp .mcp.json entry sets COLLAB_PROJECT_DIR to the target dir");
+  c.check(entry.env?.GUILD_PROJECT_DIR === Tw, "--write-mcp .mcp.json entry sets GUILD_PROJECT_DIR to the target dir");
 
   // --- gitignore -----------------------------------------------------------
   const gi = readFileSync(path.join(T, ".gitignore"), "utf8");
-  c.check(gi.includes("ClaudeCollab >>>") && gi.includes("collab/logs/"), "gitignore block written");
+  c.check(gi.includes("ModelGuild >>>") && gi.includes("modelguild/logs/"), "gitignore block written");
 
   // --- idempotent re-run ---------------------------------------------------
   const res2 = init({ targetDir: T, packageRoot: repoRoot, serverLaunch: LAUNCH });
   c.check(res2.installed.length === 0 && res2.skipped.length === 0, "re-run writes 0 files (idempotent)");
-  const giCount = (readFileSync(path.join(T, ".gitignore"), "utf8").match(/ClaudeCollab >>>/g) || []).length;
+  const giCount = (readFileSync(path.join(T, ".gitignore"), "utf8").match(/ModelGuild >>>/g) || []).length;
   c.check(giCount === 1, "re-run keeps exactly one gitignore block");
 
   // --- upgrade: a stale-but-owned file is overwritten ----------------------
-  const consultPath = path.join(T, ".claude/commands/collab/consult.md");
+  const consultPath = path.join(T, ".claude/commands/guild/consult.md");
   const original = readFileSync(consultPath);
   // Simulate a prior-version file: overwrite its bytes AND record the new hash as ours,
   // so the ownership check treats it as owned (it matches the recorded hash).
   writeFileSync(consultPath, "OLD OWNED CONTENT\n");
-  const recPath = path.join(T, "collab/.claudecollab-install.json");
+  const recPath = path.join(T, "modelguild/.modelguild-install.json");
   const rec = readJson(recPath);
   const { createHash } = await import("node:crypto");
-  rec.files[".claude/commands/collab/consult.md"] = createHash("sha256").update("OLD OWNED CONTENT\n").digest("hex");
+  rec.files[".claude/commands/guild/consult.md"] = createHash("sha256").update("OLD OWNED CONTENT\n").digest("hex");
   writeFileSync(recPath, JSON.stringify(rec, null, 2) + "\n");
   const res3 = init({ targetDir: T, packageRoot: repoRoot, serverLaunch: LAUNCH });
-  c.check(res3.installed.includes(".claude/commands/collab/consult.md"), "an owned-but-stale file is upgraded");
+  c.check(res3.installed.includes(".claude/commands/guild/consult.md"), "an owned-but-stale file is upgraded");
   c.check(readFileSync(consultPath).equals(original), "upgrade restores the current payload bytes");
 
   // --- merge-not-clobber: a user-edited file is left untouched + shadow-warned
@@ -102,8 +102,8 @@ export async function run(): Promise<number> {
     readFileSync(consultPath, "utf8") === "MY OWN COMMAND — DO NOT TOUCH\n",
     "a user-edited command doc is NOT clobbered",
   );
-  c.check(res4.skipped.includes(".claude/commands/collab/consult.md"), "the edited file is reported skipped");
-  c.check(res4.shadowed.includes(".claude/commands/collab/consult.md"), "an unowned command doc raises a shadow warning");
+  c.check(res4.skipped.includes(".claude/commands/guild/consult.md"), "the edited file is reported skipped");
+  c.check(res4.shadowed.includes(".claude/commands/guild/consult.md"), "an unowned command doc raises a shadow warning");
 
   // --- --write-mcp merge preserves a sibling server ------------------------
   const T2 = tempProject();
@@ -114,7 +114,7 @@ export async function run(): Promise<number> {
   const resm = init({ targetDir: T2, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
   c.check(resm.mcpAction === "merged", "existing .mcp.json without our key → merged (--write-mcp)");
   const mcp2 = readJson(path.join(T2, ".mcp.json"));
-  c.check(!!mcp2.mcpServers.other && !!mcp2.mcpServers.claudecollab, "merge keeps the sibling server AND adds ours");
+  c.check(!!mcp2.mcpServers.other && !!mcp2.mcpServers.modelguild, "merge keeps the sibling server AND adds ours");
   c.check(mcp2.someOtherKey === 1, "merge preserves unrelated top-level keys");
 
   // --- invalid .mcp.json is refused, not clobbered (--write-mcp path) ------
@@ -134,26 +134,26 @@ export async function run(): Promise<number> {
   const T4 = tempProject();
   init({ targetDir: T4, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
   // A user file the installer never wrote must survive.
-  writeFileSync(path.join(T4, ".claude/commands/collab/mine.md"), "keep me\n");
+  writeFileSync(path.join(T4, ".claude/commands/guild/mine.md"), "keep me\n");
   // A user EDIT to one of our files must survive uninstall (hash no longer matches).
-  writeFileSync(path.join(T4, ".claude/commands/collab/panel.md"), "edited by user\n");
+  writeFileSync(path.join(T4, ".claude/commands/guild/panel.md"), "edited by user\n");
   const resu = init({ targetDir: T4, packageRoot: repoRoot, serverLaunch: LAUNCH, uninstall: true });
-  c.check(resu.removed.includes(".claude/commands/collab/consult.md"), "uninstall removes a pristine owned file");
-  c.check(!existsSync(path.join(T4, ".opencode/agent/collab-read.md")), "uninstall removes agent defs");
-  c.check(existsSync(path.join(T4, ".claude/commands/collab/mine.md")), "uninstall keeps a user's own file");
+  c.check(resu.removed.includes(".claude/commands/guild/consult.md"), "uninstall removes a pristine owned file");
+  c.check(!existsSync(path.join(T4, ".opencode/agent/guild-read.md")), "uninstall removes agent defs");
+  c.check(existsSync(path.join(T4, ".claude/commands/guild/mine.md")), "uninstall keeps a user's own file");
   c.check(
-    existsSync(path.join(T4, ".claude/commands/collab/panel.md")),
+    existsSync(path.join(T4, ".claude/commands/guild/panel.md")),
     "uninstall keeps a file the user edited (hash mismatch → not ours to delete)",
   );
-  c.check(resu.mcpAction === "removed", "uninstall removes the claudecollab .mcp.json key");
+  c.check(resu.mcpAction === "removed", "uninstall removes the modelguild .mcp.json key");
   const mcpu = readJson(path.join(T4, ".mcp.json"));
   c.check(
-    !mcpu.mcpServers || !Object.prototype.hasOwnProperty.call(mcpu.mcpServers, "claudecollab"),
-    "the claudecollab key is gone after uninstall",
+    !mcpu.mcpServers || !Object.prototype.hasOwnProperty.call(mcpu.mcpServers, "modelguild"),
+    "the modelguild key is gone after uninstall",
   );
-  c.check(!existsSync(path.join(T4, "collab/.claudecollab-install.json")), "uninstall removes the ownership record");
+  c.check(!existsSync(path.join(T4, "modelguild/.modelguild-install.json")), "uninstall removes the ownership record");
   const giu = existsSync(path.join(T4, ".gitignore")) ? readFileSync(path.join(T4, ".gitignore"), "utf8") : "";
-  c.check(!giu.includes("ClaudeCollab >>>"), "uninstall strips the gitignore block");
+  c.check(!giu.includes("ModelGuild >>>"), "uninstall strips the gitignore block");
 
   console.log(`init.test: ${c.passes} passed, ${c.failures} failed`);
   return c.failures;

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# verify-collab-build.sh — check the `collab-build` opencode agent (the --edit /
-# /collab:delegate write path) has the permission shape it claims.
+# verify-guild-build.sh — check the `guild-build` opencode agent (the --edit /
+# /guild:delegate write path) has the permission shape it claims.
 #
-# What collab-build claims, and what this proves:
-#   * It CAN edit — edit/write/patch/bash resolve to `allow` (else /collab:delegate is
+# What guild-build claims, and what this proves:
+#   * It CAN edit — edit/write/patch/bash resolve to `allow` (else /guild:delegate is
 #     broken). This script asserts that positively.
 #   * The tool-native escape/egress paths are REMOVED — task, webfetch, websearch
 #     resolve to `deny`, and the `read` tool denies secret globs (.env/keys/creds).
@@ -13,19 +13,19 @@
 # bash can `cat .env` or `curl`, bypassing the read-tool and webfetch denies. So on
 # THIS path those denies are defense-in-depth (they strip the default, tool-native
 # route a compliant model would take) — the real trust boundary is the human diff
-# review in /collab:delegate step 2, not the permission map. Do not oversell it.
+# review in /guild:delegate step 2, not the permission map. Do not oversell it.
 #
-# Method mirrors verify-collab-read.sh: a STATIC last-match-wins check of opencode's
+# Method mirrors verify-guild-read.sh: a STATIC last-match-wins check of opencode's
 # resolved config (authoritative, fail-CLOSED) + a known-key typo lint + a RUNTIME
 # corroboration (the agent actually writes a probe file => the edit path works;
 # reports INCONCLUSIVE, not PASS, if opencode can't run).
 #
-# Usage:  bash collab/verify-collab-build.sh [--static]
+# Usage:  bash modelguild/verify-guild-build.sh [--static]
 #   --static  run only the token-free static checks (steps 1-2); skip the runtime
 #             edit probe (step 3) that calls a model. Run locally after an opencode bump
 #             (CI uses the opencode-free check-agent-permissions.sh lint).
 # Exit 0 = static shape holds AND (unless --static) the edit path works. Non-zero otherwise.
-# COLLAB_VERIFY_MODEL overrides the (free by default) runtime model.
+# GUILD_VERIFY_MODEL overrides the (free by default) runtime model.
 set -uo pipefail
 
 static_only=""
@@ -34,9 +34,9 @@ case "${1:-}" in --static|-s) static_only=1 ;; esac
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root" || exit 1
 
-model="${COLLAB_VERIFY_MODEL:-opencode/deepseek-v4-flash-free}"
-agent="collab-build"
-agent_file=".opencode/agent/collab-build.md"
+model="${GUILD_VERIFY_MODEL:-opencode/deepseek-v4-flash-free}"
+agent="guild-build"
+agent_file=".opencode/agent/guild-build.md"
 fail=0
 inconclusive=0
 
@@ -49,7 +49,7 @@ if command -v timeout >/dev/null 2>&1; then TIMEOUT="timeout 120"
 elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT="gtimeout 120"; fi
 
 perms="$(opencode agent list 2>/dev/null \
-  | awk '/^collab-build /{f=1;next} f && /^[a-z][a-z0-9_-]* \((primary|subagent|all)\)/{exit} f')"
+  | awk '/^guild-build /{f=1;next} f && /^[a-z][a-z0-9_-]* \((primary|subagent|all)\)/{exit} f')"
 
 echo "== 1. STATIC (authoritative): resolved permissions =="
 last_action() {
@@ -67,9 +67,9 @@ effective_action() {
 # Foundation: default-deny allowlist floor.
 [ "$(last_action '*')" = "deny" ] && pass "'*' catch-all => deny (default-deny allowlist)" \
   || bad "'*' catch-all is NOT deny — un-listed tools would be ALLOWED"
-# The mutation set MUST be allowed (else /collab:delegate can't edit).
+# The mutation set MUST be allowed (else /guild:delegate can't edit).
 for cap in edit write patch bash; do
-  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (edit path works)"; else bad "$cap is NOT allow — /collab:delegate cannot edit"; fi
+  if [ "$(effective_action "$cap")" = "allow" ]; then pass "$cap => allow (edit path works)"; else bad "$cap is NOT allow — /guild:delegate cannot edit"; fi
 done
 # Everything else — escape hatch, egress, AND the tool-native secret-search routes
 # (grep/glob) a compliant model would default to — must be effectively denied.
@@ -98,16 +98,16 @@ if [ -n "$static_only" ]; then
   echo "(runtime probe skipped: --static)"
 else
 echo "== 3. RUNTIME (corroborating): the edit path actually writes a file =="
-probe="$repo_root/.collab-build-edit-probe.txt"; rm -f "$probe"
+probe="$repo_root/.guild-build-edit-probe.txt"; rm -f "$probe"
 mout="$($TIMEOUT opencode run --agent "$agent" --auto -m "$model" \
-  "Use your write/edit tool to create the file .collab-build-edit-probe.txt containing exactly: OK. Then report done." \
+  "Use your write/edit tool to create the file .guild-build-edit-probe.txt containing exactly: OK. Then report done." \
   </dev/null 2>&1)"; mrc=$?
 if printf '%s' "$mout" | grep -qi 'falling back to default agent'; then
-  bad "opencode fell back off collab-build (not primary-invocable — check 'mode: all')"
+  bad "opencode fell back off guild-build (not primary-invocable — check 'mode: all')"
 elif [ "$mrc" -ne 0 ]; then
   inc "opencode exited $mrc (missing timeout? auth? crash) — edit step could not run; static check above is authoritative"
 elif [ -e "$probe" ]; then
-  pass "probe file created — edit path works under collab-build"; rm -f "$probe"
+  pass "probe file created — edit path works under guild-build"; rm -f "$probe"
 else
   inc "no file created and opencode exited 0 — model may have declined; static allow above is authoritative"
 fi
@@ -117,14 +117,14 @@ fi  # end runtime probe (skipped under --static)
 echo
 if [ "$fail" -eq 0 ] && [ "$inconclusive" -eq 0 ]; then
   if [ -n "$static_only" ]; then
-    printf '\033[32mcollab-build VERIFIED (static)\033[0m — edit/write/patch/bash=allow; task/webfetch/websearch + secret READS=deny (resolved config). Runtime edit probe not run (--static). NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /collab:delegate diff review is the trust boundary.\n'
+    printf '\033[32mguild-build VERIFIED (static)\033[0m — edit/write/patch/bash=allow; task/webfetch/websearch + secret READS=deny (resolved config). Runtime edit probe not run (--static). NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /guild:delegate diff review is the trust boundary.\n'
   else
-    printf '\033[32mcollab-build VERIFIED\033[0m — edit path works; task/webfetch/websearch and secret READS are denied at the tool layer. NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /collab:delegate diff review is the trust boundary.\n'
+    printf '\033[32mguild-build VERIFIED\033[0m — edit path works; task/webfetch/websearch and secret READS are denied at the tool layer. NOTE: bash is allowed, so secret/egress are defense-in-depth, NOT by construction — the /guild:delegate diff review is the trust boundary.\n'
   fi
 elif [ "$fail" -ne 0 ]; then
-  printf '\033[31mcollab-build NOT verified\033[0m — permission shape is wrong; check the agent def against verify-collab-read.sh conventions.\n'
+  printf '\033[31mguild-build NOT verified\033[0m — permission shape is wrong; check the agent def against verify-guild-read.sh conventions.\n'
 else
-  printf '\033[33mcollab-build INCONCLUSIVE\033[0m — static proof passed, but the runtime edit probe did not establish a result.\n'
+  printf '\033[33mguild-build INCONCLUSIVE\033[0m — static proof passed, but the runtime edit probe did not establish a result.\n'
 fi
 [ "$fail" -eq 0 ] || exit 1
 [ "$inconclusive" -eq 0 ] || exit 6

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/collab-host-config.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/modelguild-host-config.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 tmp="$(cd "$tmp" && pwd -P)"
 cd "$tmp"
@@ -16,7 +16,7 @@ mkdir -p "$home/.claude/commands/internal" "$tmp/external"
 printf 'inside\n' > "$home/.claude/commands/internal/value.md"
 ln -s internal/value.md "$home/.claude/commands/inside.md"
 
-HOME="$home" CLAUDECOLLAB_HOST_CONFIG_STAGE="$stage" bash "$here/prepare-host-config.sh"
+HOME="$home" MODELGUILD_HOST_CONFIG_STAGE="$stage" bash "$here/prepare-host-config.sh"
 [ "$(cat "$stage/commands/inside.md")" = inside ] || { echo "FAIL: internal symlink was not copied" >&2; exit 1; }
 
 # A dotfiles-managed ~/.claude symlinks the selected top-level files out to the
@@ -24,7 +24,7 @@ HOME="$home" CLAUDECOLLAB_HOST_CONFIG_STAGE="$stage" bash "$here/prepare-host-co
 # container startup outright for that setup (2026-07-16).
 printf 'outside\n' > "$tmp/external/value.md"
 ln -s "$tmp/external/value.md" "$home/.claude/settings.json"
-HOME="$home" CLAUDECOLLAB_HOST_CONFIG_STAGE="$stage" bash "$here/prepare-host-config.sh"
+HOME="$home" MODELGUILD_HOST_CONFIG_STAGE="$stage" bash "$here/prepare-host-config.sh"
 [ "$(cat "$stage/settings.json")" = outside ] || { echo "FAIL: external selected file symlink was not staged" >&2; exit 1; }
 [ ! -L "$stage/settings.json" ] || { echo "FAIL: staged settings.json is still a symlink" >&2; exit 1; }
 rm -f "$home/.claude/settings.json"
@@ -32,10 +32,10 @@ rm -f "$home/.claude/settings.json"
 printf 'keep\n' > "$stage/sentinel"
 run_preflight() {
   if [ -n "$timeout_bin" ]; then
-    "$timeout_bin" 5 env HOME="$home" CLAUDECOLLAB_HOST_CONFIG_STAGE="$stage" \
+    "$timeout_bin" 5 env HOME="$home" MODELGUILD_HOST_CONFIG_STAGE="$stage" \
       bash "$here/prepare-host-config.sh" >/dev/null 2>&1
   else
-    env HOME="$home" CLAUDECOLLAB_HOST_CONFIG_STAGE="$stage" \
+    env HOME="$home" MODELGUILD_HOST_CONFIG_STAGE="$stage" \
       bash "$here/prepare-host-config.sh" >/dev/null 2>&1
   fi
 }

@@ -16,7 +16,7 @@ name: CI
 #   node   — the TS/MCP rewrite: typecheck + the offline test suites. Same
 #            credential-free, opencode-free rule (see that job for the 3 excluded).
 #
-# The resolved-config agent proofs (verify-collab-*.sh) are NOT here: they need a
+# The resolved-config agent proofs (verify-guild-*.sh) are NOT here: they need a
 # real authenticated opencode, and this CI is credential-free by decision.
 
 on:
@@ -58,16 +58,16 @@ jobs:
       - name: ShellCheck (severity=warning)
         # Single source of truth: the same script a dev runs locally, so the file set +
         # flags can't drift between local and CI.
-        run: bash collab/tests/check-shellcheck.sh
+        run: bash modelguild/tests/check-shellcheck.sh
 
       - name: Shebang conformance (#!/usr/bin/env bash everywhere)
-        run: bash collab/tests/check-shebangs.sh
+        run: bash modelguild/tests/check-shebangs.sh
 
       - name: Frontmatter validation
-        run: bash collab/tests/check-frontmatter.sh
+        run: bash modelguild/tests/check-frontmatter.sh
 
       - name: Documentation workflow lint (+ self-test)
-        run: bash collab/tests/check-docs.sh --self-test
+        run: bash modelguild/tests/check-docs.sh --self-test
 
       - name: Host-config symlink confinement
         run: bash .devcontainer/test-prepare-host-config.sh
@@ -75,17 +75,17 @@ jobs:
       - name: Agent permission invariants (source-level allowlist lint)
         # Opencode-free: guards the realistic regression (a human weakens an agent
         # def — re-adds "*": allow, drops the deny floor, flips mode). It does NOT
-        # prove opencode's resolved enforcement — that's verify-collab-*.sh, which
+        # prove opencode's resolved enforcement — that's verify-guild-*.sh, which
         # needs the opencode binary and runs locally, not here.
-        run: bash collab/tests/check-agent-permissions.sh
+        run: bash modelguild/tests/check-agent-permissions.sh
 
       - name: Lint self-tests (prove the lints still catch regressions)
         # The run-tests.sh meta-tests that used to prove this retired with the bash
         # layer; each lint now carries its own --self-test (ported from those).
         run: |
-          bash collab/tests/check-agent-permissions.sh --self-test
-          bash collab/tests/check-shebangs.sh --self-test
-          bash collab/tests/check-shellcheck.sh --self-test
+          bash modelguild/tests/check-agent-permissions.sh --self-test
+          bash modelguild/tests/check-shebangs.sh --self-test
+          bash modelguild/tests/check-shellcheck.sh --self-test
 
   macos:
     name: macOS / BSD (stock bash 3.2)
@@ -136,19 +136,19 @@ jobs:
 
       - name: Shebang conformance (+ self-test)
         run: |
-          bash collab/tests/check-shebangs.sh
-          bash collab/tests/check-shebangs.sh --self-test
+          bash modelguild/tests/check-shebangs.sh
+          bash modelguild/tests/check-shebangs.sh --self-test
 
       - name: Frontmatter validation
-        run: bash collab/tests/check-frontmatter.sh
+        run: bash modelguild/tests/check-frontmatter.sh
 
       - name: Documentation workflow lint (+ self-test)
-        run: bash collab/tests/check-docs.sh --self-test
+        run: bash modelguild/tests/check-docs.sh --self-test
 
       - name: ShellCheck lint script (skips cleanly without shellcheck; + self-test)
         run: |
-          bash collab/tests/check-shellcheck.sh
-          bash collab/tests/check-shellcheck.sh --self-test
+          bash modelguild/tests/check-shellcheck.sh
+          bash modelguild/tests/check-shellcheck.sh --self-test
 
       - name: Host-config symlink confinement
         # Genuinely macOS-relevant: prepare-host-config.sh runs on the HOST, so a
@@ -159,8 +159,8 @@ jobs:
         # High value here: its effective-permission resolver is awk, and this is
         # the only place that awk meets BSD awk.
         run: |
-          bash collab/tests/check-agent-permissions.sh
-          bash collab/tests/check-agent-permissions.sh --self-test
+          bash modelguild/tests/check-agent-permissions.sh
+          bash modelguild/tests/check-agent-permissions.sh --self-test
 
   node:
     name: node (TS/MCP — typecheck + offline suites)

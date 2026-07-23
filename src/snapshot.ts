@@ -17,7 +17,7 @@
  * the delegate-diff log entry fails integrity loudly (C40).
  *
  * This is a RECORD, not containment — the trust boundary is the human diff review
- * (SECURITY.md collab-build). The snapshot never runs for read-only agents.
+ * (SECURITY.md guild-build). The snapshot never runs for read-only agents.
  *
  * All functions take an explicit `repoDir` (the worktree opencode edits — the project dir
  * the serve was spawned from). Pure git plumbing: no logging, no policy, no MCP.
@@ -81,7 +81,7 @@ function splitZ(s: string): string[] {
  * excluding them EVERY serve-transport delegate reports capture-incomplete (traced live
  * 2026-07-22).
  *
- * THIS IS NOT the same class as the `collab/logs/` exclusion, and the analogy was wrong: logs
+ * THIS IS NOT the same class as the `modelguild/logs/` exclusion, and the analogy was wrong: logs
  * are INERT evidence, but `.opencode/node_modules/` is LOADED AND EXECUTED by `opencode serve`
  * (it loads plugins from there). So excluding it trades fingerprint noise for a real BLIND SPOT
  * — a delegated model could write persistence into a plugin the record would never show. That
@@ -91,7 +91,7 @@ function splitZ(s: string): string[] {
  * signal as its condition; the two ship together.
  *
  * DELIBERATELY NARROW — `.opencode/agent/**` is NOT excluded. Those files are the hardened
- * permission defs (collab-build/read/research/watch); a bash-capable delegated model
+ * permission defs (guild-build/read/research/watch); a bash-capable delegated model
  * tampering with a def is PRECISELY a change the capture must never silently drop, so the
  * def surface stays fully inside the fingerprint and the recorded patch.
  *
@@ -238,7 +238,7 @@ export function ignoredFingerprint(repoDir: string): string {
   ]);
   let ignoredCount = 0;
   for (const entry of splitZ(statusA.stdout)) {
-    if (entry.startsWith("!! collab/logs/")) continue;
+    if (entry.startsWith("!! modelguild/logs/")) continue;
     if (!entry.startsWith("!! ")) continue; // CORRECTED count: only ignored entries.
     const p = entry.slice(3);
     if (isServeScaffold(p)) continue; // serve-runtime scaffolding — excluded (see isServeScaffold)
@@ -254,7 +254,7 @@ export function ignoredFingerprint(repoDir: string): string {
   }
 
   // Phase B: git's ignored listings omit special files (symlinks, FIFOs, sockets, devices).
-  // Walk metadata only (bounded by MAX_WALK), pruning .git, collab/logs, and
+  // Walk metadata only (bounded by MAX_WALK), pruning .git, modelguild/logs, and
   // .opencode/node_modules (serve scaffolding — its .bin/* symlinks would otherwise flag
   // unsupported-path and its file count would blow MAX_WALK), and for any non-regular path
   // git considers ignored, mark incomplete — it cannot be represented.
@@ -274,7 +274,7 @@ export function ignoredFingerprint(repoDir: string): string {
       for (const de of entries) {
         const full = path.join(dir, de.name);
         const rel = path.relative(repoDir, full);
-        if (rel === ".git" || rel === path.join("collab", "logs") || rel === scaffoldNodeModules) {
+        if (rel === ".git" || rel === path.join("modelguild", "logs") || rel === scaffoldNodeModules) {
           continue; // prune subtree (incl. serve scaffolding)
         }
         walkCount++;
@@ -315,7 +315,7 @@ export function ignoredFingerprint(repoDir: string): string {
       let total = 0;
       for (const rel of splitZ(ls.stdout)) {
         if (rel === "") continue;
-        if (rel.startsWith("collab/logs/")) continue; // the logger's own output is infra.
+        if (rel.startsWith("modelguild/logs/")) continue; // the logger's own output is infra.
         if (isServeScaffold(rel)) continue; // serve-runtime scaffolding — excluded.
         count++;
         if (count > MAX_FILES) {

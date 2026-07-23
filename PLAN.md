@@ -1,4 +1,6 @@
-# ClaudeCollab — plan & roadmap
+# ModelGuild — plan & roadmap
+
+> **Naming note (2026-07-23):** the project was renamed from **ClaudeCollab** to **ModelGuild** (npm `modelguild`). The dated entries below predate the rename and describe the project **as it was, under the old name** — their `ClaudeCollab`/`claudecollab`/`collab_*`/`/collab:`/`COLLAB_`/`collab/` references are left verbatim as historical record. See "Rebrand: ClaudeCollab → ModelGuild — DONE 2026-07-23" near the end for the mapping.
 
 Forward-looking roadmap toward a **polished open-source release**. For how the repo works *today*, see [AGENTS.md](AGENTS.md); for user-facing usage see [README.md](README.md).
 
@@ -475,6 +477,25 @@ Nothing else in the spike: no panel, no policy, no witness.
 **Preserved disagreement (not resolved, recorded):** deepseek's strongest objection stands — this rewrite replaces a working, tested, shipped system for *future-capability* reasons, not to fix a defect, and the freeze has a real opportunity cost. The maintainer accepted that trade on 2026-07-22; the fail-closed checkpoint above is its mitigation, not its refutation.
 
 **SPIKE RESULTS — RUN 2026-07-22, the shape is VIABLE (full report: `spike/mcp-consult/REPORT.md`).** Built and tested the same day the decision was recorded: a working `collab_consult` MCP server (`spike/mcp-consult/`, stub + live paths, 18 offline + 6 live checks green). Criterion 1 (**the kill criterion**) **PASSED** — `opencode serve` enforces the unmodified `collab-read` def at the tool layer: allowed read completed, a `*.env`-glob read denied with the rule echoed in the tool error and the canary absent from the whole envelope, no write tool even offered under the `"*": deny` floor, and an unrestricted-`build` control proved the denial is the map, not the server. Criterion 2 **PASSED** (three-way byte-identical capture; the sync response omits tool parts, so full capture reads `GET /session/{id}/message`). Criterion 4 **PASSED** (session create/delete verified live, no orphan under the SDK client). Criterion 3 is **half-proven**: a real headless `claude -p --mcp-config` session invoked the tool end-to-end (Claude Code → MCP → serve → collab-read → free model → correct answer, capture written), but the *interactive* one-time approval UX still needs the maintainer in a live session with `mcp.json.example` registered — incomplete, not failed. **Two findings for the rewrite, neither fatal:** (1) Claude Code's MCP teardown did NOT fire the spike server's signal-based cleanup and an `opencode serve` was orphaned — the production server must treat stdin EOF/transport close as the shutdown trigger, not signals; (2) the capture's raw-history reference was cwd-relative and broke off-cwd — store it absolute. **Status: rewrite remains NOT started** — the remaining gate is the maintainer's interactive UX check plus the go decision.
+
+### Rebrand: ClaudeCollab → ModelGuild — DONE 2026-07-23
+
+**The trigger.** The intended npm name `claudecollab` was rejected as too close to an existing published package, **`claude-collab`** — a name collision that risks user confusion and typosquatting-adjacent ambiguity. Rather than ship under a near-duplicate name, the maintainer chose a **full rebrand** to **ModelGuild** (npm `modelguild`).
+
+**Provenance.** Maintainer decision, 2026-07-23.
+
+**The identifier mapping (summary — applied repo-wide in the same change).**
+- Brand `ClaudeCollab` → `ModelGuild`; npm name / MCP server `name` / MCP registration key `claudecollab` → `modelguild`.
+- MCP tool names `collab_consult`/`collab_panel`/`collab_research`/`collab_delegate`/`collab_models`/`collab_status` → `guild_*`; tool grants `mcp__claudecollab__*` → `mcp__modelguild__*`.
+- Slash-command namespace `/collab:` → `/guild:`; command dir `.claude/commands/collab/` → `.claude/commands/guild/`.
+- Hardened opencode agent defs `collab-read`/`collab-build`/`collab-research` → `guild-read`/`guild-build`/`guild-research` (and their `verify-collab-*.sh` → `verify-guild-*.sh`).
+- Support dir `collab/` → `modelguild/`; `collab.conf.example`/`collab.conf.local` → `modelguild.conf.*`; install record `.claudecollab-install.json` → `.modelguild-install.json`.
+- Env-var prefix `COLLAB_*` → `GUILD_*`; repo URL `bencmorrison/ClaudeCollab` → `bencmorrison/modelguild`.
+- **Left verbatim (not the brand):** `Claude Code` (the driver), the `.claude/` dir, `claude mcp add`/`get`, the `CLAUDE.md`/`AGENTS.md` filenames, "Claude" as the driver doing synthesis/verification, and `Anthropic`/`opencode`/model ids.
+
+**Positioning (recorded with the rebrand).** ModelGuild works in any stdio MCP client; **Claude Code is the first-class — and currently the only — driver** (the slash commands and the verify-each-finding workflow are Claude-Code-native). Support for other drivers is planned but not built.
+
+**Scope note.** This is a naming change only — no behavior, permission, or contract change rides on it. The dated entries above are **not** rewritten: they keep the old-name identifiers as historical record (see the naming note at the top of this file).
 
 ## Risks & mitigations (carry forward)
 - **False read-only safety** → *addressed for the read path by a default-deny allowlist:* `collab-read` sets `"*": deny` and re-allows reading non-secret files plus webfetch/websearch — mutation, `grep`/`glob`, sub-agents, and secret reads are denied by construction, including tools opencode adds later. Two review rounds drove this: the readable `.env` hole, then `patch` (mutation), `grep` (secret **content** — it bypasses read denies), and `glob` (paths) — the denylist kept missing tools, so it was replaced with the allowlist. `grep`/`glob` remain denied as a concrete opencode harness limitation, not a permanent parity principle. Verified by `collab/verify-collab-read.sh` (asserts the `"*"` floor + effective actions + grep/read secret-canary runtime probes); re-run on opencode upgrades. *The `--edit` path (`collab-build`) uses the same allowlist* — re-allows only edit/write/patch/bash — but allows `bash` by choice, so its non-mutation denies are defense-in-depth, not by construction; the diff review is the boundary (verified by `collab/verify-collab-build.sh`). *Done:* both verify scripts' `--static` checks run in `collab/doctor.sh` (local); CI catches drift with the opencode-free source lint `check-agent-permissions.sh` instead (CI never runs opencode). **Lesson: allowlist with a deny floor, never a denylist, for a versioned tool surface.**

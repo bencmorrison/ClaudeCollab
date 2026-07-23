@@ -253,15 +253,15 @@ export function tierFromContents(
 }
 
 /**
- * Policy file resolution (C1): `$COLLAB_POLICY` if set, else a git-ignored
+ * Policy file resolution (C1): `$GUILD_POLICY` if set, else a git-ignored
  * `models.policy.local` ONLY IF it carries ≥1 rule, else the committed `models.policy`.
- * `collabDir` is the directory the bash resolves via `dirname "$0"` (i.e. `collab/`).
+ * `collabDir` is the directory the bash resolves via `dirname "$0"` (i.e. `modelguild/`).
  */
 export function resolvePolicyFile(
   collabDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): { file: string; source: PolicySource } {
-  const override = env.COLLAB_POLICY;
+  const override = env.GUILD_POLICY;
   if (override && override.length > 0) return { file: override, source: "env" };
   const local = path.join(collabDir, "models.policy.local");
   let localContents: string | undefined;
