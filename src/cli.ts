@@ -14,7 +14,7 @@
  * source stays lint-clean while the shipped artifact is directly executable.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { init, mcpServerEntry, payloadFiles, payloadDest, resolveGlobalDirs, type ServerLaunch } from "./init.js";
@@ -193,7 +193,7 @@ function printRegisterInstructions(targetDir: string, launch: ServerLaunch, glob
 
 /** A light, token-free doctor: no model call. Confirms the MCP-era payload is present
  * and coherent. This is the deep check — the bash `collab/doctor.sh` was retired at M12. */
-async function runDoctor(
+export async function runDoctor(
   argv: string[],
   inject?: { homeDir?: string; xdgConfigHome?: string },
 ): Promise<number> {
@@ -251,32 +251,67 @@ async function runDoctor(
     );
   }
 
-  // Command docs + agent defs present — at the GLOBAL locations when --global, else the
-  // project. `payloadDest` maps each dest-rel to where it actually lives in this mode.
-  const destOpts = { global, targetDir, global_dirs: gdirs };
+  // Command docs + agent defs + policy present. Each of these resolves at RUNTIME from the
+  // PROJECT location OR the GLOBAL location:
+  //   - command docs: Claude Code reads BOTH project `.claude/commands/guild/` and global
+  //     `~/.claude/commands/guild/`.
+  //   - agent defs: opencode resolves BOTH project `.opencode/agent/` and global
+  //     `<xdg>/opencode/agent/` (this is exactly what `resolveAgentDefDirs` models).
+  //   - policy: `resolveCollabRoot` falls back project `modelguild/` → home `~/.claude/modelguild/`.
+  // So DEFAULT doctor must count a piece present if it is found in EITHER location — otherwise a
+  // perfectly-working GLOBAL install (`init --global`) falsely fails 0/8, 0/3, no policy. `--global`
+  // stays an explicit "verify ONLY my global install" and checks the global location alone.
+  // Fail-closed either way: found in NEITHER ⇒ still a ✗ / exit 1.
+  const projectOpts: Parameters<typeof payloadDest>[1] = { global: false, targetDir, global_dirs: gdirs };
+  const globalOpts: Parameters<typeof payloadDest>[1] = { global: true, targetDir, global_dirs: gdirs };
+  const existsAt = (dest: string, opts: Parameters<typeof payloadDest>[1]): boolean => {
+    const { base, rel } = payloadDest(dest, opts);
+    return existsSync(path.join(base, rel));
+  };
+  type Found = "project" | "global" | "none";
+  // In --global mode only the global location counts; in default mode project OR global does.
+  const locate = (dest: string): Found => {
+    if (global) return existsAt(dest, globalOpts) ? "global" : "none";
+    if (existsAt(dest, projectOpts)) return "project";
+    if (existsAt(dest, globalOpts)) return "global";
+    return "none";
+  };
+
   let docsPresent = 0;
   let agentsPresent = 0;
+  const docsWhere = new Set<Found>();
+  const agentsWhere = new Set<Found>();
   for (const { dest } of payloadFiles()) {
-    const { base, rel } = payloadDest(dest, destOpts);
-    if (!existsSync(path.join(base, rel))) continue;
-    if (dest.startsWith(".claude/commands/")) docsPresent++;
-    else if (dest.startsWith(".opencode/agent/")) agentsPresent++;
+    const where = locate(dest);
+    if (where === "none") continue;
+    if (dest.startsWith(".claude/commands/")) { docsPresent++; docsWhere.add(where); }
+    else if (dest.startsWith(".opencode/agent/")) { agentsPresent++; agentsWhere.add(where); }
   }
-  const docsDir = global
-    ? `${path.join(gdirs.homeDir, ".claude", "commands", "guild")}/`
-    : ".claude/commands/guild/";
-  const agentsDir = global
-    ? `${path.join(gdirs.xdgConfigHome, "opencode", "agent")}/`
-    : ".opencode/agent/";
-  line(docsPresent >= 7, `${docsPresent}/8 command docs present in ${docsDir}`);
-  line(agentsPresent === 3, `${agentsPresent}/3 hardened agent defs present in ${agentsDir}`);
 
-  // Policy / config templates present.
-  const policy = payloadDest("modelguild/models.policy", destOpts);
-  const policyPath = path.join(policy.base, policy.rel);
+  const globalDocsDir = `${path.join(gdirs.homeDir, ".claude", "commands", "guild")}/`;
+  const globalAgentsDir = `${path.join(gdirs.xdgConfigHome, "opencode", "agent")}/`;
+  // In default mode, name that the check covered project OR the global dir, and (cheaply) say
+  // where they were actually found — all-project, all-global, or mixed.
+  const whereSuffix = (where: Set<Found>): string => {
+    if (global || where.size === 0) return "";
+    if (where.size > 1) return " [found: mixed project + global]";
+    return [...where][0] === "global" ? " [found: global]" : " [found: project]";
+  };
+  const docsLoc = global ? globalDocsDir : `.claude/commands/guild/ or ${globalDocsDir}`;
+  const agentsLoc = global ? globalAgentsDir : `.opencode/agent/ or ${globalAgentsDir}`;
+  line(docsPresent >= 7, `${docsPresent}/8 command docs present in ${docsLoc}${whereSuffix(docsWhere)}`);
+  line(agentsPresent === 3, `${agentsPresent}/3 hardened agent defs present in ${agentsLoc}${whereSuffix(agentsWhere)}`);
+
+  // Policy / config template present — project `modelguild/models.policy` OR global.
+  const globalPolicy = payloadDest("modelguild/models.policy", globalOpts);
+  const globalPolicyPath = path.join(globalPolicy.base, globalPolicy.rel);
+  const policyWhere = locate("modelguild/models.policy");
+  const policyLoc = global
+    ? globalPolicyPath
+    : `modelguild/models.policy or ${globalPolicyPath}`;
   line(
-    existsSync(policyPath),
-    `model policy present (${global ? policyPath : "modelguild/models.policy"})`,
+    policyWhere !== "none",
+    `model policy present (${policyLoc})${whereSuffix(new Set([policyWhere]))}`,
   );
 
   // opencode binary (best-effort; a missing binary is a warning, not a hard fail here).
@@ -321,13 +356,29 @@ async function main(): Promise<number> {
   return 2;
 }
 
-main().then(
-  (code) => {
-    // `serve` never resolves until teardown; init/doctor set the exit code.
-    if (code !== 0) process.exitCode = code;
-  },
-  (err) => {
-    console.error(`modelguild: ${(err as Error).message}`);
-    process.exitCode = 1;
-  },
-);
+// Only run as a program when invoked as the entry point — NOT when imported (the doctor
+// test imports `runDoctor`). Compare realpaths so a symlinked bin (npm's `.bin/modelguild`,
+// which npx runs) still matches: `import.meta.url` is already realpath-resolved by Node's
+// ESM loader, and `realpathSync(argv[1])` resolves the invoking symlink to the same file.
+function isEntryPoint(): boolean {
+  const invoked = process.argv[1];
+  if (!invoked) return false;
+  try {
+    return SELF === realpathSync(invoked);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
+  main().then(
+    (code) => {
+      // `serve` never resolves until teardown; init/doctor set the exit code.
+      if (code !== 0) process.exitCode = code;
+    },
+    (err) => {
+      console.error(`modelguild: ${(err as Error).message}`);
+      process.exitCode = 1;
+    },
+  );
+}

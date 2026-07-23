@@ -142,16 +142,17 @@ Run the token-free `doctor` — it checks opencode is present, the MCP registrat
 npx modelguild doctor --dir /path/to/your/project
 # node /path/to/modelguild/dist/cli.js doctor --dir <project>   # if you installed from source
 ```
-`doctor` detects the registration in **any** scope by asking the Claude CLI (`claude mcp get modelguild`), so a global (`-s user`) registration passes even though it isn't in the project `.mcp.json`. A healthy result looks like:
+`doctor` detects the registration in **any** scope by asking the Claude CLI (`claude mcp get modelguild`), so a global (`-s user`) registration passes even though it isn't in the project `.mcp.json`. Plain `doctor` likewise detects a **global payload install** (`init --global`): it counts the command docs, agent defs, and policy as present if they are found in **either** the project location or the global one (`~/.claude/commands/guild/`, the opencode global agent dir, `~/.claude/modelguild/`) — mirroring how each actually resolves at runtime. You do **not** need `--global` unless you want to check *only* the global locations (an explicit "verify my global install"). A healthy result looks like:
 ```
 ✓ MCP server 'modelguild' registered (found via `claude mcp get`, any scope)
-✓ 8/8 command docs present in .claude/commands/guild/
-✓ 3/3 hardened agent defs present in .opencode/agent/
-✓ model policy present (modelguild/models.policy)
+✓ 8/8 command docs present in .claude/commands/guild/ or ~/.claude/commands/guild/ [found: project]
+✓ 3/3 hardened agent defs present in .opencode/agent/ or ~/.config/opencode/agent/ [found: project]
+✓ model policy present (modelguild/models.policy or ~/.claude/modelguild/models.policy) [found: project]
 ✓ opencode present (…)
 
 doctor: OK
 ```
+(The `[found: …]` tag reports whether the payload was located in the project, globally, or a mix.)
 If the `claude` CLI isn't on PATH, `doctor` can't see a global registration and instead reports a warning (not a failure) telling you to verify with `claude mcp get modelguild`. Inside the restarted Claude Code, the `/guild:*` commands now appear in the slash-command list and the `guild_*` MCP tools are available. **The first time** Claude Code calls one, it asks a one-time permission for that tool (e.g. `mcp__modelguild__guild_consult`) — approve it (see [Skip the permission prompts](#skip-the-permission-prompts) to pre-approve them all).
 
 ### 6. Configure which models it uses
