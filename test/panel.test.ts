@@ -1,5 +1,5 @@
 /**
- * guild_panel tests (PLAN.md M6; CONTRACT.md C13/C14, C23, C43/C44 + area-F command
+ * guild_panel tests (CONTRACT.md C13/C14, C23, C43/C44 + area-F command
  * surface for exact-id attribution) — OFFLINE.
  *
  * No model is called: every member turn is served by the `node:http` fake

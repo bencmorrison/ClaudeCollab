@@ -18,7 +18,6 @@ user_files=(
   .devcontainer/postCreate.sh
   AGENTS.md
   CONTRIBUTING.md
-  PLAN.md
   README.md
   SECURITY.md
   modelguild/modelguild.conf.example
@@ -27,7 +26,7 @@ user_files=(
 obsolete='(^|[^[:alnum:]_.-])/((configure-collab)|(consult|panel|workshop|review|research|delegate|collaborate|witness|configure|consensus))([[:space:]<`"'"'"'(,.:]|$)'
 obsolete_matches="$(grep -RInE --exclude=check-docs.sh "$obsolete" "${user_files[@]}" || true)"
 obsolete_matches="$(printf '%s\n' "$obsolete_matches" | grep -Ev \
-  '^AGENTS\.md:.*(where `/consult`, `/review` and `/panel`|Our `/review` was found colliding|Renamed from `/consensus`)|^PLAN\.md:.*(rename from `/consensus`|`/consensus` → `/collab:panel`|Found live: our `/review` was colliding)' || true)"
+  '^AGENTS\.md:.*(where `/consult`, `/review` and `/panel`|Our `/review` was found colliding|Renamed from `/consensus`)' || true)"
 if [ -n "$obsolete_matches" ]; then
   printf '%s\n' "$obsolete_matches" >&2
   bad "obsolete unnamespaced command reference found; use /guild:<name>"
@@ -123,7 +122,7 @@ if [ "${1:-}" = "--self-test" ]; then
     "$baseline/.opencode" "$baseline/modelguild"
   cp -a .claude/commands/guild "$baseline/.claude/commands/"
   cp -a .opencode/agent "$baseline/.opencode/"
-  cp -a AGENTS.md CONTRIBUTING.md PLAN.md README.md SECURITY.md install.sh "$baseline/"
+  cp -a AGENTS.md CONTRIBUTING.md README.md SECURITY.md install.sh "$baseline/"
   cp -a .devcontainer/Dockerfile .devcontainer/devcontainer.json \
     .devcontainer/postCreate.sh "$baseline/.devcontainer/"
   cp -a modelguild/modelguild.conf.example modelguild/models.policy "$baseline/modelguild/"

@@ -1,5 +1,5 @@
 /**
- * Config & model-resolution port tests (PLAN.md M4; CONTRACT.md area B, C8–C14) — OFFLINE.
+ * Config & model-resolution port tests (CONTRACT.md area B, C8–C14) — OFFLINE.
  *
  * `conf_get` byte-identity (C11) is held by REUSE — `config.ts` re-exports `log.ts`'s
  * `confGet`, so there is one parser. Panel resolution (C13/C14) is unit-tested directly

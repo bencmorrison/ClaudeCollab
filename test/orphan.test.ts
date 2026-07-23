@@ -1,5 +1,5 @@
 /**
- * FLAGSHIP ORPHAN TEST (PLAN.md M1 kill signal).
+ * FLAGSHIP ORPHAN TEST.
  *
  * Simulates Claude Code's teardown FAITHFULLY: it spawns the MCP server as a child
  * over stdio pipes (the way Claude Code does), drives one `guild_status` call to

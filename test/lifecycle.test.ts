@@ -1,5 +1,5 @@
 /**
- * Lifecycle supervisor tests (PLAN.md M1): clean spawn→ready→shutdown, idle timeout,
+ * Lifecycle supervisor tests: clean spawn→ready→shutdown, idle timeout,
  * crash-revive, and per-call mode. In-process against the real `opencode serve`
  * (free — no model call). Every wait is bounded.
  */

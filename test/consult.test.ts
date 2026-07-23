@@ -1,5 +1,5 @@
 /**
- * guild_consult tests (PLAN.md M5; CONTRACT.md C1–C7, C12, C22–C25, C31, C41, C45)
+ * guild_consult tests (CONTRACT.md C1–C7, C12, C22–C25, C31, C41, C45)
  * — OFFLINE.
  *
  * No model is called: the model turn is served by the `node:http` fake

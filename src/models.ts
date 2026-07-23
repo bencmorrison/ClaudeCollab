@@ -1,5 +1,5 @@
 /**
- * `guild_models` — list the models opencode can actually reach (PLAN.md M11).
+ * `guild_models` — list the models opencode can actually reach.
  *
  * This is the LAST thing the migrated command docs shelled out to the `opencode`
  * binary for (`Bash(opencode models:*)`): a read-only enumeration of the caller's

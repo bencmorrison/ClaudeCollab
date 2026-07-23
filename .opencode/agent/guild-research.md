@@ -24,13 +24,13 @@ permission:
   # agent. That scoping stays; it is role definition, not a floor.
   #
   # The former secret-glob read-denies and the grep/glob denies were REMOVED
-  # (2026-07-22 permission realignment, PLAN.md): both were vendor-asymmetry bias in a
+  # (2026-07-22 permission realignment): both were vendor-asymmetry bias in a
   # costume — you would not fence a web-capable Claude review subagent out of `grep`,
   # out of dotfiles, or off the web, so you do not fence this one. The secret globs
   # were already conceded to be a list, never a boundary; the "opencode grep leaks
   # content past read-denies" harness difference is circular — it only bites if you
   # are fencing secrets, which you are not. Trusted repo + frontier model is the
-  # posture, and repo-contents + web is accepted exposure (PLAN.md 2026-07-22).
+  # posture, and repo-contents + web is accepted exposure (accepted 2026-07-22).
   #
   # HONEST CONSEQUENCE (do not soften): with the globs gone, this agent can read
   # credential files — .env, *.key/*.pem, .ssh/**, .aws/**, .git-credentials, .npmrc —

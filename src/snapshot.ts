@@ -1,5 +1,5 @@
 /**
- * snapshot.ts — the WRITE-PATH worktree snapshot + delegated-diff machinery (PLAN.md M8).
+ * snapshot.ts — the WRITE-PATH worktree snapshot + delegated-diff machinery.
  *
  * A faithful TypeScript port of ask.sh's `_snapshot_tree`, `record_delegate_diff`,
  * `_ignored_fingerprint` and `_submodule_state` (CONTRACT.md area E, C36–C40). ask.sh is

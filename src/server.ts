@@ -1,5 +1,5 @@
 /**
- * MCP stdio server (PLAN.md milestones M1, M5).
+ * MCP stdio server.
  *
  * M1 exposed one diagnostic tool, `guild_status`, to exercise the `opencode serve`
  * lifecycle end-to-end. M5 adds the first PRODUCTION tool, `guild_consult` — the

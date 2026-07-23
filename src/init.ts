@@ -1,5 +1,5 @@
 /**
- * `modelguild init` — the installer for the MCP era (PLAN.md M11).
+ * `modelguild init` — the installer for the MCP era.
  *
  * Where the bash `install.sh` copies the whole bash payload (ask.sh/log.sh/… + all four
  * agent defs + witness.md) into a project, `init` places ONLY the MCP-era surface:

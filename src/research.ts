@@ -1,5 +1,5 @@
 /**
- * guild_research — source-backed investigation by a web-capable model (PLAN.md M7).
+ * guild_research — source-backed investigation by a web-capable model.
  *
  * The MCP translation of the bash `/guild:research` / `ask.sh --research` path: one
  * read-only, WEB-CAPABLE model turn through the UNMODIFIED `guild-research` agent
@@ -9,7 +9,7 @@
  * (C45 verify-not-relay), never instructions to act on (C42/C52). This tool is the
  * TRANSPORT; the `/guild:research` command doc does the fetch-each-source verification.
  *
- * ONE DELIBERATE DEVIATION FROM bash C16 (task-directed, PLAN.md M7). bash falls back to
+ * ONE DELIBERATE DEVIATION FROM bash C16 (task-directed). bash falls back to
  * the weaker `plan` agent when `guild-research.md` is missing (loud warning; hard-error
  * only under `GUILD_REQUIRE_HARDENED`). This tool has NO fallback EVER: a missing def is
  * a structured `agent-def-missing` refusal (exit-5 analogue, C57), no model called, no

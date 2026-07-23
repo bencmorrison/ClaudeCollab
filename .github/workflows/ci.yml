@@ -1,7 +1,7 @@
 name: CI
 
 # Fast, token-free checks that need no opencode auth and call no model. Since the
-# bash wrapper layer was retired (PLAN.md M12), the surviving shell is a handful of
+# bash wrapper layer was retired at M12, the surviving shell is a handful of
 # lint scripts (shebangs, frontmatter, docs, agent-permissions, shellcheck) plus the
 # dev-container host-config tooling — so the shell jobs lint THOSE, and the product
 # is the TypeScript/MCP server, exercised by the `node` job.
@@ -99,7 +99,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # THE TRAP THIS JOB EXISTS TO AVOID (see PLAN.md, Phase 1 portability):
+      # THE TRAP THIS JOB EXISTS TO AVOID (macOS bash-3.2 / BSD portability):
       # GitHub's macOS images ship a Homebrew bash 5 ahead of the stock /bin/bash
       # 3.2 on PATH. Our shebangs are `#!/usr/bin/env bash`, so without this the
       # whole suite would silently run on bash 5 and mask the exact 3.2 bugs the
@@ -167,7 +167,7 @@ jobs:
     runs-on: ubuntu-latest
     # `npm test` (test/run.ts) runs all 13 test/*.test.ts suites, and three of
     # them — lifecycle, orphan, mcp-client — spawn the REAL `opencode serve`
-    # binary to prove process lifecycle (PLAN.md M1: shutdown-on-stdin-close,
+    # binary to prove process lifecycle (M1: shutdown-on-stdin-close,
     # the orphan flagship, no-process-leak). This CI is credential-free and
     # opencode-free by decision (see header) and never installs or authenticates
     # opencode, so those three cannot run honestly here — and they have NO graceful

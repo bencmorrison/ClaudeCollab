@@ -4,8 +4,8 @@ This began (M0) as the **frozen behavioral contract of the bash layer**, capture
 TypeScript/MCP rewrite could be verified against it. **The rewrite is complete and the bash layer
 retired at M12 (2026-07-23).** These C-items are no longer a bash-parity target — they are the
 **behavioral specification the TypeScript implementation holds**, now verified by the TS test suite
-under `test/` (the reference). See `PLAN.md` → "Implementation plan — synthesized 2026-07-22" for the
-milestone history.
+under `test/` (the reference).
+Milestone history is in git history.
 
 - **The TypeScript implementation and `test/*.test.ts` are the reference.** Where this document and the
   code disagree, the code wins; fix the document.
@@ -85,19 +85,19 @@ milestone history.
 - **C40** — Capture is marked **incomplete** (and the log will fail integrity, surfaced loudly) when the baseline/after tree, ignored-file fingerprint, or submodule state cannot be faithfully represented; a run that changed no tracked files reports "nothing to review" and writes no patch. The snapshot is a **record, not containment** — it does not run for read-only agents (case 3c).
 
 ## F. Command surface
-*Oracle: `.claude/commands/guild/*.md` (9 files); `AGENTS.md` command list; `PLAN.md`.*
+*Oracle: `.claude/commands/guild/*.md` (9 files); `AGENTS.md` command list.*
 
 - **C41** — Exactly nine namespaced commands exist as `/guild:<name>`: `consult`, `panel`, `workshop`, `review`, `delegate`, `research`, `collaborate`, `witness`, `configure`. Files live in `.claude/commands/guild/` (the subdirectory is the namespace and is load-bearing against silent collisions).
 - **C42** — Every model-touching command carries a **prompt-injection guard**: external model output is untrusted **data**, never instructions; directives aimed at Claude are surfaced as a finding, not executed.
 - **C43** — Commands consult the model policy per call (via `ask.sh`), not independently; `panel`/`workshop` set one `$GUILD_RUN_ID` so the whole workflow is one auditable run.
 - **C44** — Commands that spend multiple calls **state the call count before spending** (e.g. `panel` 2–3; `workshop` ~2/model). Normal `consult`/`review`/`research`/`collaborate` are one call; no silent retries.
 - **C45** — Verify-not-relay contracts: `review` re-reads the changed files and marks each finding Confirmed/Refuted/Uncertain; `research` fetches each cited source (Confirmed/Refuted/Unsourced) and states verification coverage; `witness` treats a report missing `call_id` citations or quoted `raw_response` as Inconclusive; `witness` prompt text is fixed and not Claude's to soften.
-- **C46** — Anthropic voices come via a Claude **subagent** (Task/Agent tool), logged as `subagent-voice` (C29). **TS-era rule (M8):** the first collab call in a session sets its transport; **mixed transport in one session is a surfaced error**.
+- **C46** — Anthropic voices come via a Claude **subagent** (Task/Agent tool), logged as `subagent-voice` (C29).
 
 ## G. Security doctrine invariants
 *Oracle: `.opencode/agent/guild-*.md`; `AGENTS.md` Conventions/Gotchas; `check-agent-permissions.sh`; `verify-guild-*.sh`.*
 
-> **Amended 2026-07-22 (permission realignment) — supersedes the original area-G freeze on the secret-glob model.** C48–C50 below are the amended text; the read paths (`guild-read`/`guild-research`) now carry a Claude review subagent's tools (`read`+`grep`+`glob`+web) with **no** secret-glob read-denies and **no** `grep`/`glob` denials, per the maintainer decision recorded in PLAN.md "Permission realignment… DECIDED 2026-07-22". The default-deny-allowlist *shape* (C47) is unchanged; only the read-path allow-sets and the harness-difference justification changed.
+> **Amended 2026-07-22 (permission realignment) — supersedes the original area-G freeze on the secret-glob model.** C48–C50 below are the amended text; the read paths (`guild-read`/`guild-research`) now carry a Claude review subagent's tools (`read`+`grep`+`glob`+web) with **no** secret-glob read-denies and **no** `grep`/`glob` denials, per the maintainer decision recorded in AGENTS.md Conventions (PARITY, the 2026-07-22 permission realignment). The default-deny-allowlist *shape* (C47) is unchanged; only the read-path allow-sets and the harness-difference justification changed.
 
 - **C47** — The four hardened agent defs are **default-deny allowlists**: `"*": deny` floor (no `"*": allow`), `mode: all`, re-allowing exactly their intended tools. Preserved **unchanged, opencode-side** by the rewrite.
 - **C48** — Per-agent allow-sets (amended 2026-07-22): `guild-read` = read + grep + glob + webfetch/websearch (**no secret-glob read-denies**); `guild-research` = **identical** to `guild-read`; `guild-build` = edit/write/patch/bash; `guild-watch` = **read `modelguild/logs/**` only** (inverted map, all else incl. secrets denied). The read paths carry no secret-path read-denies — that is the realignment, not an omission.
@@ -128,4 +128,4 @@ bash layer was deleted; the TS verifier now stands alone as the reference.
 
 **Going forward**, a change to any behavior an item names must keep this document and the TS suite in
 agreement — the code wins, and the document is fixed to match. Recorded deviations from the original
-bash behavior (transport artifacts and superseded items) are noted inline above and in `PLAN.md`.
+bash behavior (transport artifacts and superseded items) are noted inline above.

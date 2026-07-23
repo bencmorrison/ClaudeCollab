@@ -1,5 +1,5 @@
 /**
- * Typed opencode HTTP client (PLAN.md milestone M2).
+ * Typed opencode HTTP client.
  *
  * A thin, typed layer over `opencode serve`'s session API — the layer every later
  * milestone (M3 capture, M5+ tools, M8 delegate) builds on. Deliberately uses raw
@@ -50,7 +50,7 @@ export interface SessionCreateModel {
 
 /**
  * Split a `"provider/model"` spec into its parts. A bare id (no slash) defaults
- * the provider to `opencode`, matching the spike/wrapper convention. An empty
+ * the provider to `opencode`, matching the wrapper convention. An empty
  * spec is a caller error — callers that want "opencode's own default" omit the
  * model entirely rather than passing "".
  */
@@ -450,7 +450,7 @@ export interface AskViaAgentOpts {
    * SESSION CONTINUATION (M7 / Option B). Continue an EXISTING opencode session
    * instead of creating a fresh one: the session already carries the peer's prior
    * turns, so the ONLY new bytes sent are `prompt`/`parts` — the driver never
-   * re-transmits another model's words (PLAN.md "Option B" construction guarantee).
+   * re-transmits another model's words (the "Option B" construction guarantee).
    * When set, `createSession` is NOT called; the id is used as-is.
    */
   sessionId?: string;

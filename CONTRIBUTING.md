@@ -6,7 +6,7 @@ Thanks for helping out. This is a small, security-sensitive tool — a local MCP
 
 - **[AGENTS.md](AGENTS.md) is the source of truth** for how the repo works (`CLAUDE.md` points Claude back to it, then adds Claude-specific anti-bias instructions; opencode reads `AGENTS.md` natively). It is **living documentation** — if your change alters a tool, a command, the dev container, or a convention, update `AGENTS.md` in the *same* change, not later.
 - **[CONTRACT.md](CONTRACT.md)** is the behavioral spec the TypeScript implementation holds, verified by the `test/` suite.
-- **[PLAN.md](PLAN.md)** is the roadmap and the record of decisions (and why). Skim it before a large change.
+- **[GitHub Issues](https://github.com/bencmorrison/modelguild/issues)** are the roadmap and work tracker; decisions and their rationale live in **AGENTS.md** / **CONTRACT.md** and git history.
 - **[SECURITY.md](SECURITY.md)** is the threat model and the guarantees. Don't weaken a guarantee without updating it.
 
 ## Setup
