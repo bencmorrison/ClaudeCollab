@@ -49,6 +49,10 @@ async function main(): Promise<number> {
   // use a sibling temp dir (never a child of scratch) to reproduce that separation.
   const logParent = await mkdtemp(path.join(tmpdir(), "collab-m8-delegate-logs-"));
   const logDir = path.join(logParent, "logs");
+  // HERMETICITY (issue #24): point XDG_CONFIG_HOME at an empty temp dir so the GLOBAL
+  // opencode agent dir (`${XDG_CONFIG_HOME:-~/.config}/opencode/agent/`) resolves empty —
+  // otherwise a box with a global install satisfies the def-missing refusal check globally.
+  const emptyXdg = await mkdtemp(path.join(tmpdir(), "collab-m8-delegate-xdg-"));
   const lc = new OpencodeLifecycle({ projectDir: scratch, idleMs: 0 });
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -57,6 +61,7 @@ async function main(): Promise<number> {
     GUILD_LOG_PROMPTS: "full",
     GUILD_AGENT_DIR: agentDir,
     GUILD_PROJECT_DIR: scratch,
+    XDG_CONFIG_HOME: emptyXdg,
   };
   let servePid: number | undefined;
 
@@ -172,6 +177,7 @@ async function main(): Promise<number> {
     lc.shutdown("live-smoke-done");
     await rm(scratch, { recursive: true, force: true }).catch(() => {});
     await rm(logParent, { recursive: true, force: true }).catch(() => {});
+    await rm(emptyXdg, { recursive: true, force: true }).catch(() => {});
   }
 
   if (servePid !== undefined) {

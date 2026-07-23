@@ -338,7 +338,14 @@ export async function run(): Promise<number> {
     const repo = initRepo({ "a.txt": "A\n" });
     const logDir = tmp("m8-logs-");
     const emptyDefDir = tmp("m8-emptyagent-");
-    const env = envWith({ GUILD_ROOT: tmp("m8-collab-"), GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: emptyDefDir });
+    // HERMETICITY: resolveAgentDefDirs also looks in the GLOBAL opencode dir
+    // (`${XDG_CONFIG_HOME:-~/.config}/opencode/agent/`). On a box with a global install (e.g.
+    // this dev container) that dir HAS guild-build.md, so the def would resolve globally and the
+    // tool would NOT refuse — the def-missing path would never run. Point XDG_CONFIG_HOME at an
+    // empty temp dir: non-empty, so it wins over the ~/.config fallback, making the global dir
+    // resolve to an empty location. Now BOTH dirs are genuinely def-free (issue #24).
+    const emptyXdg = tmp("m8-emptyxdg-"); // <emptyXdg>/opencode/agent does not exist
+    const env = envWith({ GUILD_ROOT: tmp("m8-collab-"), GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: emptyDefDir, XDG_CONFIG_HOME: emptyXdg });
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
       let mutated = false;
