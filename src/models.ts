@@ -1,5 +1,5 @@
 /**
- * `collab_models` — list the models opencode can actually reach (PLAN.md M11).
+ * `guild_models` — list the models opencode can actually reach (PLAN.md M11).
  *
  * This is the LAST thing the migrated command docs shelled out to the `opencode`
  * binary for (`Bash(opencode models:*)`): a read-only enumeration of the caller's
@@ -145,7 +145,7 @@ export async function models(deps: { serve: ServeRunner }): Promise<ModelsResult
  */
 export function modelsToToolResult(r: ModelsResult): McpToolResult {
   if (!r.ok) {
-    const msg = `collab_models: could not list models — ${r.error?.message ?? "unknown error"}`;
+    const msg = `guild_models: could not list models — ${r.error?.message ?? "unknown error"}`;
     return {
       content: [{ type: "text", text: msg }],
       structuredContent: { error: r.error },

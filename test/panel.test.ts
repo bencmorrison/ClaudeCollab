@@ -1,10 +1,10 @@
 /**
- * collab_panel tests (PLAN.md M6; CONTRACT.md C13/C14, C23, C43/C44 + area-F command
+ * guild_panel tests (PLAN.md M6; CONTRACT.md C13/C14, C23, C43/C44 + area-F command
  * surface for exact-id attribution) — OFFLINE.
  *
  * No model is called: every member turn is served by the `node:http` fake
  * (test/fake-opencode-server.ts) behind a `ServeProvider`. The evidence layer writes to
- * a temp COLLAB_LOG_DIR, and the flagship case verifies a TOOL-PRODUCED CONCURRENT run
+ * a temp GUILD_LOG_DIR, and the flagship case verifies a TOOL-PRODUCED CONCURRENT run
  * (3 members, 9 lifecycle entries) with the TS `verify()` (the reference verifier; the
  * bash `collab/log.sh verify` it was cross-checked against retired at M12).
  */
@@ -39,10 +39,10 @@ function rootWithPolicy(policy: string): string {
   return root;
 }
 
-/** A clean env: process.env minus every COLLAB_* knob, then the given overrides. */
+/** A clean env: process.env minus every GUILD_* knob, then the given overrides. */
 function envWith(overrides: Record<string, string>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = { ...process.env };
-  for (const k of Object.keys(base)) if (k.startsWith("COLLAB_")) delete base[k];
+  for (const k of Object.keys(base)) if (k.startsWith("GUILD_")) delete base[k];
   return { ...base, ...overrides };
 }
 
@@ -56,16 +56,16 @@ function readEntries(logDir: string, runId: string): Array<Record<string, unknow
 
 export async function run(): Promise<number> {
   const c = new Checker();
-  console.log("== panel.test (M6 collab_panel) ==");
+  console.log("== panel.test (M6 guild_panel) ==");
 
   // -------------------------------------------------------------------------
   // 1. Model-set resolution: precedence (param > env) + dedup + diversity warning.
   // -------------------------------------------------------------------------
   {
-    // 1a. Explicit `models` param wins over $COLLAB_MODELS (C13 precedence).
+    // 1a. Explicit `models` param wins over $GUILD_MODELS (C13 precedence).
     const root = rootWithPolicy(""); // empty ⇒ default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_MODELS: "env/should-not-win" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MODELS: "env/should-not-win" });
     const fake = await startFakeOpencode({ historyText: "voice" });
     try {
       const r = await panel(
@@ -76,7 +76,7 @@ export async function run(): Promise<number> {
       if (r.ok) {
         c.check(
           r.results.map((m) => m.model).join(",") === "alpha/one,beta/two",
-          "resolve: explicit models param wins over COLLAB_MODELS env, order preserved",
+          "resolve: explicit models param wins over GUILD_MODELS env, order preserved",
         );
         c.check(r.results.every((m) => m.text === "voice"), "resolve: both allow members answered");
       }
@@ -129,7 +129,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("# mixed\ndeny beta/denied\nask gamma/ask\n");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "the allow answer" });
     try {
       const r = await panel(
@@ -170,7 +170,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("ask gamma/ask\n");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "approved voice" });
     try {
       const r = await panel(
@@ -200,7 +200,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
     const fake = await startFakeOpencode({ historyText: "voice" });
     try {
       const r = await panel(
@@ -225,7 +225,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy(""); // default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "panel voice", syncText: "SYNC-MUST-NOT-LEAK" });
     try {
       const r = await panel(
@@ -283,7 +283,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir }); // no COLLAB_MODELS
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir }); // no GUILD_MODELS
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
       const r = await panel(
@@ -310,7 +310,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "voice" });
     try {
       const r1 = await panel(
@@ -343,7 +343,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
     // failMessage makes EVERY model turn fail — so both members record completed/failed
     // and each surfaces a per-member call-failed, and the panel still resolves (no throw).
     const fake = await startFakeOpencode({ historyText: "x", failMessage: true });
@@ -381,7 +381,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("ask gamma/ask\n");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "voice" });
     try {
       // Call 1: confirmed:true → the ask member proceeds.
@@ -432,7 +432,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy(""); // default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "honest answer" });
     try {
       const r = await panel(
@@ -476,7 +476,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy(""); // default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "plan voice", distinctSessions: true });
     try {
       const r = await panel(
@@ -513,7 +513,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy(""); // default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({
       historyText: "ok voice",
       distinctSessions: true,

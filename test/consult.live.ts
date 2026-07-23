@@ -3,7 +3,7 @@
  *
  * Drives the REAL production path: `consult()` composes the M1 lifecycle (`opencode
  * serve`), the model policy (default-allow, so a free model passes), the evidence layer,
- * and the typed client, against the UNMODIFIED read-only `collab-read` agent in a
+ * and the typed client, against the UNMODIFIED read-only `guild-read` agent in a
  * disposable scratch project carrying a planted marker file. We assert the marker
  * round-trips byte-exact through the tool result, the tool-produced run verifies under
  * the TS verifier, and no `opencode serve` survives.
@@ -31,20 +31,20 @@ async function main(): Promise<number> {
   const scratch = await mkdtemp(path.join(tmpdir(), "collab-m5-live-"));
   const logDir = path.join(scratch, "logs");
   const lc = new OpencodeLifecycle({ projectDir: scratch, idleMs: 0 });
-  // COLLAB_ROOT → scratch (no policy file there ⇒ default-allow); logs under scratch.
+  // GUILD_ROOT → scratch (no policy file there ⇒ default-allow); logs under scratch.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    COLLAB_ROOT: scratch,
-    COLLAB_LOG_DIR: logDir,
-    COLLAB_LOG_PROMPTS: "full",
+    GUILD_ROOT: scratch,
+    GUILD_LOG_DIR: logDir,
+    GUILD_LOG_PROMPTS: "full",
   };
   let servePid: number | undefined;
 
   try {
     await mkdir(path.join(scratch, ".opencode", "agent"), { recursive: true });
     await copyFile(
-      path.join(repoRoot, ".opencode", "agent", "collab-read.md"),
-      path.join(scratch, ".opencode", "agent", "collab-read.md"),
+      path.join(repoRoot, ".opencode", "agent", "guild-read.md"),
+      path.join(scratch, ".opencode", "agent", "guild-read.md"),
     );
     await writeFile(
       path.join(scratch, "marker.txt"),
@@ -71,7 +71,7 @@ async function main(): Promise<number> {
     if (result.ok) {
       console.log(`  model text: ${JSON.stringify(result.answer).slice(0, 200)}`);
       c.check(result.answer.includes(MARKER), `marker round-tripped through the tool answer (${MARKER})`);
-      c.check(result.attribution.agent === "collab-read", "attribution names the collab-read agent");
+      c.check(result.attribution.agent === "guild-read", "attribution names the guild-read agent");
       c.check(result.attribution.model === FREE_MODEL, "exact-id attribution matches the requested model");
 
       // The MCP wire shape carries the same byte-exact answer.

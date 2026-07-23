@@ -1,26 +1,26 @@
 /**
- * collab_delegate — the WRITE path (PLAN.md M8).
+ * guild_delegate — the WRITE path (PLAN.md M8).
  *
- * The MCP translation of bash `/collab:delegate` / `ask.sh --edit`: one model turn through
- * the UNMODIFIED `collab-build` agent (`.opencode/agent/collab-build.md` — a default-deny
+ * The MCP translation of bash `/guild:delegate` / `ask.sh --edit`: one model turn through
+ * the UNMODIFIED `guild-build` agent (`.opencode/agent/guild-build.md` — a default-deny
  * allowlist re-allowing edit/write/patch/bash; C47/C48), wrapped in the worktree
  * snapshot/diff machinery (src/snapshot.ts) so the model's changes are recorded as a patch
  * a human reviews. The model's report AND its diff are untrusted DATA the DRIVER reviews and
  * verifies — never instructions to act on (C42/C52). The human diff review is the trust
- * boundary (SECURITY.md collab-build: `bash` is allowed by design, so the non-mutation
+ * boundary (SECURITY.md guild-build: `bash` is allowed by design, so the non-mutation
  * denies are defense-in-depth, not by construction).
  *
  * TWO DELIBERATE DEVIATIONS FROM bash C16, both task-directed (PLAN.md M7 precedent, applied
  * to the write path):
  *   1. NO fallback EVER. bash falls back to the UNRESTRICTED built-in `build` when
- *      collab-build.md is missing (loud warning; hard-error only under
- *      COLLAB_REQUIRE_HARDENED). Here a missing def is a structured `agent-def-missing`
+ *      guild-build.md is missing (loud warning; hard-error only under
+ *      GUILD_REQUIRE_HARDENED). Here a missing def is a structured `agent-def-missing`
  *      refusal (exit-5 analogue, C57): no model called, no log written. Silently degrading
  *      the write path to the unrestricted editor while the caller still believes it got the
  *      hardened one is exactly the failure mode this repo kills — and it matters MOST on the
  *      write path, where the fallback is `build` (everything allowed), not a weaker read.
  *   2. Post-call agent-mismatch check (via runAgentLifecycle's expectedAgent): if opencode
- *      served a different agent than collab-build, the turn fails closed. A build-agent
+ *      served a different agent than guild-build, the turn fails closed. A build-agent
  *      masquerade is the write-path's worst case; bash has no such check.
  *
  * WRITE-PATH ORDERING (C36–C40, C37 the scar): snapshot the worktree as a git tree BEFORE
@@ -30,7 +30,7 @@
  * at <runDir>/diff-<callId>.patch, logged as a `delegate-diff` entry (claim:false, patch
  * hashed). The pre-tree sha is the recovery hint (`git checkout <tree> -- <path>`).
  *
- * Everything else mirrors collab_research: gate (leading-dash → policy tier) BEFORE any log
+ * Everything else mirrors guild_research: gate (leading-dash → policy tier) BEFORE any log
  * write so a refusal logs nothing (C24 gap parity), then the shared expect→started→completed
  * lifecycle spine (src/consult.ts runAgentLifecycle), reused not forked.
  */
@@ -56,9 +56,9 @@ import { type PolicyTier } from "./policy.js";
 import { snapshotWorktree, captureDelegateDiff, scaffoldDigest } from "./snapshot.js";
 
 /** The write-capable, hardened agent this tool ALWAYS uses, unmodified (C15/C47/C48). */
-export const DELEGATE_AGENT = "collab-build";
-/** The command label recorded in the evidence log (drives `/collab:witness`). */
-export const DELEGATE_COMMAND = "/collab:delegate";
+export const DELEGATE_AGENT = "guild-build";
+/** The command label recorded in the evidence log (drives `/guild:witness`). */
+export const DELEGATE_COMMAND = "/guild:delegate";
 
 // --- Params + deps ---------------------------------------------------------
 export interface DelegateParams {
@@ -78,7 +78,7 @@ export interface DelegateDeps {
   messageTimeoutMs?: number;
   /**
    * The worktree the model edits — the project dir the serve was spawned from. Defaults to
-   * `COLLAB_PROJECT_DIR ?? cwd`, matching OpencodeLifecycle's own default so the snapshot
+   * `GUILD_PROJECT_DIR ?? cwd`, matching OpencodeLifecycle's own default so the snapshot
    * targets the SAME tree opencode mutates. Injected in tests to point at a disposable repo.
    */
   repoDir?: string;
@@ -158,7 +158,7 @@ export type DelegateResult = DelegateOk | DelegateFail;
 /** Resolve the worktree the model edits, matching OpencodeLifecycle's default. */
 function resolveRepoDir(deps: DelegateDeps, env: NodeJS.ProcessEnv, cwd: string): string {
   if (deps.repoDir && deps.repoDir.length > 0) return deps.repoDir;
-  if (env.COLLAB_PROJECT_DIR && env.COLLAB_PROJECT_DIR.length > 0) return env.COLLAB_PROJECT_DIR;
+  if (env.GUILD_PROJECT_DIR && env.GUILD_PROJECT_DIR.length > 0) return env.GUILD_PROJECT_DIR;
   return cwd;
 }
 
@@ -180,7 +180,7 @@ export async function delegate(
   const rootConflict = rootRes.conflict;
   const confContents = readConfContents(collabDir, env);
 
-  // 2. NO-FALLBACK def gate (deviation from bash C16). A missing collab-build def REFUSES
+  // 2. NO-FALLBACK def gate (deviation from bash C16). A missing guild-build def REFUSES
   //    loudly — never silently degrades to the UNRESTRICTED `build`. Refused before any log
   //    write (gap parity) and before any snapshot (nothing ran).
   const agentDefDir = resolveAgentDefDir({ env, cwd, confContents });
@@ -197,12 +197,12 @@ export async function delegate(
           `(${DELEGATE_AGENT}.md). Refusing to delegate: unlike the bash path there is NO ` +
           `fallback — and the write-path fallback would be the UNRESTRICTED built-in 'build' ` +
           `agent (all tools allowed), so silently degrading here is worse than on any read ` +
-          `path. Install the def (or set COLLAB_AGENT_DIR to where it lives) and retry.`,
+          `path. Install the def (or set GUILD_AGENT_DIR to where it lives) and retry.`,
       },
     };
   }
 
-  // 3. Resolve the model (param > COLLAB_MODEL env > conf > opencode default).
+  // 3. Resolve the model (param > GUILD_MODEL env > conf > opencode default).
   const requestedModel = resolveModel({ flag: params.model, env, confContents });
 
   // 4. Gate: leading-dash refusal (C12) THEN policy tier (C1–C7), all BEFORE any log write.
@@ -231,14 +231,14 @@ export async function delegate(
   //    worktree untouched — C36/C37). Nothing has been edited yet, so this is the baseline.
   const before = snapshotWorktree(repoDir);
 
-  // 6. The model turn, via the UNMODIFIED collab-build agent (shared spine + agent-mismatch).
+  // 6. The model turn, via the UNMODIFIED guild-build agent (shared spine + agent-mismatch).
   const outcome = await runAgentLifecycle(
     {
       question: params.task,
       requestedModel,
       agent: DELEGATE_AGENT,
       command: DELEGATE_COMMAND,
-      title: "collab_delegate",
+      title: "guild_delegate",
       runId,
       tier: gate.tier,
       confirmed: gate.confirmed,

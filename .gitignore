@@ -1,11 +1,11 @@
 # Local, per-user Claude Code settings (personal permission grants, etc.)
 .claude/settings.local.json
 
-# Per-user config written by /collab:configure (personal deny/ask/allow rules and
-# preferred models; the collab MCP tools read these). Never commit personal
-# prefs. The committed collab.conf.example is the template.
-collab/models.policy.local
-collab/collab.conf.local
+# Per-user config written by /guild:configure (personal deny/ask/allow rules and
+# preferred models; the guild MCP tools read these). Never commit personal
+# prefs. The committed modelguild.conf.example is the template.
+modelguild/models.policy.local
+modelguild/modelguild.conf.local
 
 # Secrets / local env — never commit these
 .env
@@ -29,12 +29,12 @@ dist/
 
 # Probe sentinels the verify scripts create (and normally clean up); ignore any that
 # linger if a run is interrupted mid-probe.
-.collab-*-probe.*
+.guild-*-probe.*
 
 # The evidence layer (src/log.ts): raw model calls, prompts and responses from
-# every /collab:consult, /collab:panel, /collab:delegate, etc. Local receipts — they hold
+# every /guild:consult, /guild:panel, /guild:delegate, etc. Local receipts — they hold
 # whatever repo context was pasted into a prompt, so they are never committed.
-collab/logs/
+modelguild/logs/
 
 # Host-side staging for selected devcontainer Claude config. Recreated before the
 # container starts; never commit personal config copied here.

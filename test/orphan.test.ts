@@ -2,14 +2,14 @@
  * FLAGSHIP ORPHAN TEST (PLAN.md M1 kill signal).
  *
  * Simulates Claude Code's teardown FAITHFULLY: it spawns the MCP server as a child
- * over stdio pipes (the way Claude Code does), drives one `collab_status` call to
+ * over stdio pipes (the way Claude Code does), drives one `guild_status` call to
  * bring `opencode serve` up and learn its pid, then tears the server down by CLOSING
  * THE CHILD'S STDIN WITH NO SIGNAL — never `kill()`, never SIGTERM/SIGINT. The serve
  * child (captured beforehand) must be dead within a grace window.
  *
  * This is driven twice through the SAME server code, differing by ONE variable:
  *   - production ("stdin" mode): stdin EOF is watched → serve dies fast. MUST be green.
- *   - spike ("spike" mode, COLLAB_TEARDOWN_MODE=spike): stdin is NOT watched, only the
+ *   - spike ("spike" mode, GUILD_TEARDOWN_MODE=spike): stdin is NOT watched, only the
  *     MCP transport.onclose + signal/exit backstop — the spike's approach. Because the
  *     SDK's StdioServerTransport never listens for stdin 'end'/'close', onclose does
  *     not fire on EOF and no signal is sent, so the serve is orphaned. MUST be red.
@@ -93,16 +93,16 @@ class HandRolledMcp {
     this.#send({ jsonrpc: "2.0", method: "notifications/initialized" });
   }
 
-  /** Call collab_status and return the parsed status payload (incl. serve pid). */
+  /** Call guild_status and return the parsed status payload (incl. serve pid). */
   async callStatus(): Promise<{ pid: number; port: number; agentCount: number; opencodeVersion: unknown }> {
     this.#send({
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "collab_status", arguments: {} },
+      params: { name: "guild_status", arguments: {} },
     });
     const resp = await this.#awaitId(2, SPAWN_MS);
-    if (resp.error) throw new Error(`collab_status errored: ${JSON.stringify(resp.error)}`);
+    if (resp.error) throw new Error(`guild_status errored: ${JSON.stringify(resp.error)}`);
     const result = resp.result as { content?: Array<{ type?: string; text?: string }> };
     const text = result?.content?.[0]?.text ?? "";
     return JSON.parse(text) as { pid: number; port: number; agentCount: number; opencodeVersion: unknown };
@@ -142,8 +142,8 @@ interface Outcome {
 
 /** Drive one call, capture the serve pid, close stdin (no signal), watch the serve. */
 async function driveThenCloseStdin(mode: "stdin" | "spike"): Promise<Outcome> {
-  const env: Record<string, string> = { COLLAB_PROJECT_DIR: repoRoot };
-  if (mode === "spike") env.COLLAB_TEARDOWN_MODE = "spike";
+  const env: Record<string, string> = { GUILD_PROJECT_DIR: repoRoot };
+  if (mode === "spike") env.GUILD_TEARDOWN_MODE = "spike";
   const mcp = new HandRolledMcp(serverEntry, env);
   try {
     await mcp.initialize();

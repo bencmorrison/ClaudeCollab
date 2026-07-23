@@ -1,15 +1,15 @@
 /**
- * M7 live smoke — collab_research (NOT part of `npm test`; run via `npm run test:live`).
+ * M7 live smoke — guild_research (NOT part of `npm test`; run via `npm run test:live`).
  *
  * Drives the REAL production research path: `research()` composes the M1 lifecycle, the
  * model policy (default-allow ⇒ a free model passes), the evidence layer, and the typed
- * client against the UNMODIFIED, web-capable `collab-research` agent, in a disposable
+ * client against the UNMODIFIED, web-capable `guild-research` agent, in a disposable
  * project carrying a planted marker file.
  *
  * The question is a REPO-FILE question (read marker.txt), NOT an egress-dependent web
- * query — web capability is already proven opencode-side by verify-collab-research.sh, and
+ * query — web capability is already proven opencode-side by verify-guild-research.sh, and
  * a network-dependent assertion would be flaky. We assert the marker round-trips byte-exact,
- * attribution names collab-research, and the run verifies under the TS verifier. A separate
+ * attribution names guild-research, and the run verifies under the TS verifier. A separate
  * check confirms the NO-FALLBACK def refusal fires live when the def is absent.
  *
  * Hygiene: free model only, timeout-bounded, benign canary, disposable dir.
@@ -38,10 +38,10 @@ async function main(): Promise<number> {
   const lc = new OpencodeLifecycle({ projectDir: scratch, idleMs: 0 });
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    COLLAB_ROOT: scratch, // no policy ⇒ default-allow
-    COLLAB_LOG_DIR: logDir,
-    COLLAB_LOG_PROMPTS: "full",
-    COLLAB_AGENT_DIR: agentDir,
+    GUILD_ROOT: scratch, // no policy ⇒ default-allow
+    GUILD_LOG_DIR: logDir,
+    GUILD_LOG_PROMPTS: "full",
+    GUILD_AGENT_DIR: agentDir,
   };
   let servePid: number | undefined;
 
@@ -59,8 +59,8 @@ async function main(): Promise<number> {
 
     // Now install the real hardened def and the marker file.
     await copyFile(
-      path.join(repoRoot, ".opencode", "agent", "collab-research.md"),
-      path.join(agentDir, "collab-research.md"),
+      path.join(repoRoot, ".opencode", "agent", "guild-research.md"),
+      path.join(agentDir, "guild-research.md"),
     );
     await writeFile(
       path.join(scratch, "marker.txt"),
@@ -86,7 +86,7 @@ async function main(): Promise<number> {
     if (result.ok) {
       console.log(`  model text: ${JSON.stringify(result.answer).slice(0, 200)}`);
       c.check(result.answer.includes(MARKER), `marker round-tripped through the research answer (${MARKER})`);
-      c.check(result.attribution.agent === "collab-research", "attribution names the collab-research agent");
+      c.check(result.attribution.agent === "guild-research", "attribution names the guild-research agent");
       c.check(result.attribution.model === FREE_MODEL, "exact-id attribution matches the requested model");
 
       const wire = researchToToolResult(result);

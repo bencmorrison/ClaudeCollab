@@ -12,7 +12,7 @@ bad() { printf 'FAIL: %s\n' "$*" >&2; failed=1; }
 # Explicitly labelled rename/collision history is retained below. All other
 # operational references, including elsewhere in those files, must be namespaced.
 user_files=(
-  .claude/commands/collab
+  .claude/commands/guild
   .devcontainer/Dockerfile
   .devcontainer/devcontainer.json
   .devcontainer/postCreate.sh
@@ -21,8 +21,8 @@ user_files=(
   PLAN.md
   README.md
   SECURITY.md
-  collab/collab.conf.example
-  collab/models.policy
+  modelguild/modelguild.conf.example
+  modelguild/models.policy
 )
 obsolete='(^|[^[:alnum:]_.-])/((configure-collab)|(consult|panel|workshop|review|research|delegate|collaborate|witness|configure|consensus))([[:space:]<`"'"'"'(,.:]|$)'
 obsolete_matches="$(grep -RInE --exclude=check-docs.sh "$obsolete" "${user_files[@]}" || true)"
@@ -30,10 +30,10 @@ obsolete_matches="$(printf '%s\n' "$obsolete_matches" | grep -Ev \
   '^AGENTS\.md:.*(where `/consult`, `/review` and `/panel`|Our `/review` was found colliding|Renamed from `/consensus`)|^PLAN\.md:.*(rename from `/consensus`|`/consensus` → `/collab:panel`|Found live: our `/review` was colliding)' || true)"
 if [ -n "$obsolete_matches" ]; then
   printf '%s\n' "$obsolete_matches" >&2
-  bad "obsolete unnamespaced command reference found; use /collab:<name>"
+  bad "obsolete unnamespaced command reference found; use /guild:<name>"
 fi
 
-if grep -RIn --include='*.md' 'Bash(bash collab/log\.sh:\*)' .claude/commands/collab README.md; then
+if grep -RIn --include='*.md' 'Bash(bash collab/log\.sh:\*)' .claude/commands/guild README.md; then
   bad "broad log.sh grant found; allow only required subcommands"
 fi
 
@@ -44,15 +44,15 @@ fi
 # responses). Assert each grants the MCP tool(s) it invokes. (bash 3.2 has no
 # associative arrays — the macOS CI job runs this lint — so use a case, not declare -A.)
 for command in panel workshop collaborate configure; do
-  file=".claude/commands/collab/$command.md"
+  file=".claude/commands/guild/$command.md"
   grep -Fq 'allowed-tools:' "$file" || bad "$command has no allowed-tools frontmatter"
-  # collab_models (M11) replaced the `Bash(opencode models:*)` binary shell-out in every
+  # guild_models (M11) replaced the `Bash(opencode models:*)` binary shell-out in every
   # doc that enumerates models — assert it is granted where it belongs.
   case "$command" in
-    panel)       mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_models" ;;
-    workshop)    mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_consult mcp__claudecollab__collab_models" ;;
-    collaborate) mcp_grants="mcp__claudecollab__collab_consult mcp__claudecollab__collab_models" ;;
-    configure)   mcp_grants="mcp__claudecollab__collab_models" ;;
+    panel)       mcp_grants="mcp__modelguild__guild_panel mcp__modelguild__guild_models" ;;
+    workshop)    mcp_grants="mcp__modelguild__guild_panel mcp__modelguild__guild_consult mcp__modelguild__guild_models" ;;
+    collaborate) mcp_grants="mcp__modelguild__guild_consult mcp__modelguild__guild_models" ;;
+    configure)   mcp_grants="mcp__modelguild__guild_models" ;;
     *)           mcp_grants="" ;;
   esac
   fm_line="$(grep -m1 '^allowed-tools:' "$file")"
@@ -64,25 +64,27 @@ done
 
 # Every command doc must touch ZERO collab bash (M12, bash layer retired): no ask.sh, no
 # log.sh, no panel-models.sh, and none of the old env-var invocation forms. The last
-# opencode-binary shell-out (`Bash(opencode models:*)`) was replaced by the collab_models
+# opencode-binary shell-out (`Bash(opencode models:*)`) was replaced by the guild_models
 # MCP tool, so a doc must not grant `Bash(opencode` either. (witness.md retired with the
-# witness; configure.md was migrated to the MCP tools + `claudecollab doctor` at M12.)
+# witness; configure.md was migrated to the MCP tools + `modelguild doctor` at M12.) The
+# forbidden bash patterns below name the RETIRED bash layer at its historical path
+# (`collab/ask.sh`, `COLLAB_RUN_ID`, …) on purpose — that is exactly the regression to catch.
 migrated_cmds=(consult panel research delegate review workshop collaborate configure)
 for command in "${migrated_cmds[@]}"; do
-  file=".claude/commands/collab/$command.md"
+  file=".claude/commands/guild/$command.md"
   if grep -nE 'collab/ask\.sh|collab/log\.sh|panel-models\.sh|COLLAB_RUN_ID|COLLAB_CONFIRMED' "$file"; then
     bad "$command still references collab bash; the migrated docs drive the MCP tools only"
   fi
   if grep -nE 'Bash\(opencode' "$file"; then
-    bad "$command still grants an opencode-binary Bash shell-out; use the collab_models MCP tool"
+    bad "$command still grants an opencode-binary Bash shell-out; use the guild_models MCP tool"
   fi
 done
 
-delegate=.claude/commands/collab/delegate.md
+delegate=.claude/commands/guild/delegate.md
 grep -m1 '^allowed-tools:' "$delegate" | grep -Fq 'Read' || bad "delegate patch review requires Read in allowed-tools"
 grep -Fq 'with the `Read` tool' "$delegate" || bad "delegate must review the recorded patch with Read"
 
-review=.claude/commands/collab/review.md
+review=.claude/commands/guild/review.md
 grep -m1 '^allowed-tools:' "$review" | grep -Fq 'Bash(git ls-files:*)' || bad "review uses git ls-files but does not grant it"
 
 lifecycle_files=(
@@ -90,8 +92,8 @@ lifecycle_files=(
   README.md
   SECURITY.md
   CONTRIBUTING.md
-  collab/collab.conf.example
-  .claude/commands/collab
+  modelguild/modelguild.conf.example
+  .claude/commands/guild
   .opencode/agent
 )
 if grep -RInE '([Tt]wo|2)[[:space:]]+(entries|writes|records|lines)[[:space:]]+per[[:space:]]+call|3 concurrent calls produce 6|three concurrent calls produce six|started\+completed sharing one' "${lifecycle_files[@]}"; then
@@ -118,13 +120,13 @@ if [ "${1:-}" = "--self-test" ]; then
   trap 'rm -rf "$tmp"' EXIT
   baseline="$tmp/baseline"
   mkdir -p "$baseline/.claude/commands" "$baseline/.devcontainer" \
-    "$baseline/.opencode" "$baseline/collab"
-  cp -a .claude/commands/collab "$baseline/.claude/commands/"
+    "$baseline/.opencode" "$baseline/modelguild"
+  cp -a .claude/commands/guild "$baseline/.claude/commands/"
   cp -a .opencode/agent "$baseline/.opencode/"
   cp -a AGENTS.md CONTRIBUTING.md PLAN.md README.md SECURITY.md install.sh "$baseline/"
   cp -a .devcontainer/Dockerfile .devcontainer/devcontainer.json \
     .devcontainer/postCreate.sh "$baseline/.devcontainer/"
-  cp -a collab/collab.conf.example collab/models.policy "$baseline/collab/"
+  cp -a modelguild/modelguild.conf.example modelguild/models.policy "$baseline/modelguild/"
 
   self_test_failed=0
   expect_rejected() {
@@ -149,25 +151,27 @@ if [ "${1:-}" = "--self-test" ]; then
 
   fixture="$tmp/missing-mcp-grant"
   cp -a "$baseline" "$fixture"
-  cat > "$fixture/.claude/commands/collab/panel.md" <<'EOF'
+  cat > "$fixture/.claude/commands/guild/panel.md" <<'EOF'
 ---
-allowed-tools: mcp__claudecollab__collab_consult, Task
+allowed-tools: mcp__modelguild__guild_consult, Task
 ---
 Ask the panel.
 EOF
-  expect_rejected "panel missing its collab_panel MCP grant" "$fixture"
+  expect_rejected "panel missing its guild_panel MCP grant" "$fixture"
 
   fixture="$tmp/migrated-doc-collab-bash"
   cp -a "$baseline" "$fixture"
+  # Inject the RETIRED bash invocation form (collab/ask.sh) to prove the lint still
+  # catches a doc that regresses to it — the forbidden pattern names the historical path.
   printf '\nRun `COLLAB_COMMAND=/collab:consult bash collab/ask.sh "q"`.\n' \
-    >> "$fixture/.claude/commands/collab/consult.md"
+    >> "$fixture/.claude/commands/guild/consult.md"
   expect_rejected "collab bash in a migrated command doc" "$fixture"
 
   fixture="$tmp/migrated-doc-opencode-bash"
   cp -a "$baseline" "$fixture"
-  cat > "$fixture/.claude/commands/collab/consult.md" <<'EOF'
+  cat > "$fixture/.claude/commands/guild/consult.md" <<'EOF'
 ---
-allowed-tools: mcp__claudecollab__collab_consult, Bash(opencode models:*), Task
+allowed-tools: mcp__modelguild__guild_consult, Bash(opencode models:*), Task
 ---
 Consult.
 EOF

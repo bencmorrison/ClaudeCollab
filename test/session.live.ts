@@ -38,8 +38,8 @@ async function setupProject(): Promise<string> {
   const scratch = await mkdtemp(path.join(tmpdir(), "collab-m7-sess-"));
   await mkdir(path.join(scratch, ".opencode", "agent"), { recursive: true });
   await copyFile(
-    path.join(repoRoot, ".opencode", "agent", "collab-read.md"),
-    path.join(scratch, ".opencode", "agent", "collab-read.md"),
+    path.join(repoRoot, ".opencode", "agent", "guild-read.md"),
+    path.join(scratch, ".opencode", "agent", "guild-read.md"),
   );
   return scratch;
 }
@@ -54,9 +54,9 @@ async function main(): Promise<number> {
   const scratchA = await setupProject();
   const envA: NodeJS.ProcessEnv = {
     ...process.env,
-    COLLAB_ROOT: scratchA,
-    COLLAB_LOG_DIR: path.join(scratchA, "logs"),
-    COLLAB_LOG_PROMPTS: "full",
+    GUILD_ROOT: scratchA,
+    GUILD_LOG_DIR: path.join(scratchA, "logs"),
+    GUILD_LOG_PROMPTS: "full",
   };
   const lcA = new OpencodeLifecycle({ projectDir: scratchA, idleMs: 0 });
   let pidA: number | undefined;
@@ -111,7 +111,7 @@ async function main(): Promise<number> {
     // Plant through serve #1, keep the session alive.
     const plant = await withTimeout(
       askViaAgent(lc1, {
-        agent: "collab-read",
+        agent: "guild-read",
         model: FREE_MODEL,
         prompt: `Remember this codeword for later: ${CODEWORD_B}. Reply with just "ok".`,
         keepSession: true,
@@ -136,7 +136,7 @@ async function main(): Promise<number> {
       const q = "What was the codeword I asked you to remember? Reply with ONLY the codeword.";
       const cont = await withTimeout(
         askViaAgent(lc2, {
-          agent: "collab-read",
+          agent: "guild-read",
           model: FREE_MODEL,
           prompt: q,
           sessionId: sessionB,

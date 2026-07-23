@@ -3,7 +3,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${CLAUDECOLLAB_HOST_CONFIG_STAGE:-$repo_root/.devcontainer/.host-config}"
+stage="${MODELGUILD_HOST_CONFIG_STAGE:-$repo_root/.devcontainer/.host-config}"
 source_dir="${HOME}/.claude"
 
 [ -d "$source_dir" ] || exit 0

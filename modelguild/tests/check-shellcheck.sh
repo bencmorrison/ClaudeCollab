@@ -8,7 +8,7 @@
 #
 # It inspects every file git tracks whose first two bytes are `#!` — not just *.sh —
 # the same robust gathering check-shebangs.sh uses, so an extension-less script (like
-# collab/tests/fake-opencode) is covered too. Every such file is asserted to be a
+# modelguild/tests/fake-opencode) is covered too. Every such file is asserted to be a
 # `#!/usr/bin/env bash` script by check-shebangs.sh, so linting them all as bash is safe.
 #
 # Skips cleanly (exit 0) when shellcheck is not installed: shellcheck is a static
@@ -17,8 +17,8 @@
 # Install locally with:  brew install shellcheck   (or: apt-get install shellcheck)
 #
 # Usage:
-#   bash collab/tests/check-shellcheck.sh            # every tracked shell script
-#   bash collab/tests/check-shellcheck.sh <file>...  # only these (used by the tests)
+#   bash modelguild/tests/check-shellcheck.sh            # every tracked shell script
+#   bash modelguild/tests/check-shellcheck.sh <file>...  # only these (used by the tests)
 # Exit 0 = clean (or shellcheck absent); non-zero = ShellCheck found a warning+.
 set -uo pipefail
 
@@ -32,7 +32,7 @@ if [ "${1:-}" = "--self-test" ]; then
   st_fail=0
   st_ok() { printf '\033[32mok\033[0m   self-test: %s\n' "$1"; }
   st_no() { printf '\033[31mFAIL\033[0m self-test: %s\n' "$1"; st_fail=1; }
-  d="$(mktemp -d "${TMPDIR:-/tmp}/collab-scc.XXXXXX")"
+  d="$(mktemp -d "${TMPDIR:-/tmp}/modelguild-scc.XXXXXX")"
   # Skip-when-absent: an empty PATH makes shellcheck genuinely absent (the script runs no
   # external command before its skip-and-exit); bash is invoked by absolute path so the
   # child still starts. Stripping shellcheck's dir from PATH is unreliable on usrmerge Linux.

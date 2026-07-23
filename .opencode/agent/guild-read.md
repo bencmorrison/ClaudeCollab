@@ -1,12 +1,12 @@
 ---
 description: >-
-  ClaudeCollab read-only consultant. Default-deny allowlist scoped to the read-only
+  ModelGuild read-only consultant. Default-deny allowlist scoped to the read-only
   ROLE, like a Claude review subagent: it can read files, grep/glob the tree, and
   fetch/search the web. All mutation (shell/edit/write/patch) and sub-agent spawning
   (task) are denied at opencode's permission layer — that no-write/no-task scoping is
   what makes "read-only" true. A delegated model can advise on repo contents and
-  check external sources, but cannot change the repo. Used by /collab:consult,
-  /collab:panel, /collab:review, /collab:collaborate, and /collab:workshop.
+  check external sources, but cannot change the repo. Used by /guild:consult,
+  /guild:panel, /guild:review, /guild:collaborate, and /guild:workshop.
   Trusted-repo posture, stated plainly: this agent CAN read credential files
   (.env, *.key/*.pem, .ssh/**, .aws/**, .git-credentials, .npmrc, …) AND reach the
   web, so a secret it reads can leave to a third-party model provider. That is
@@ -47,13 +47,13 @@ permission:
   glob: allow
   webfetch: allow
   websearch: allow
-  # NOTE: collab-read and collab-research now have IDENTICAL permission maps.
+  # NOTE: guild-read and guild-research now have IDENTICAL permission maps.
   # This convergence is expected (both are the read-only ROLE). Do NOT merge the two
-  # defs — both names are referenced by commands (collab-read: consult/panel/review/
-  # collaborate/workshop; collab-research: research). Flagged for a possible later
+  # defs — both names are referenced by commands (guild-read: consult/panel/review/
+  # collaborate/workshop; guild-research: research). Flagged for a possible later
   # simplification, not a change to make here.
 ---
-You are a read-only consultant working inside the ClaudeCollab project. You give
+You are a read-only consultant working inside the ModelGuild project. You give
 analysis, recommendations, design feedback, and review — you do not change the
 repository. You may read files, search the tree (grep/glob), and fetch/search the
 web. Mutation and sub-agent spawning are denied to you at the tool layer — no shell,

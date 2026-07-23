@@ -1,10 +1,10 @@
 /**
- * collab_consult tests (PLAN.md M5; CONTRACT.md C1–C7, C12, C22–C25, C31, C41, C45)
+ * guild_consult tests (PLAN.md M5; CONTRACT.md C1–C7, C12, C22–C25, C31, C41, C45)
  * — OFFLINE.
  *
  * No model is called: the model turn is served by the `node:http` fake
  * (test/fake-opencode-server.ts) behind a `ServeProvider`, exactly like the M2 client
- * tests. The evidence layer writes to a temp COLLAB_LOG_DIR, and the flagship case
+ * tests. The evidence layer writes to a temp GUILD_LOG_DIR, and the flagship case
  * verifies a TOOL-PRODUCED run with the TS `verify()` (the reference verifier; the bash
  * `collab/log.sh verify` it was cross-checked against retired at M12).
  */
@@ -57,10 +57,10 @@ function makeCollabRoot(): string {
   return root;
 }
 
-/** A clean env: process.env minus every COLLAB_* knob, then the given overrides. */
+/** A clean env: process.env minus every GUILD_* knob, then the given overrides. */
 function envWith(overrides: Record<string, string>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = { ...process.env };
-  for (const k of Object.keys(base)) if (k.startsWith("COLLAB_")) delete base[k];
+  for (const k of Object.keys(base)) if (k.startsWith("GUILD_")) delete base[k];
   return { ...base, ...overrides };
 }
 
@@ -78,7 +78,7 @@ function readEntries(logDir: string, runId: string): Array<Record<string, unknow
 
 export async function run(): Promise<number> {
   const c = new Checker();
-  console.log("== consult.test (M5 collab_consult) ==");
+  console.log("== consult.test (M5 guild_consult) ==");
 
   // -------------------------------------------------------------------------
   // 1. Policy DENY → structured error (exit-3 analogue); NOTHING logged (C7/C24).
@@ -86,7 +86,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
     const fake = await startFakeOpencode({ historyText: "should never be reached" });
     try {
       const r = await consult(
@@ -115,7 +115,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
       const r = await consult(
@@ -143,12 +143,12 @@ export async function run(): Promise<number> {
   }
 
   // -------------------------------------------------------------------------
-  // 3. ASK + confirmed:true → proceeds (the user-approval analogue of COLLAB_CONFIRMED).
+  // 3. ASK + confirmed:true → proceeds (the user-approval analogue of GUILD_CONFIRMED).
   // -------------------------------------------------------------------------
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "approved answer" });
     try {
       const r = await consult(
@@ -180,7 +180,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "the second opinion", syncText: "SYNC-MUST-NOT-LEAK" });
     try {
       const r = await consult(
@@ -192,7 +192,7 @@ export async function run(): Promise<number> {
         const runId = r.attribution.runId;
         c.check(runId.length > 0, "allow: a run id was minted");
         c.check(r.answer === "the second opinion", "allow: answer is the history text (not the sync body)");
-        c.check(r.attribution.agent === "collab-read", "allow: attribution names the UNMODIFIED collab-read agent");
+        c.check(r.attribution.agent === "guild-read", "allow: attribution names the UNMODIFIED guild-read agent");
         c.check(r.attribution.model === "openai/allow-model", "allow: exact-id attribution (C45)");
         c.check(r.attribution.callId.length > 0, "allow: a call id is attributed");
 
@@ -226,7 +226,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
     const fake = await startFakeOpencode({ historyText: AWKWARD });
     try {
       const r = await consult(
@@ -259,7 +259,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
     const fake = await startFakeOpencode({ historyText: "" });
     try {
       const r = await consult(
@@ -288,7 +288,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
     const fake = await startFakeOpencode({ historyText: "x", failMessage: true });
     try {
       const r = await consult(
@@ -324,7 +324,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "answer" });
     try {
       const r1 = await consult(
@@ -352,23 +352,23 @@ export async function run(): Promise<number> {
   }
 
   // -------------------------------------------------------------------------
-  // 9. Multi-root conflict surfaces in collab_status (the M4 "doctor MUST warn").
+  // 9. Multi-root conflict surfaces in guild_status (the M4 "doctor MUST warn").
   // -------------------------------------------------------------------------
   {
-    // Two roots on disk: <cwd>/collab and <home>/.claude/collab, no COLLAB_ROOT.
+    // Two roots on disk: <cwd>/modelguild and <home>/.claude/modelguild, no GUILD_ROOT.
     const cwd = tmp("m5-proj-");
-    mkdirSync(path.join(cwd, "collab"), { recursive: true });
+    mkdirSync(path.join(cwd, "modelguild"), { recursive: true });
     const home = tmp("m5-home-");
-    mkdirSync(path.join(home, ".claude", "collab"), { recursive: true });
-    const env = envWith({}); // no COLLAB_ROOT
+    mkdirSync(path.join(home, ".claude", "modelguild"), { recursive: true });
+    const env = envWith({}); // no GUILD_ROOT
 
     const seed = collabDoctorSeed(env, cwd, home);
     c.check(seed.collabRoot.source === "project", "conflict: the project root wins");
     c.check(typeof seed.collabRoot.conflict === "string", "conflict: a conflict warning is surfaced");
     if (typeof seed.collabRoot.conflict === "string") {
-      c.check(seed.collabRoot.conflict.includes(path.join(cwd, "collab")), "conflict: names the winning root");
+      c.check(seed.collabRoot.conflict.includes(path.join(cwd, "modelguild")), "conflict: names the winning root");
       c.check(
-        seed.collabRoot.conflict.includes(path.join(home, ".claude", "collab")) &&
+        seed.collabRoot.conflict.includes(path.join(home, ".claude", "modelguild")) &&
           /shadow/i.test(seed.collabRoot.conflict),
         "conflict: names the shadowed root",
       );
@@ -377,7 +377,7 @@ export async function run(): Promise<number> {
     c.check(typeof seed.logging.enabled === "boolean" && typeof seed.logging.logDir === "string", "conflict: logging on/off + log dir reported");
 
     // Single root → no conflict.
-    const single = collabDoctorSeed(envWith({ COLLAB_ROOT: path.join(cwd, "collab") }), cwd, home);
+    const single = collabDoctorSeed(envWith({ GUILD_ROOT: path.join(cwd, "modelguild") }), cwd, home);
     c.check(single.collabRoot.conflict === null, "conflict: an explicit single root reports no conflict");
   }
 
@@ -388,7 +388,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
       const r = await consult(
@@ -408,13 +408,13 @@ export async function run(): Promise<number> {
   }
 
   // -------------------------------------------------------------------------
-  // 11. COLLAB_LOG=off + a THROWING serve → no crash; call-failed returned; nothing
+  // 11. GUILD_LOG=off + a THROWING serve → no crash; call-failed returned; nothing
   //     logged (logging disabled means every log hook short-circuits, C31 posture).
   // -------------------------------------------------------------------------
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG: "off" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG: "off" });
     const fake = await startFakeOpencode({ historyText: "x", failMessage: true });
     try {
       let threw = false;
@@ -446,7 +446,7 @@ export async function run(): Promise<number> {
     // `deny -*` would ALSO deny the dash-leading id — but model-id is checked first.
     writeFileSync(path.join(root, "models.policy.local"), "# double-refusal\ndeny -*\n");
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
       const r = await consult(
@@ -473,7 +473,7 @@ export async function run(): Promise<number> {
   {
     const root = tmp("m5-collab-"); // no policy ⇒ default-allow
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "turn answer" });
     try {
       // Round 1: keepSession → session id returned, session NOT deleted yet.
@@ -527,7 +527,7 @@ export async function run(): Promise<number> {
   {
     const root = tmp("m5-collab-"); // default-allow
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir, COLLAB_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
     const fake = await startFakeOpencode({ historyText: "FULL-ACCESS ANSWER", servedAgent: "build" });
     try {
       const r = await consult(
@@ -537,7 +537,7 @@ export async function run(): Promise<number> {
       c.check(!r.ok, "mismatch: consult fails closed");
       if (!r.ok) {
         c.check(r.error.kind === "agent-mismatch", "mismatch: kind is agent-mismatch");
-        c.check(r.error.message.includes("collab-read") && r.error.message.includes("build"), "mismatch: message names requested (collab-read) and served (build)");
+        c.check(r.error.message.includes("guild-read") && r.error.message.includes("build"), "mismatch: message names requested (guild-read) and served (build)");
         c.check(!("answer" in r), "mismatch: NO answer field on the failure result");
       }
       const wire = consultToToolResult(r);
@@ -565,8 +565,8 @@ export async function run(): Promise<number> {
   {
     const root = tmp("m5-collab-");
     const logDir = tmp("m5-logs-");
-    const env = envWith({ COLLAB_ROOT: root, COLLAB_LOG_DIR: logDir });
-    const fake = await startFakeOpencode({ historyText: "read-only answer", servedAgent: "collab-read" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const fake = await startFakeOpencode({ historyText: "read-only answer", servedAgent: "guild-read" });
     try {
       const r = await consult(
         { question: "q", model: "openai/gpt-fake" },

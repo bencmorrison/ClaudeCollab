@@ -12,12 +12,12 @@
 #   EXPLICITLY to exercise the 3.2 worst case — see PLAN.md portability notes.)
 #
 # It inspects every file git tracks whose first two bytes are `#!` — not just
-# *.sh — so an extension-less script (like collab/tests/fake-opencode) can't slip
+# *.sh — so an extension-less script (like modelguild/tests/fake-opencode) can't slip
 # through, and neither can a future one.
 #
 # Usage:
-#   bash collab/tests/check-shebangs.sh            # every tracked file
-#   bash collab/tests/check-shebangs.sh <file>...  # only these (used by tests)
+#   bash modelguild/tests/check-shebangs.sh            # every tracked file
+#   bash modelguild/tests/check-shebangs.sh <file>...  # only these (used by tests)
 # Exit 0 = every shebang conforms.
 set -uo pipefail
 
@@ -34,7 +34,7 @@ if [ "${1:-}" = "--self-test" ]; then
   st_fail=0
   st_ok() { printf '\033[32mok\033[0m   self-test: %s\n' "$1"; }
   st_no() { printf '\033[31mFAIL\033[0m self-test: %s\n' "$1"; st_fail=1; }
-  d="$(mktemp -d "${TMPDIR:-/tmp}/collab-shb.XXXXXX")"
+  d="$(mktemp -d "${TMPDIR:-/tmp}/modelguild-shb.XXXXXX")"
   printf '#!/usr/bin/env bash\necho hi\n' > "$d/good.sh"
   bash "$self" "$d/good.sh" >/dev/null 2>&1 && st_ok "accepts #!/usr/bin/env bash" || st_no "rejects the correct form (false positive)"
   printf '#!/bin/bash\necho hi\n' > "$d/bad.sh"

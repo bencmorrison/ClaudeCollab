@@ -1,7 +1,7 @@
 /**
- * log.ts — the ClaudeCollab evidence layer, ported from `collab/log.sh` (PLAN.md M3).
+ * log.ts — the ModelGuild evidence layer, ported from `collab/log.sh` (PLAN.md M3).
  *
- * WHY A PORT, NOT A REWRITE. The log is the ONLY data source a watcher (`/collab:witness`)
+ * WHY A PORT, NOT A REWRITE. The log is the ONLY data source a watcher (`/guild:witness`)
  * audits instead of Claude's own summary, so its integrity is the whole honesty story.
  * The bash `log.sh` is the oracle (CONTRACT.md area D, C22–C35); this module mirrors its
  * schema, hashing, and verify semantics BYTE-FOR-BYTE so that:
@@ -70,7 +70,7 @@ export type PolicyTier = "allow" | "ask" | "deny";
 
 /**
  * `tier` / `confirmed` on a `started`/`completed` entry — a DELIBERATE positive-direction
- * addition OVER the bash oracle (bash records neither). Without them, `/collab:witness`
+ * addition OVER the bash oracle (bash records neither). Without them, `/guild:witness`
  * cannot audit whether an ask-tier model was consulted with claimed user approval. They
  * are OPTIONAL: emitted only when the caller supplies them, so allow-tier and legacy
  * (bash-written) entries carry neither key. Both verifiers accept entries with or without
@@ -114,7 +114,7 @@ export interface VerifyResult {
 }
 
 // ---------------------------------------------------------------------------
-// Environment / config resolution (env override > collab.conf.local > default),
+// Environment / config resolution (env override > modelguild.conf.local > default),
 // mirroring log.sh's cfg()/conf_get() exactly (C35).
 // ---------------------------------------------------------------------------
 
@@ -123,13 +123,13 @@ export interface EvidenceLogOptions {
   env?: NodeJS.ProcessEnv;
   /** Working directory (for project-key derivation under partitioning). Default cwd. */
   cwd?: string;
-  /** The install's `collab/` dir — home of `collab.conf.local` and the default
+  /** The install's `modelguild/` dir — home of `modelguild.conf.local` and the default
    * `logs/` root, mirroring bash `here`. Default: `<cwd>/collab`. */
   collabDir?: string;
 }
 
 /**
- * Parse one KEY's value from a `collab.conf.local`-style file, byte-identically to
+ * Parse one KEY's value from a `modelguild.conf.local`-style file, byte-identically to
  * log.sh's `conf_get` awk: strip leading whitespace on each line; skip `#`-comment and
  * `=`-less lines; key = text before the first `=` with ALL whitespace removed; value =
  * text after `=` with a trailing ` # comment` stripped, then trimmed, then ONE layer of
@@ -169,12 +169,12 @@ export class EvidenceLog {
   constructor(opts: EvidenceLogOptions = {}) {
     this.#env = opts.env ?? process.env;
     this.#cwd = opts.cwd ?? process.cwd();
-    this.#collabDir = opts.collabDir ?? path.join(this.#cwd, "collab");
-    // Conf file resolution mirrors log.sh: COLLAB_CONF > <collabDir>/collab.conf.local.
-    const confEnv = this.#env.COLLAB_CONF;
+    this.#collabDir = opts.collabDir ?? path.join(this.#cwd, "modelguild");
+    // Conf file resolution mirrors log.sh: GUILD_CONF > <collabDir>/modelguild.conf.local.
+    const confEnv = this.#env.GUILD_CONF;
     if (confEnv) this.#confFile = confEnv;
     else {
-      const local = path.join(this.#collabDir, "collab.conf.local");
+      const local = path.join(this.#collabDir, "modelguild.conf.local");
       this.#confFile = existsSync(local) ? local : undefined;
     }
   }
@@ -200,25 +200,25 @@ export class EvidenceLog {
   }
 
   #disabled(): boolean {
-    return this.#cfg("COLLAB_LOG", "on") === "off";
+    return this.#cfg("GUILD_LOG", "on") === "off";
   }
 
   #promptMode(): PromptMode {
-    const m = this.#cfg("COLLAB_LOG_PROMPTS", "full");
+    const m = this.#cfg("GUILD_LOG_PROMPTS", "full");
     return m === "hash" || m === "off" ? m : "full";
   }
 
-  /** The base log root, honoring an explicit COLLAB_LOG_DIR and opt-in partitioning. */
+  /** The base log root, honoring an explicit GUILD_LOG_DIR and opt-in partitioning. */
   #logDir(): string {
-    const explicit = this.#cfg("COLLAB_LOG_DIR", "");
+    const explicit = this.#cfg("GUILD_LOG_DIR", "");
     if (explicit !== "") return explicit;
     const base = path.join(this.#collabDir, "logs");
-    // Partition only when the root is OUR default (no explicit COLLAB_LOG_DIR in env
+    // Partition only when the root is OUR default (no explicit GUILD_LOG_DIR in env
     // OR conf), mirroring log.sh's guard exactly.
-    const envLd = this.#env.COLLAB_LOG_DIR;
-    const confLd = confGet(this.#confRead(), "COLLAB_LOG_DIR");
+    const envLd = this.#env.GUILD_LOG_DIR;
+    const confLd = confGet(this.#confRead(), "GUILD_LOG_DIR");
     if (
-      this.#cfg("COLLAB_LOG_PARTITION", "") === "1" &&
+      this.#cfg("GUILD_LOG_PARTITION", "") === "1" &&
       (envLd === undefined || envLd === "") &&
       confLd === ""
     ) {
@@ -256,7 +256,7 @@ export class EvidenceLog {
 
   #resolveRun(runId?: string): string {
     if (runId) return runId;
-    const ambient = this.#env.COLLAB_RUN_ID;
+    const ambient = this.#env.GUILD_RUN_ID;
     if (ambient) return ambient;
     return `${nowStamp()}-${randHex()}`;
   }
@@ -300,7 +300,7 @@ export class EvidenceLog {
     const acquired = await acquireLock(lock);
     if (!acquired) {
       process.stderr.write(
-        "collab: log lock busy for 10s — DROPPING this entry rather than risk a torn append (verify will show the gap).\n",
+        "modelguild: log lock busy for 10s — DROPPING this entry rather than risk a torn append (verify will show the gap).\n",
       );
       return { ok: false };
     }
@@ -353,15 +353,15 @@ export class EvidenceLog {
     return path.join(this.#runDir(this.#resolveRun(runId)), "calls.jsonl");
   }
 
-  /** Whether the evidence layer is on (COLLAB_LOG != "off"). Read-only; no side
-   * effects. Exposed for diagnostics (collab_status / doctor) so the "logging on/off"
+  /** Whether the evidence layer is on (GUILD_LOG != "off"). Read-only; no side
+   * effects. Exposed for diagnostics (guild_status / doctor) so the "logging on/off"
    * report reuses the SAME cfg() resolution as every write path, rather than a second
    * copy that could drift from C35's env>conf>default order. */
   enabled(): boolean {
     return !this.#disabled();
   }
 
-  /** The effective log root after COLLAB_LOG_DIR + partitioning resolution — the exact
+  /** The effective log root after GUILD_LOG_DIR + partitioning resolution — the exact
    * directory writes land under. Read-only; for the same diagnostic reason as `enabled`. */
   logDir(): string {
     return this.#logDir();
@@ -382,7 +382,7 @@ export class EvidenceLog {
   // Mutating subcommands
   // =========================================================================
 
-  /** Mint a FRESH run id (deliberately ignoring an ambient COLLAB_RUN_ID — asking for a
+  /** Mint a FRESH run id (deliberately ignoring an ambient GUILD_RUN_ID — asking for a
    * new run and getting the current one would silently merge two audit units), create
    * its dir, write meta.json, prune old runs, and return the id. Empty string when
    * logging is disabled. Never throws. */
@@ -401,7 +401,7 @@ export class EvidenceLog {
       } catch {
         /* meta is best-effort */
       }
-      const days = parseInt(this.#cfg("COLLAB_LOG_RETENTION_DAYS", "14"), 10);
+      const days = parseInt(this.#cfg("GUILD_LOG_RETENTION_DAYS", "14"), 10);
       this.prune(Number.isFinite(days) ? days : 14);
       return rid;
     } catch (err) {
@@ -440,7 +440,7 @@ export class EvidenceLog {
   }
 
   /** Record the start of a model call and stamp its turn (C22/C23/C26). Returns the
-   * turn. Prompt privacy per COLLAB_LOG_PROMPTS: full ⇒ text + digest; hash ⇒ digest
+   * turn. Prompt privacy per GUILD_LOG_PROMPTS: full ⇒ text + digest; hash ⇒ digest
    * only; off ⇒ neither. */
   async started(args: {
     callId: string;
@@ -896,7 +896,7 @@ export class EvidenceLog {
   prune(days?: number): void {
     try {
       const d =
-        days ?? parseInt(this.#cfg("COLLAB_LOG_RETENTION_DAYS", "14"), 10);
+        days ?? parseInt(this.#cfg("GUILD_LOG_RETENTION_DAYS", "14"), 10);
       if (!Number.isFinite(d) || d <= 0) return;
       const dir = this.#logDir();
       if (!existsSync(dir)) return;
@@ -968,7 +968,7 @@ function countOccurrences2(haystack: string, re: RegExp): number {
 }
 
 function warn(where: string, err: unknown): void {
-  process.stderr.write(`collab: log ${where} failed (best-effort, call unaffected): ${String(err)}\n`);
+  process.stderr.write(`modelguild: log ${where} failed (best-effort, call unaffected): ${String(err)}\n`);
 }
 
 /** True if any string in a parsed JSON value is NOT well-formed UTF-16 — i.e. carries a
@@ -994,7 +994,7 @@ function containsLoneSurrogate(value: JsonValue): boolean {
 }
 
 function fail(msg: string): WriteResult {
-  process.stderr.write(`collab: log ${msg}\n`);
+  process.stderr.write(`modelguild: log ${msg}\n`);
   return { ok: false, error: msg };
 }
 

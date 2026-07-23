@@ -1,6 +1,6 @@
-# collab/models.policy — committed default policy for models used by
-# /collab:consult, /collab:panel, /collab:workshop, /collab:review,
-# /collab:research, /collab:delegate, and /collab:collaborate.
+# modelguild/models.policy — committed default policy for models used by
+# /guild:consult, /guild:panel, /guild:workshop, /guild:review,
+# /guild:research, /guild:delegate, and /guild:collaborate.
 #
 # Format:  <tier>  <glob-pattern>        # optional comment
 #   tier    = deny | ask | allow
@@ -8,15 +8,15 @@
 #             (e.g. openai/gpt-5.6-sol, opencode/deepseek-v4-flash-free)
 #
 # FIRST MATCH WINS, top to bottom. Put specific rules above broad ones.
-#   deny   — the collab tools hard-refuse to run this model (the call returns isError).
+#   deny   — the guild tools hard-refuse to run this model (the call returns isError).
 #   ask    — Claude must confirm with you before using it (the tool call carries
 #            confirmed:true, which Claude sets only after you approve).
 #   allow  — use freely.
 #
 # Ships permissive (default-allow). Uncomment / edit to gate what YOU care about,
-# or run `/collab:configure` for guided setup. Effective resolution is
-# $COLLAB_POLICY when set, otherwise a ruleful git-ignored
-# collab/models.policy.local, otherwise THIS shared/committed default. An empty or
+# or run `/guild:configure` for guided setup. Effective resolution is
+# $GUILD_POLICY when set, otherwise a ruleful git-ignored
+# modelguild/models.policy.local, otherwise THIS shared/committed default. An empty or
 # comment-only local file does not override this file.
 # Note: a call with no explicit model uses opencode's default model, whose id isn't
 # known here, so it can't be policed — pass a model to bring it under policy.

@@ -1,4 +1,4 @@
-# ClaudeCollab dev container.
+# ModelGuild dev container.
 # Node base (Claude Code and opencode are both distributed via npm) with a few CLI
 # conveniences preinstalled. The two agents are NOT installed here — postCreate.sh
 # installs them at container-create time, because a RUN layer would be cached and
@@ -6,7 +6,7 @@
 FROM mcr.microsoft.com/devcontainers/javascript-node:22
 
 # CLI tools the slash commands and general dev work lean on.
-#   jq       — /collab:collaborate (--emit-session) and the verify scripts
+#   jq       — /guild:collaborate (--emit-session) and the verify scripts
 #   ripgrep  — fast search
 #   less     — pager
 #   shellcheck — the lint CI enforces over all *.sh; installed here so the same

@@ -7,7 +7,7 @@ name: Publish to npm
 #
 # ONE-TIME SETUP (maintainer, on npmjs.com):
 #   Package settings -> Trusted Publishers -> add a GitHub Actions publisher for
-#   repo `bencmorrison/ClaudeCollab`, workflow `publish.yml`. Trusted publishing
+#   repo `bencmorrison/modelguild`, workflow `publish.yml`. Trusted publishing
 #   requires the package to already exist, so publish 0.5.0 MANUALLY once
 #   (`npm publish`), then configure the trusted publisher; every subsequent
 #   `git tag vX.Y.Z && git push origin vX.Y.Z` auto-publishes.

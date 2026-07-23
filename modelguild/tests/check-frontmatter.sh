@@ -5,7 +5,7 @@
 # make the file do its job. Catches a dropped fence or a renamed/typo'd key before
 # it silently breaks a slash command or an agent's permission map.
 #
-# Run:  bash collab/tests/check-frontmatter.sh   (exit 0 = all valid)
+# Run:  bash modelguild/tests/check-frontmatter.sh   (exit 0 = all valid)
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,7 +41,7 @@ check() {  # <file> <key1> [key2 ...]
 
 echo "== slash commands (.claude/commands/**/*.md) =="
 shopt -s nullglob
-# Recursive on purpose: the commands live in .claude/commands/collab/. A flat glob
+# Recursive on purpose: the commands live in .claude/commands/guild/. A flat glob
 # would match nothing and this lint would "pass" by checking zero files — a green
 # tick for an empty set is worse than a red one. The count assertion below is what
 # makes that impossible.

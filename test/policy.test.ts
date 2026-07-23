@@ -6,7 +6,7 @@
  * model ids asserts the `policyTier` verdict against the expected tier, case by case.
  *
  * The glob semantics are still pinned against real bash: `bashGlobMatch` is cross-checked
- * against a live bash `case … in <pat>)` (a shell builtin, not a ClaudeCollab script) over
+ * against a live bash `case … in <pat>)` (a shell builtin, not a ModelGuild script) over
  * a pattern×string grid, proving `*`/`?` cross `/`, `[...]` ranges/negation, and POSIX-ish
  * edges match bash's own matcher, not minimatch.
  */
@@ -45,10 +45,10 @@ function bashCaseGlob(pattern: string, subject: string): boolean {
   return r.status === 0;
 }
 
-/** Build a `<dir>/collab/` with the given policy files, return the collab dir. */
+/** Build a `<dir>/modelguild/` with the given policy files, return the collab dir. */
 function makeCollabDir(files: { policy?: string; local?: string }): string {
   const base = tmp();
-  const collab = path.join(base, "collab");
+  const collab = path.join(base, "modelguild");
   spawnSync("mkdir", ["-p", collab]);
   if (files.policy !== undefined) writeFileSync(path.join(collab, "models.policy"), files.policy);
   if (files.local !== undefined) writeFileSync(path.join(collab, "models.policy.local"), files.local);
@@ -58,7 +58,7 @@ function makeCollabDir(files: { policy?: string; local?: string }): string {
 interface Scenario {
   name: string;
   files: { policy?: string; local?: string };
-  /** env applied to TS resolution (only COLLAB_POLICY matters). */
+  /** env applied to TS resolution (only GUILD_POLICY matters). */
   env?: Record<string, string>;
   /** map absolute path of a policy file to chmod 000 (unreadable-fails-closed). */
   chmodZero?: "policy" | "local";
@@ -159,8 +159,8 @@ export async function run(): Promise<number> {
       const r1 = resolvePolicyFile(c, {});
       t.check(r1.source === "local" && r1.file.endsWith("models.policy.local"),
         "resolve: ruleful .local is preferred (source=local)");
-      const r2 = resolvePolicyFile(c, { COLLAB_POLICY: "/some/override" } as NodeJS.ProcessEnv);
-      t.check(r2.source === "env" && r2.file === "/some/override", "resolve: $COLLAB_POLICY wins (source=env)");
+      const r2 = resolvePolicyFile(c, { GUILD_POLICY: "/some/override" } as NodeJS.ProcessEnv);
+      t.check(r2.source === "env" && r2.file === "/some/override", "resolve: $GUILD_POLICY wins (source=env)");
       const c2 = makeCollabDir({ policy: "allow *\n", local: "# empty\n" });
       const r3 = resolvePolicyFile(c2, {});
       t.check(r3.source === "committed" && r3.file.endsWith("models.policy"),
@@ -174,7 +174,7 @@ export async function run(): Promise<number> {
         "policyTier: no policy file → allow (C4)");
       const dec = policyTier("openai/x", {
         collabDir: makeCollabDir({}),
-        env: { COLLAB_POLICY: makeMalformedFile() } as NodeJS.ProcessEnv,
+        env: { GUILD_POLICY: makeMalformedFile() } as NodeJS.ProcessEnv,
       });
       t.check(dec.tier === "deny" && !!dec.reason && /malformed/.test(dec.reason),
         "policyTier: selected malformed file → deny with loud reason (C6)");
@@ -251,7 +251,7 @@ export async function run(): Promise<number> {
         cases: [{ model: "openai/gpt-5.5", expect: "deny" }],
       },
       {
-        name: "$COLLAB_POLICY overrides both files",
+        name: "$GUILD_POLICY overrides both files",
         files: { policy: "deny openai/gpt-5.5\n", local: "deny openai/gpt-5.5\n" },
         env: {}, // filled per-scenario below via envPolicy
         cases: [{ model: "openai/gpt-5.5", expect: "allow" }],
@@ -305,13 +305,13 @@ export async function run(): Promise<number> {
       const collab = makeCollabDir(sc.files);
       let env: Record<string, string> = { ...(sc.env ?? {}) };
 
-      // Scenarios that need a $COLLAB_POLICY file created on the fly.
-      if (sc.name.startsWith("$COLLAB_POLICY overrides")) {
-        env.COLLAB_POLICY = writeTmpPolicy("allow *\n");
+      // Scenarios that need a $GUILD_POLICY file created on the fly.
+      if (sc.name.startsWith("$GUILD_POLICY overrides")) {
+        env.GUILD_POLICY = writeTmpPolicy("allow *\n");
       } else if (sc.name === "no trailing newline on final rule") {
-        env.COLLAB_POLICY = writeTmpPolicy("ask google/x\ndeny openai/gpt-5.5"); // no final \n
+        env.GUILD_POLICY = writeTmpPolicy("ask google/x\ndeny openai/gpt-5.5"); // no final \n
       } else if (sc.name === "malformed selected file fails closed") {
-        env.COLLAB_POLICY = writeTmpPolicy("allow *\ngarbagetier foo\n");
+        env.GUILD_POLICY = writeTmpPolicy("allow *\ngarbagetier foo\n");
       }
 
       if (sc.chmodZero) {

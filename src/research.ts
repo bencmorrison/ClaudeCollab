@@ -1,17 +1,17 @@
 /**
- * collab_research — source-backed investigation by a web-capable model (PLAN.md M7).
+ * guild_research — source-backed investigation by a web-capable model (PLAN.md M7).
  *
- * The MCP translation of the bash `/collab:research` / `ask.sh --research` path: one
- * read-only, WEB-CAPABLE model turn through the UNMODIFIED `collab-research` agent
- * (`.opencode/agent/collab-research.md` — a default-deny allowlist re-allowing only
+ * The MCP translation of the bash `/guild:research` / `ask.sh --research` path: one
+ * read-only, WEB-CAPABLE model turn through the UNMODIFIED `guild-research` agent
+ * (`.opencode/agent/guild-research.md` — a default-deny allowlist re-allowing only
  * read-non-secret + webfetch/websearch; C47/C48). The model's answer — and every
  * citation in it — is untrusted DATA the DRIVER must verify against the cited source
  * (C45 verify-not-relay), never instructions to act on (C42/C52). This tool is the
- * TRANSPORT; the `/collab:research` command doc does the fetch-each-source verification.
+ * TRANSPORT; the `/guild:research` command doc does the fetch-each-source verification.
  *
  * ONE DELIBERATE DEVIATION FROM bash C16 (task-directed, PLAN.md M7). bash falls back to
- * the weaker `plan` agent when `collab-research.md` is missing (loud warning; hard-error
- * only under `COLLAB_REQUIRE_HARDENED`). This tool has NO fallback EVER: a missing def is
+ * the weaker `plan` agent when `guild-research.md` is missing (loud warning; hard-error
+ * only under `GUILD_REQUIRE_HARDENED`). This tool has NO fallback EVER: a missing def is
  * a structured `agent-def-missing` refusal (exit-5 analogue, C57), no model called, no
  * log written. Silently degrading a hardened path to a weaker one — while the caller
  * still believes it got the research agent's guarantees — is the failure mode this repo
@@ -19,7 +19,7 @@
  * the presence check does and does NOT observe (it is the same filesystem lever bash's
  * C16 uses; it cannot see opencode's own `--agent` resolution).
  *
- * Everything else mirrors collab_consult: gate (leading-dash → policy tier) BEFORE any
+ * Everything else mirrors guild_consult: gate (leading-dash → policy tier) BEFORE any
  * log write so a refusal logs nothing (C24 gap parity), then the shared expect→started→
  * completed lifecycle spine (src/consult.ts `runAgentLifecycle`), reused not forked.
  */
@@ -42,9 +42,9 @@ import {
 import { type PolicyTier } from "./policy.js";
 
 /** The web-capable research agent this tool ALWAYS uses, unmodified (C15/C47/C48). */
-export const RESEARCH_AGENT = "collab-research";
-/** The command label recorded in the evidence log (drives `/collab:witness`). */
-export const RESEARCH_COMMAND = "/collab:research";
+export const RESEARCH_AGENT = "guild-research";
+/** The command label recorded in the evidence log (drives `/guild:witness`). */
+export const RESEARCH_COMMAND = "/guild:research";
 
 // --- Params + deps ---------------------------------------------------------
 export interface ResearchParams {
@@ -90,7 +90,7 @@ export interface ResearchError {
   /**
    * The bash exit code this maps to: 5 agent-def-missing (C57), 2 model-id (C55), 3 deny,
    * 4 ask (C56). `null` for a `call-failed` (bash propagates opencode's own non-zero
-   * status verbatim, C53; 0 is reserved for success) — same rule as collab_consult.
+   * status verbatim, C53; 0 is reserved for success) — same rule as guild_consult.
    */
   exitAnalogue: number | null;
   model: string;
@@ -129,7 +129,7 @@ export async function research(
   const confContents = readConfContents(collabDir, env);
 
   // 2. NO-FALLBACK def gate (deviation from bash C16, task-directed). If the hardened
-  //    collab-research def is not present in the resolved agent-def dir, REFUSE loudly —
+  //    guild-research def is not present in the resolved agent-def dir, REFUSE loudly —
   //    never silently degrade to a weaker agent. Refused before any log write (gap parity).
   const agentDefDir = resolveAgentDefDir({ env, cwd, confContents });
   if (!hardenedDefPresent(RESEARCH_AGENT, agentDefDir)) {
@@ -145,12 +145,12 @@ export async function research(
           `(${RESEARCH_AGENT}.md). Refusing to run research: unlike the bash path there is NO ` +
           `fallback to a weaker agent, because silently degrading a hardened path while the ` +
           `caller still expects its guarantees is worse than refusing. Install the def (or set ` +
-          `COLLAB_AGENT_DIR to where it lives) and retry.`,
+          `GUILD_AGENT_DIR to where it lives) and retry.`,
       },
     };
   }
 
-  // 3. Resolve the model (param > COLLAB_MODEL env > conf > opencode default).
+  // 3. Resolve the model (param > GUILD_MODEL env > conf > opencode default).
   const requestedModel = resolveModel({ flag: params.model, env, confContents });
 
   // 4. Gate: leading-dash refusal (C12) THEN policy tier (C1–C7), all BEFORE any log write.
@@ -180,7 +180,7 @@ export async function research(
       requestedModel,
       agent: RESEARCH_AGENT,
       command: RESEARCH_COMMAND,
-      title: "collab_research",
+      title: "guild_research",
       runId,
       tier: gate.tier,
       confirmed: gate.confirmed,

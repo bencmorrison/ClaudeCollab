@@ -112,10 +112,10 @@ export class OpencodeLifecycle {
   #triggersAttached = false;
 
   constructor(opts: LifecycleOptions = {}) {
-    this.#projectDir = opts.projectDir ?? process.env.COLLAB_PROJECT_DIR ?? process.cwd();
+    this.#projectDir = opts.projectDir ?? process.env.GUILD_PROJECT_DIR ?? process.cwd();
     this.#host = opts.host ?? "127.0.0.1";
-    this.#idleMs = opts.idleMs ?? envInt("COLLAB_SERVE_IDLE_MS", DEFAULT_IDLE_MS);
-    this.#perCall = opts.perCall ?? process.env.COLLAB_SERVE_PER_CALL === "1";
+    this.#idleMs = opts.idleMs ?? envInt("GUILD_SERVE_IDLE_MS", DEFAULT_IDLE_MS);
+    this.#perCall = opts.perCall ?? process.env.GUILD_SERVE_PER_CALL === "1";
     this.#readyTimeoutMs = opts.readyTimeoutMs ?? READY_TIMEOUT_MS;
   }
 

@@ -1,11 +1,11 @@
 /**
- * collab_research tests (PLAN.md M7; CONTRACT.md C1–C7, C12, C16-deviation, C22–C25,
+ * guild_research tests (PLAN.md M7; CONTRACT.md C1–C7, C12, C16-deviation, C22–C25,
  * C45, C57) — OFFLINE.
  *
  * No model is called: the model turn is served by the `node:http` fake behind a
  * `ServeProvider`, exactly like the consult/panel tests. Research reuses the SAME gate +
  * lifecycle spine as consult, so these tests focus on what is NEW: the NO-FALLBACK
- * agent-def refusal (a missing collab-research.md is a structured exit-5 refusal, never a
+ * agent-def refusal (a missing guild-research.md is a structured exit-5 refusal, never a
  * silent downgrade), gate parity (deny/ask) on the research path, and that a research run
  * verifies under the TS verifier (the reference; the bash oracle retired at M12).
  */
@@ -38,11 +38,11 @@ function tmp(prefix = "m7r-"): string {
   return d;
 }
 
-/** An agent-def dir CONTAINING a collab-research.md so the presence gate passes. The
+/** An agent-def dir CONTAINING a guild-research.md so the presence gate passes. The
  * content is irrelevant to the offline test — only the file's existence is checked. */
 function defDirWithResearch(): string {
   const dir = tmp("m7r-agent-");
-  writeFileSync(path.join(dir, "collab-research.md"), "---\nmode: all\n---\nfake\n");
+  writeFileSync(path.join(dir, "guild-research.md"), "---\nmode: all\n---\nfake\n");
   return dir;
 }
 
@@ -58,26 +58,26 @@ function makeCollabRoot(): string {
 
 function envWith(overrides: Record<string, string>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = { ...process.env };
-  for (const k of Object.keys(base)) if (k.startsWith("COLLAB_")) delete base[k];
+  for (const k of Object.keys(base)) if (k.startsWith("GUILD_")) delete base[k];
   return { ...base, ...overrides };
 }
 
 export async function run(): Promise<number> {
   const c = new Checker();
-  console.log("== research.test (M7 collab_research) ==");
+  console.log("== research.test (M7 guild_research) ==");
 
   // -------------------------------------------------------------------------
-  // 1. NO-FALLBACK def gate: a MISSING collab-research.md refuses (exit-5), NOTHING
+  // 1. NO-FALLBACK def gate: a MISSING guild-research.md refuses (exit-5), NOTHING
   //    logged, NO model call — the deliberate deviation from bash C16 (task-directed).
   // -------------------------------------------------------------------------
   {
     const root = makeCollabRoot();
     const logDir = tmp("m7r-logs-");
-    const emptyDefDir = tmp("m7r-emptyagent-"); // no collab-research.md inside
+    const emptyDefDir = tmp("m7r-emptyagent-"); // no guild-research.md inside
     const env = envWith({
-      COLLAB_ROOT: root,
-      COLLAB_LOG_DIR: logDir,
-      COLLAB_AGENT_DIR: emptyDefDir,
+      GUILD_ROOT: root,
+      GUILD_LOG_DIR: logDir,
+      GUILD_AGENT_DIR: emptyDefDir,
     });
     const fake = await startFakeOpencode({ historyText: "should never be reached" });
     try {
@@ -89,7 +89,7 @@ export async function run(): Promise<number> {
       if (!r.ok) {
         c.check(r.error.kind === "agent-def-missing", "def-missing: kind is agent-def-missing");
         c.check(r.error.exitAnalogue === 5, "def-missing: exit analogue is 5 (C57)");
-        c.check(r.error.message.includes("collab-research"), "def-missing: message names the agent");
+        c.check(r.error.message.includes("guild-research"), "def-missing: message names the agent");
         c.check(r.error.message.includes(emptyDefDir), "def-missing: message names the dir searched");
         c.check(/no.*fallback/i.test(r.error.message), "def-missing: message states there is no fallback");
       }
@@ -109,9 +109,9 @@ export async function run(): Promise<number> {
     const root = makeCollabRoot();
     const logDir = tmp("m7r-logs-");
     const env = envWith({
-      COLLAB_ROOT: root,
-      COLLAB_LOG_DIR: logDir,
-      COLLAB_AGENT_DIR: defDirWithResearch(),
+      GUILD_ROOT: root,
+      GUILD_LOG_DIR: logDir,
+      GUILD_AGENT_DIR: defDirWithResearch(),
     });
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
@@ -139,9 +139,9 @@ export async function run(): Promise<number> {
     const root = makeCollabRoot();
     const logDir = tmp("m7r-logs-");
     const env = envWith({
-      COLLAB_ROOT: root,
-      COLLAB_LOG_DIR: logDir,
-      COLLAB_AGENT_DIR: defDirWithResearch(),
+      GUILD_ROOT: root,
+      GUILD_LOG_DIR: logDir,
+      GUILD_AGENT_DIR: defDirWithResearch(),
     });
     const fake = await startFakeOpencode({ historyText: "researched answer" });
     try {
@@ -167,17 +167,17 @@ export async function run(): Promise<number> {
 
   // -------------------------------------------------------------------------
   // 4. SUCCESS: def present + allowed model → answer byte-exact, attribution names
-  //    collab-research, the run verifies under verify (witness parity).
+  //    guild-research, the run verifies under verify (witness parity).
   // -------------------------------------------------------------------------
   {
     const ANSWER = 'Per the source: X.\n"quoted"\tcafé ☕\n';
     const root = tmp("m7r-collab-"); // no policy file ⇒ default-allow
     const logDir = tmp("m7r-logs-");
     const env = envWith({
-      COLLAB_ROOT: root,
-      COLLAB_LOG_DIR: logDir,
-      COLLAB_LOG_PROMPTS: "full",
-      COLLAB_AGENT_DIR: defDirWithResearch(),
+      GUILD_ROOT: root,
+      GUILD_LOG_DIR: logDir,
+      GUILD_LOG_PROMPTS: "full",
+      GUILD_AGENT_DIR: defDirWithResearch(),
     });
     const fake = await startFakeOpencode({ historyText: ANSWER });
     try {
@@ -188,7 +188,7 @@ export async function run(): Promise<number> {
       c.check(r.ok, "success: research ok");
       if (r.ok) {
         c.check(r.answer === ANSWER, "success: answer byte-exact through the tool");
-        c.check(r.attribution.agent === "collab-research", "success: attribution names collab-research");
+        c.check(r.attribution.agent === "guild-research", "success: attribution names guild-research");
         c.check(r.attribution.model === "openai/web-model", "success: exact-id attribution");
         const wire = researchToToolResult(r);
         const round = JSON.parse(JSON.stringify(wire)) as { content: Array<{ text: string }> };

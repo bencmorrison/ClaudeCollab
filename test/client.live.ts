@@ -2,7 +2,7 @@
  * M2 live smoke (NOT part of `npm test` — run via `npm run test:live`).
  *
  * Drives the REAL stack: the M1 lifecycle spawns `opencode serve` in a disposable
- * scratch project that carries only a copy of the read-only `collab-read` def and a
+ * scratch project that carries only a copy of the read-only `guild-read` def and a
  * planted marker file, then `askViaAgent` consults a FREE model and we assert the
  * marker round-trips through the byte-exact history path and that no `opencode
  * serve` process is left behind.
@@ -37,8 +37,8 @@ async function main(): Promise<number> {
     // Scratch project: the read-only def + one benign marker file.
     await mkdir(path.join(scratch, ".opencode", "agent"), { recursive: true });
     await copyFile(
-      path.join(repoRoot, ".opencode", "agent", "collab-read.md"),
-      path.join(scratch, ".opencode", "agent", "collab-read.md"),
+      path.join(repoRoot, ".opencode", "agent", "guild-read.md"),
+      path.join(scratch, ".opencode", "agent", "guild-read.md"),
     );
     await writeFile(
       path.join(scratch, "marker.txt"),
@@ -48,7 +48,7 @@ async function main(): Promise<number> {
 
     const result = await withTimeout(
       askViaAgent(lc, {
-        agent: "collab-read",
+        agent: "guild-read",
         model: FREE_MODEL,
         prompt:
           "Read the file marker.txt in the current directory and reply with the exact marker code it contains.",

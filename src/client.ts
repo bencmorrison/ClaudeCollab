@@ -341,8 +341,8 @@ export function finalAssistantText(history: SessionHistory): string {
 
 /**
  * The agent that actually SERVED the answer, read from the answer-producing assistant
- * message's `info.agent` (opencode 1.18.2 populates it — verified live: a `collab-read`
- * call reports `info.agent === "collab-read"`). Returns `undefined` when opencode does
+ * message's `info.agent` (opencode 1.18.2 populates it — verified live: a `guild-read`
+ * call reports `info.agent === "guild-read"`). Returns `undefined` when opencode does
  * not report an agent (older/other builds), so a caller can DISTINGUISH "served a
  * different agent" (a real mismatch to fail closed on) from "opencode didn't say" (which
  * must not be treated as a mismatch — the check is only as strong as the field's

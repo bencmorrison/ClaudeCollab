@@ -1,9 +1,9 @@
 /**
- * M8 live smoke — collab_delegate (NOT part of `npm test`; run via `npm run test:live`).
+ * M8 live smoke — guild_delegate (NOT part of `npm test`; run via `npm run test:live`).
  *
  * Drives the REAL production write path: `delegate()` composes the M1 lifecycle, the model
  * policy (default-allow ⇒ a free model passes), the evidence layer, the typed client against
- * the UNMODIFIED, write-capable `collab-build` agent, AND the src/snapshot.ts git-plumbing —
+ * the UNMODIFIED, write-capable `guild-build` agent, AND the src/snapshot.ts git-plumbing —
  * in a DISPOSABLE scratch git repo (never this repo).
  *
  * The acceptance-matrix case: ask a real free model to create exactly ONE named file with
@@ -45,18 +45,18 @@ async function main(): Promise<number> {
   const agentDir = path.join(scratch, ".opencode", "agent");
   // The evidence log MUST live OUTSIDE the edited worktree: otherwise the calls.jsonl written
   // DURING the turn lands in the after-snapshot as a spurious changed file and perturbs the
-  // ignored-file walk. In production COLLAB_LOG_DIR is the gitignored collab/logs; here we
+  // ignored-file walk. In production GUILD_LOG_DIR is the gitignored modelguild/logs; here we
   // use a sibling temp dir (never a child of scratch) to reproduce that separation.
   const logParent = await mkdtemp(path.join(tmpdir(), "collab-m8-delegate-logs-"));
   const logDir = path.join(logParent, "logs");
   const lc = new OpencodeLifecycle({ projectDir: scratch, idleMs: 0 });
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    COLLAB_ROOT: scratch, // no policy ⇒ default-allow
-    COLLAB_LOG_DIR: logDir,
-    COLLAB_LOG_PROMPTS: "full",
-    COLLAB_AGENT_DIR: agentDir,
-    COLLAB_PROJECT_DIR: scratch,
+    GUILD_ROOT: scratch, // no policy ⇒ default-allow
+    GUILD_LOG_DIR: logDir,
+    GUILD_LOG_PROMPTS: "full",
+    GUILD_AGENT_DIR: agentDir,
+    GUILD_PROJECT_DIR: scratch,
   };
   let servePid: number | undefined;
 
@@ -88,7 +88,7 @@ async function main(): Promise<number> {
     c.check(lc.pid === undefined, "def-missing: refused WITHOUT spawning a serve");
 
     // Install the real hardened def and delegate the one-file task.
-    await copyFile(path.join(repoRoot, ".opencode", "agent", "collab-build.md"), path.join(agentDir, "collab-build.md"));
+    await copyFile(path.join(repoRoot, ".opencode", "agent", "guild-build.md"), path.join(agentDir, "guild-build.md"));
 
     const result = await withTimeout(
       delegate(
@@ -148,7 +148,7 @@ async function main(): Promise<number> {
       //    `opencode run`, which creates NO `.opencode/` in the project, so it stays complete.
       //    This is a REAL transport-induced divergence, NOT a snapshot defect (the tracked-file
       //    capture above is exact). The fix (exclude `.opencode/` from the fingerprint like
-      //    `collab/logs/`, or relocate serve's runtime) is a harness-difference decision for the
+      //    `modelguild/logs/`, or relocate serve's runtime) is a harness-difference decision for the
       //    maintainer; snapshot.ts stays faithful until then.
       //
       //    What this test asserts UNCONDITIONALLY is the invariant that must always hold:
