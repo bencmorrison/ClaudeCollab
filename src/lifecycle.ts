@@ -105,6 +105,14 @@ export class OpencodeLifecycle {
   readonly #readyTimeoutMs: number;
 
   #handle: InternalHandle | undefined;
+  // A spawned-but-not-yet-ready child. #handle is only assigned once readiness
+  // passes, so during the startup window this is the ONLY reference to the child
+  // — shutdown() must kill it here or the detached child outlives the process.
+  #starting: InternalHandle | undefined;
+  // Bumped by shutdown() to abandon the in-flight #start(); each start claims a
+  // generation and aborts if it no longer matches. Scoped to one start, so a
+  // later ensureServe() after shutdown claims a fresh generation and proceeds.
+  #startGen = 0;
   #startPromise: Promise<InternalHandle> | undefined;
   #inFlight = 0;
   #idleTimer: NodeJS.Timeout | undefined;
@@ -126,6 +134,10 @@ export class OpencodeLifecycle {
   get pid(): number | undefined {
     return this.isRunning ? this.#handle!.pid : undefined;
   }
+  /** Pid of a spawned-but-not-yet-ready child (startup window). Test/diagnostic. */
+  get startingPid(): number | undefined {
+    return this.#starting?.pid;
+  }
   get port(): number | undefined {
     return this.isRunning ? this.#handle!.port : undefined;
   }
@@ -145,9 +157,13 @@ export class OpencodeLifecycle {
     }
     if (this.#handle) return this.#public(this.#handle);
     if (!this.#startPromise) {
-      this.#startPromise = this.#start().finally(() => {
-        this.#startPromise = undefined;
+      // Identity-guard the cleanup: an aborted start's late finally must not clear
+      // a newer start's promise (doing so would let a caller spawn a redundant
+      // #start whose gen-bump aborts the newer one, hiding its live child).
+      const p = this.#start().finally(() => {
+        if (this.#startPromise === p) this.#startPromise = undefined;
       });
+      this.#startPromise = p;
     }
     const h = await this.#startPromise;
     return this.#public(h);
@@ -182,10 +198,19 @@ export class OpencodeLifecycle {
   /** Kill the serve child and clear all timers. Idempotent. */
   shutdown(_reason?: string): void {
     this.#clearIdleTimer();
+    // Invalidate any in-flight #start() so it aborts at its next checkpoint
+    // instead of assigning a handle nothing will kill.
+    this.#startGen += 1;
     const h = this.#handle;
+    const starting = this.#starting;
     this.#handle = undefined;
+    this.#starting = undefined;
     this.#startPromise = undefined;
     killServe(h?.proc);
+    // Kill the not-yet-ready child directly too: the startup poll may be mid-fetch
+    // or mid-sleep for hundreds of ms, and teardown must be prompt (the abort check
+    // then throws, but killing here is what makes the child die now, not orphan).
+    killServe(starting?.proc);
   }
 
   /**
@@ -265,7 +290,10 @@ export class OpencodeLifecycle {
     if (this.#backstopInstalled) return;
     this.#backstopInstalled = true;
 
-    process.on("exit", () => killServe(this.#handle?.proc));
+    process.on("exit", () => {
+      killServe(this.#handle?.proc);
+      killServe(this.#starting?.proc);
+    });
 
     const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
     for (const sig of signals) {
@@ -278,7 +306,16 @@ export class OpencodeLifecycle {
 
   async #start(): Promise<InternalHandle> {
     this.#installBackstop();
+    // Claim a generation; shutdown() bumps #startGen to abandon this start. Every
+    // checkpoint below re-checks it so a shutdown() arriving anywhere in the
+    // startup window leaves no live child behind.
+    const myGen = ++this.#startGen;
+    const aborted = () => this.#startGen !== myGen;
+    const abortError = () => new Error("opencode serve shut down during startup");
+
     const port = await pickFreePort(this.#host);
+    // Shut down after the port await but before we spawned anything — nothing to kill.
+    if (aborted()) throw abortError();
     const baseUrl = `http://${this.#host}:${port}`;
 
     const proc = spawn(
@@ -296,34 +333,62 @@ export class OpencodeLifecycle {
     }
 
     const handle: InternalHandle = { proc, baseUrl, port, pid: proc.pid, exited: false };
+    // Publish the child before the first await so a shutdown() racing the readiness
+    // poll has a reference to kill (spawn→here is synchronous, so shutdown cannot
+    // interleave and see a spawned-but-untracked child).
+    this.#starting = handle;
 
     // Mark the handle exited so ensureServe() crash-revives on the next call, and
     // so isRunning reflects reality without an extra probe.
     proc.on("exit", () => {
       handle.exited = true;
       if (this.#handle === handle) this.#handle = undefined;
+      if (this.#starting === handle) this.#starting = undefined;
     });
 
-    // Poll GET /doc until the server answers or we time out (readiness contract).
-    const deadline = Date.now() + this.#readyTimeoutMs;
-    for (;;) {
+    try {
+      // Poll GET /doc until the server answers or we time out (readiness contract).
+      const deadline = Date.now() + this.#readyTimeoutMs;
+      for (;;) {
+        if (aborted()) {
+          killServe(proc);
+          throw abortError();
+        }
+        if (handle.exited) {
+          throw new Error(`opencode serve exited before becoming ready (cwd=${this.#projectDir})`);
+        }
+        try {
+          const res = await fetch(`${baseUrl}/doc`, { signal: AbortSignal.timeout(READY_HTTP_MS) });
+          if (res.ok) break;
+        } catch {
+          /* not up yet */
+        }
+        if (aborted()) {
+          killServe(proc);
+          throw abortError();
+        }
+        if (Date.now() > deadline) {
+          killServe(proc);
+          throw new Error(`opencode serve did not become ready within ${this.#readyTimeoutMs}ms`);
+        }
+        await new Promise((r) => setTimeout(r, READY_POLL_MS));
+      }
+
+      // Ready — but a shutdown() may have landed during the final poll sleep.
+      if (aborted()) {
+        killServe(proc);
+        throw abortError();
+      }
+      // Guard against publishing a dead child: if it exited between the last check
+      // and now, /doc may have been answered by an unrelated process that rebound
+      // the freed port, so treat readiness as invalid.
       if (handle.exited) {
         throw new Error(`opencode serve exited before becoming ready (cwd=${this.#projectDir})`);
       }
-      try {
-        const res = await fetch(`${baseUrl}/doc`, { signal: AbortSignal.timeout(READY_HTTP_MS) });
-        if (res.ok) break;
-      } catch {
-        /* not up yet */
-      }
-      if (Date.now() > deadline) {
-        killServe(proc);
-        throw new Error(`opencode serve did not become ready within ${this.#readyTimeoutMs}ms`);
-      }
-      await new Promise((r) => setTimeout(r, READY_POLL_MS));
+      this.#handle = handle;
+      return handle;
+    } finally {
+      if (this.#starting === handle) this.#starting = undefined;
     }
-
-    this.#handle = handle;
-    return handle;
   }
 }

@@ -101,6 +101,38 @@ export async function run(): Promise<number> {
     lc.shutdown();
   }
 
+  // 5. teardown during startup: shutdown() before readiness must not orphan ----
+  {
+    const lc = new OpencodeLifecycle({ idleMs: 0 });
+    const startPromise = lc.ensureServe();
+    // Deterministic: fire shutdown the instant a child is spawned but before it is
+    // ready (opencode takes seconds to answer /doc; startingPid is set right after
+    // spawn), so this reliably lands inside the readiness window.
+    const spawned = await waitFor(() => lc.startingPid !== undefined, SPAWN_MS, 5);
+    c.check(spawned, "startup: a serve child was spawned during startup");
+    const pid = lc.startingPid;
+    lc.shutdown("test-teardown-during-startup");
+
+    let rejected = false;
+    try {
+      await startPromise;
+    } catch {
+      rejected = true;
+    }
+    c.check(rejected, "startup: ensureServe() rejects when shutdown arrives mid-startup");
+    c.check(!lc.isRunning, "startup: no live serve tracked after mid-startup shutdown");
+    if (pid !== undefined) {
+      c.check(await waitFor(() => !pidAlive(pid), 8_000), "startup: the in-flight serve child is dead");
+    }
+
+    // The abort flag must not poison the lifecycle: a later ensureServe() respawns.
+    const h = await withTimeout(lc.ensureServe(), SPAWN_MS, "startup:respawn");
+    c.check(lc.isRunning && pidAlive(h.pid), "startup: a later ensureServe() respawns after mid-startup shutdown");
+    const pid2 = h.pid;
+    lc.shutdown();
+    c.check(await waitFor(() => !pidAlive(pid2), 8_000), "startup: respawned serve dead after shutdown");
+  }
+
   await sleep(50);
   console.log(`lifecycle.test: ${c.passes} passed, ${c.failures} failed`);
   return c.failures;
