@@ -34,8 +34,6 @@ ModelGuild adds to a project:
 
 Exactly what you do, start to finish. It's six steps: **(1)** prerequisites, **(2)** install the payload (`init`), **(3)** register the MCP server yourself, **(4)** restart Claude Code so it loads it, **(5)** verify, **(6)** configure which models it uses. Steps 2 and 3 are **separate**: `init` copies the command docs / agent defs / policy template but **does not touch `.mcp.json`** — *you* register the server (step 3), so you choose global vs per-project scope. Step 6 configures *which models* it uses. You want all of them.
 
-> **Read this first — the package is not on npm yet.** The intended install is `npx modelguild init`, but ModelGuild **hasn't been published to npm** (0.5.0 isn't out). Until it is, `npx modelguild …` fails with "package not found". **Today you build it locally and run `init` from the checkout, then register with an absolute launch line** — steps 2a and 3a below, fully supported (not a hack). The published `npx` path (2b/3b) is documented so it's ready when 0.5.0 ships; it will not work before then.
-
 ### 1. Prerequisites
 
 - **[Node.js](https://nodejs.org)** (ships with `npm`/`npx`) — ModelGuild is a TypeScript CLI + MCP server; you need Node to build and run it.
@@ -53,7 +51,19 @@ Exactly what you do, start to finish. It's six steps: **(1)** prerequisites, **(
 
 This is what makes the `/guild:*` commands exist. `init` copies the command docs / agent defs / policy template into your project, records each written file's SHA-256, and upgrades or removes a file only while its bytes still match that ownership record — files you edited are left alone. **`init` does not write `.mcp.json`** — that's step 3, and it's yours to do. (When it finishes, it prints the exact register command for step 3.)
 
-#### 2a. Now (works today) — build locally, run `init` from the checkout
+#### 2a. Recommended — from npm
+
+```bash
+cd /path/to/your/project
+npx modelguild init
+```
+Or the one-liner bootstrap (a thin `install.sh` that runs `npx modelguild init` for you, for the classic `curl | bash` habit):
+```bash
+curl -fsSL https://raw.githubusercontent.com/bencmorrison/modelguild/main/install.sh | bash
+```
+The bootstrap installs into the current directory; pass `-s -- --dir /path/to/project` to target another. Pin a version with `-s -- --ref 0.5.0` (or `MODELGUILD_REF=0.5.0`).
+
+#### 2b. From source (contributors, or to run an unreleased build)
 
 Clone and build the CLI once:
 ```bash
@@ -67,19 +77,6 @@ node dist/cli.js init --dir /path/to/your/project
 ```
 (Or `cd /path/to/your/project` first and run `node /path/to/modelguild/dist/cli.js init` — `--dir` defaults to the current directory.)
 
-#### 2b. Once 0.5.0 is published (the intended path — not available yet)
-
-When the package is on npm, this replaces 2a:
-```bash
-cd /path/to/your/project
-npx modelguild init
-```
-Or the one-liner bootstrap (a thin `install.sh` that runs `npx modelguild init` for you, for the classic `curl | bash` habit):
-```bash
-curl -fsSL https://raw.githubusercontent.com/bencmorrison/modelguild/main/install.sh | bash
-```
-The bootstrap installs into the current directory; pass `-s -- --dir /path/to/project` to target another. Pin a version with `-s -- --ref 0.5.0` (or `MODELGUILD_REF=0.5.0`). **Both of these require the package to be on npm and will fail until 0.5.0 ships.**
-
 ### 3. Register the MCP server yourself
 
 `init` deliberately leaves `.mcp.json` alone so **you** pick the scope. Register the `modelguild` server with Claude Code's CLI — `-s` chooses the scope:
@@ -88,19 +85,19 @@ The bootstrap installs into the current directory; pass `-s -- --dir /path/to/pr
 - **`-s project`** — committed to *this* repo's `.mcp.json` (shared with anyone who clones it).
 - **`-s local`** — this project only, private to you (not committed).
 
-#### 3a. Now (works today) — absolute launch line
-
-Point the registration at your local build:
-```bash
-claude mcp add modelguild -s user -- node /path/to/modelguild/dist/cli.js serve
-```
-If you move or delete the ModelGuild checkout, re-run this with the new path.
-
-#### 3b. Once 0.5.0 is published
+#### 3a. Recommended — from npm
 
 ```bash
 claude mcp add modelguild -s user -- npx -y modelguild serve
 ```
+
+#### 3b. From source — absolute launch line
+
+If you installed from source (2b), point the registration at your local build instead:
+```bash
+claude mcp add modelguild -s user -- node /path/to/modelguild/dist/cli.js serve
+```
+If you move or delete the ModelGuild checkout, re-run this with the new path.
 
 **The MCP server key must be exactly `modelguild`** — the slash commands grant `mcp__modelguild__*` and won't find the tools under any other key.
 
@@ -109,16 +106,16 @@ claude mcp add modelguild -s user -- npx -y modelguild serve
 {
   "mcpServers": {
     "modelguild": {
-      "command": "node",
-      "args": ["/path/to/modelguild/dist/cli.js", "serve"],
+      "command": "npx",
+      "args": ["-y", "modelguild", "serve"],
       "env": { "GUILD_PROJECT_DIR": "/path/to/your/project" }
     }
   }
 }
 ```
-(Once published, `command`/`args` become `"npx"` / `["-y", "modelguild", "serve"]`.)
+(From a source build instead, use `"command": "node"` with `"args": ["/path/to/modelguild/dist/cli.js", "serve"]`.)
 
-**Opt-in shortcut:** if you *want* `init` to write the project `.mcp.json` for you (the old behavior), pass `--write-mcp` — e.g. `node dist/cli.js init --write-mcp --abs --dir /path/to/your/project`. That writes a project-scoped entry (equivalent to `-s project`) and skips the manual register.
+**Opt-in shortcut:** if you *want* `init` to write the project `.mcp.json` for you (the old behavior), pass `--write-mcp` — e.g. `npx modelguild init --write-mcp --dir /path/to/your/project`. That writes a project-scoped entry (equivalent to `-s project`) and skips the manual register.
 
 ### 4. Restart Claude Code
 
@@ -128,8 +125,8 @@ Claude Code reads its MCP registrations **at session start**, so it will not see
 
 Run the token-free `doctor` — it checks opencode is present, the MCP registration, the agent defs, and the policy, without calling any model:
 ```bash
-node /path/to/modelguild/dist/cli.js doctor --dir /path/to/your/project   # local build (today)
-# npx modelguild doctor                                                   # once published
+npx modelguild doctor --dir /path/to/your/project
+# node /path/to/modelguild/dist/cli.js doctor --dir <project>   # if you installed from source
 ```
 `doctor` detects the registration in **any** scope by asking the Claude CLI (`claude mcp get modelguild`), so a global (`-s user`) registration passes even though it isn't in the project `.mcp.json`. A healthy result looks like:
 ```
@@ -160,7 +157,7 @@ Prefer a **non-Claude** model for consults so the second opinion is genuinely in
 
 ### Updating
 
-Re-run `init` (locally: `node dist/cli.js init --dir <project>`; once published: `npx modelguild init`). It's idempotent: it upgrades files you haven't touched (bytes still matching the recorded hash), leaves any file you edited locally alone, and adds new payload files. `init` never touches your MCP registration, so re-running it won't disturb the server you registered in step 3. After a local rebuild (`npm run build`), re-running `init` refreshes the project's payload. There is no separate update mode.
+Re-run `init` (`npx modelguild init --dir <project>`; from a source build: `node dist/cli.js init --dir <project>`). It's idempotent: it upgrades files you haven't touched (bytes still matching the recorded hash), leaves any file you edited locally alone, and adds new payload files. `init` never touches your MCP registration, so re-running it won't disturb the server you registered in step 3. After a local rebuild (`npm run build`), re-running `init` refreshes the project's payload. There is no separate update mode.
 
 ## Usage
 
@@ -198,7 +195,7 @@ These take effect immediately — no restart. (The matching env vars still work 
 
 ## Troubleshooting
 
-- **`npx modelguild …` says "package not found".** Expected — it isn't published to npm yet. Use the local build path: `npm run build` in the ModelGuild checkout, then `node dist/cli.js init --dir <project>` (see [Setup step 2a](#2a-now-works-today--build-locally-run-init-from-the-checkout)).
+- **`npx modelguild …` says "package not found".** `modelguild` is published to npm, so check spelling and your network (or a stale npm cache — `npm cache verify`). If you're intentionally running an unreleased build, use the from-source path instead: `npm run build` in the checkout, then `node dist/cli.js init --dir <project>` (see [Setup step 2b](#2b-from-source-contributors-or-to-run-an-unreleased-build)).
 - **The `/guild:*` commands don't appear in Claude Code.** Restart Claude Code — it only reads its MCP registrations at session start (Setup step 4). Still missing? Confirm the server is registered — `claude mcp get modelguild` (any scope) — and run `doctor` (step 5) to check registration and payload.
 - **A `guild_*` tool call errors about opencode.** opencode isn't installed on PATH or isn't authenticated. Run `opencode auth login`, and `opencode models` to confirm at least one provider answers. If you built locally and moved the checkout, the launch `args` path is stale — re-run `claude mcp add` (or edit the registration) with the new path.
 - **A model is denied / not allowed.** That's the model policy. Run `/guild:configure`, or edit `modelguild/models.policy.local` (Setup step 6).
@@ -227,8 +224,8 @@ This is **receipts**. When Claude tells you "GPT-5 agreed with my approach", tha
 ## Uninstall
 
 ```bash
-node /path/to/modelguild/dist/cli.js init --uninstall --dir /path/to/your/project   # local build (today)
-# npx modelguild init --uninstall --dir /path/to/your/project                        # once published
+npx modelguild init --uninstall --dir /path/to/your/project
+# node /path/to/modelguild/dist/cli.js init --uninstall --dir <project>   # if you installed from source
 ```
 It removes only the files ModelGuild installed and can still prove it owns (by hash); your own files, config, and `modelguild/logs/` are left in place. If a project `.mcp.json` `modelguild` key exists (from `--write-mcp`), uninstall removes it — but a registration you made yourself with `claude mcp add` is yours to remove: `claude mcp remove modelguild` (add `-s user`/`-s local`/`-s project` for a non-default scope). Any Claude Code permission grant you added to `.claude/settings*.json` is yours to remove too.
 
@@ -260,7 +257,7 @@ The first time Claude Code calls a ModelGuild MCP tool it asks for permission. C
 Found a bug, hit a rough edge, or want to suggest something? Please open a **[GitHub issue](https://github.com/bencmorrison/modelguild/issues)**.
 
 What helps most in a bug report:
-- The output of `doctor` (`node <repo>/dist/cli.js doctor` for a local build, or `npx modelguild doctor` once published).
+- The output of `doctor` (`npx modelguild doctor`, or `node <repo>/dist/cli.js doctor` for a source build).
 - Which command you ran, and the model it used.
 - Your OS. macOS and BSD support is newer and less exercised than Linux, so please say if you're on one.
 
