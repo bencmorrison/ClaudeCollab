@@ -36,8 +36,8 @@ import {
 import {
   readConfContents,
   resolveModel,
-  resolveAgentDefDir,
-  hardenedDefPresent,
+  resolveAgentDefDirs,
+  hardenedDefPresentIn,
 } from "./config.js";
 import { type PolicyTier } from "./policy.js";
 
@@ -131,8 +131,8 @@ export async function research(
   // 2. NO-FALLBACK def gate (deviation from bash C16, task-directed). If the hardened
   //    guild-research def is not present in the resolved agent-def dir, REFUSE loudly —
   //    never silently degrade to a weaker agent. Refused before any log write (gap parity).
-  const agentDefDir = resolveAgentDefDir({ env, cwd, confContents });
-  if (!hardenedDefPresent(RESEARCH_AGENT, agentDefDir)) {
+  const agentDefDirs = resolveAgentDefDirs({ env, cwd, confContents });
+  if (!hardenedDefPresentIn(RESEARCH_AGENT, agentDefDirs).present) {
     return {
       ok: false,
       rootConflict,
@@ -141,11 +141,12 @@ export async function research(
         model: "",
         exitAnalogue: 5,
         message:
-          `The hardened '${RESEARCH_AGENT}' agent def was not found in ${agentDefDir} ` +
-          `(${RESEARCH_AGENT}.md). Refusing to run research: unlike the bash path there is NO ` +
-          `fallback to a weaker agent, because silently degrading a hardened path while the ` +
-          `caller still expects its guarantees is worse than refusing. Install the def (or set ` +
-          `GUILD_AGENT_DIR to where it lives) and retry.`,
+          `The hardened '${RESEARCH_AGENT}' agent def (${RESEARCH_AGENT}.md) was not found in ` +
+          `any of: ${agentDefDirs.join(", ")}. Refusing to run research: unlike the bash path ` +
+          `there is NO fallback to a weaker agent, because silently degrading a hardened path ` +
+          `while the caller still expects its guarantees is worse than refusing. Install the ` +
+          `def (per-project or via 'init --global'), or set GUILD_AGENT_DIR to where it lives, ` +
+          `and retry.`,
       },
     };
   }

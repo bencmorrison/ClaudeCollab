@@ -19,6 +19,8 @@ import {
   resolveConfFile,
   readConfContents,
   resolvePanelModels,
+  resolveAgentDefDirs,
+  hardenedDefPresentIn,
 } from "../src/config.js";
 import { Checker } from "./harness.js";
 
@@ -136,6 +138,63 @@ export async function run(): Promise<number> {
         "panel: conf GUILD_MODELS used when args/env absent");
       const fromEnv = resolvePanelModels({ args: [], env: { GUILD_MODELS: "openai/env google/env" } as NodeJS.ProcessEnv, confContents: confModels });
       t.check(fromEnv.models.join(",") === "openai/env,google/env", "panel: env overrides conf");
+    }
+
+    // ---- agent-def presence: global fallback (no false refusal) ----------------
+    // The pre-check must resolve a def present ONLY in the opencode GLOBAL agent dir, so a
+    // global-only install doesn't cause the delegate/research tools to falsely refuse.
+    {
+      const home = tmp();
+      const xdg = tmp();
+      const projectDir = tmp(); // its .opencode/agent/ is EMPTY (a global-only setup)
+      const globalAgentDir = path.join(xdg, "opencode", "agent");
+      mkdirSync(globalAgentDir, { recursive: true });
+
+      const dirs = resolveAgentDefDirs({
+        env: {} as NodeJS.ProcessEnv,
+        cwd: projectDir,
+        home,
+        xdgConfigHome: xdg,
+      });
+      t.check(
+        dirs.includes(path.join(projectDir, ".opencode", "agent")) && dirs.includes(globalAgentDir),
+        "resolveAgentDefDirs: ordered [project sibling, global opencode agent dir]",
+      );
+
+      // Absent in BOTH → refuse (fail-closed).
+      t.check(
+        hardenedDefPresentIn("guild-research", dirs).present === false,
+        "hardenedDefPresentIn: absent in both dirs → not present (fail-closed refusal)",
+      );
+
+      // Present ONLY in the global opencode dir → satisfied (no false refusal).
+      writeFileSync(path.join(globalAgentDir, "guild-research.md"), "---\nmode: all\n---\n");
+      const found = hardenedDefPresentIn("guild-research", dirs);
+      t.check(
+        found.present === true && found.dir === globalAgentDir,
+        "hardenedDefPresentIn: a global-only def satisfies the pre-check (resolved from the global dir)",
+      );
+
+      // A def in the PROJECT sibling still resolves (project precedence unchanged).
+      const projAgent = path.join(projectDir, ".opencode", "agent");
+      mkdirSync(projAgent, { recursive: true });
+      writeFileSync(path.join(projAgent, "guild-build.md"), "---\nmode: all\n---\n");
+      const foundProj = hardenedDefPresentIn("guild-build", dirs);
+      t.check(
+        foundProj.present === true && foundProj.dir === projAgent,
+        "hardenedDefPresentIn: project sibling takes precedence over the global dir",
+      );
+
+      // $XDG_CONFIG_HOME from env is honored when no explicit xdgConfigHome is injected.
+      const dirsEnv = resolveAgentDefDirs({
+        env: { XDG_CONFIG_HOME: xdg } as NodeJS.ProcessEnv,
+        cwd: projectDir,
+        home,
+      });
+      t.check(
+        dirsEnv.includes(globalAgentDir),
+        "resolveAgentDefDirs: honors $XDG_CONFIG_HOME for the global dir",
+      );
     }
 
   } finally {

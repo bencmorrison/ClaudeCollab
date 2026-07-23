@@ -27,8 +27,13 @@
 #   bash install.sh [--dir <dir>]        install into <dir> (default: current dir)
 #   bash install.sh --uninstall [--dir <dir>]   remove it again (hash-verified)
 #   bash install.sh --ref <version>      install a specific npm version/dist-tag
-#   bash install.sh --global             `npm i -g` the CLI first, then init (a global
-#                                        `modelguild` on PATH), instead of npx-on-demand
+#   bash install.sh --global             GLOBAL install, both halves: `npm i -g` the CLI
+#                                        (a global `modelguild` on PATH, not npx-on-demand)
+#                                        AND `init --global` — the payload lands in your
+#                                        global config (~/.claude/commands/guild, the
+#                                        opencode global agent dir, ~/.claude/modelguild) so
+#                                        /guild:* + the agents work in EVERY project. In this
+#                                        mode --dir is ignored (there is no project target).
 #   bash install.sh --help
 #
 #   Any further arguments after `--` are passed through to `modelguild init`.
@@ -55,7 +60,7 @@ while [ $# -gt 0 ]; do
     --ref) shift; REF="${1:?--ref needs a version or dist-tag}" ;;
     --ref=*) REF="${1#--ref=}" ;;
     --) shift; while [ $# -gt 0 ]; do passthrough+=("$1"); shift; done; break ;;
-    -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument '$1' (see --help)" ;;
   esac
   shift
@@ -79,8 +84,15 @@ else
   runner=(npx -y "$spec")
 fi
 
-init_args=(init --dir "$dir")
-[ -n "$uninstall" ] && init_args=(init --uninstall --dir "$dir")
+# --global means BOTH halves of global: a global CLI (above) AND a global payload install.
+# A global payload has no project target, so --dir is omitted (init --global rejects it).
+init_args=(init)
+if [ -n "$global_cli" ]; then
+  init_args+=(--global)
+else
+  init_args+=(--dir "$dir")
+fi
+[ -n "$uninstall" ] && init_args+=(--uninstall)
 init_args+=(${passthrough[@]+"${passthrough[@]}"})
 
 printf 'install.sh: %s %s\n' "$(basename "${runner[0]}")" "${init_args[*]}" >&2

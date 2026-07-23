@@ -17,8 +17,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { init, mcpServerEntry, type ServerLaunch } from "./init.js";
-import { payloadFiles } from "./init.js";
+import { init, mcpServerEntry, payloadFiles, payloadDest, resolveGlobalDirs, type ServerLaunch } from "./init.js";
 
 const SELF = fileURLToPath(import.meta.url); // <pkg>/dist/cli.js  or  <pkg>/src/cli.ts
 const PACKAGE_ROOT = path.resolve(path.dirname(SELF), "..");
@@ -55,11 +54,14 @@ function parseInitArgs(argv: string[]): {
   uninstall: boolean;
   launch: ServerLaunch;
   writeMcp: boolean;
+  global: boolean;
 } {
   let targetDir = process.cwd();
+  let dirExplicit = false;
   let uninstall = false;
   let useAbs = false;
   let writeMcp = false;
+  let global = false;
   let customCommand: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -69,11 +71,21 @@ function parseInitArgs(argv: string[]): {
     else if (a === "--abs") useAbs = true;
     // OPT-IN: restore the old auto-write of the project `.mcp.json` entry.
     else if (a === "--write-mcp") writeMcp = true;
-    else if (a === "--dir") targetDir = argv[++i] ?? targetDir;
-    else if (a.startsWith("--dir=")) targetDir = a.slice("--dir=".length);
+    // GLOBAL payload install (all projects) — see init.ts InitOptions.global.
+    else if (a === "--global") global = true;
+    else if (a === "--dir") { targetDir = argv[++i] ?? targetDir; dirExplicit = true; }
+    else if (a.startsWith("--dir=")) { targetDir = a.slice("--dir=".length); dirExplicit = true; }
     else if (a === "--server-command") customCommand = argv[++i];
     else if (a.startsWith("--server-command=")) customCommand = a.slice("--server-command=".length);
     else throw new Error(`init: unknown argument '${a}'`);
+  }
+  // --global has no project target: reject an explicit --dir (rather than silently ignoring
+  // it) and reject --write-mcp (no project .mcp.json to write).
+  if (global && dirExplicit) {
+    throw new Error("init: --global has no project target — drop --dir (the payload lands in your global config).");
+  }
+  if (global && writeMcp) {
+    throw new Error("init: --write-mcp cannot be combined with --global (there is no project .mcp.json).");
   }
   targetDir = path.resolve(targetDir);
   let launch: ServerLaunch;
@@ -86,16 +98,29 @@ function parseInitArgs(argv: string[]): {
   } else {
     launch = npxServeLaunch(); // SHIPPED DEFAULT
   }
-  return { targetDir, uninstall, launch, writeMcp };
+  return { targetDir, uninstall, launch, writeMcp, global };
 }
 
 function runInit(argv: string[]): number {
-  const { targetDir, uninstall, launch, writeMcp } = parseInitArgs(argv);
-  const res = init({ targetDir, packageRoot: PACKAGE_ROOT, serverLaunch: launch, uninstall, writeMcp });
+  const { targetDir, uninstall, launch, writeMcp, global } = parseInitArgs(argv);
+  const res = init({ targetDir, packageRoot: PACKAGE_ROOT, serverLaunch: launch, uninstall, writeMcp, global });
+  const g = resolveGlobalDirs({});
 
   if (uninstall) {
-    console.log(`Uninstalled ModelGuild (MCP) from ${targetDir}`);
-    console.log(`  removed ${res.removed.length} file(s); .mcp.json ${res.mcpAction}`);
+    if (global) {
+      console.log("Uninstalled ModelGuild (MCP) GLOBAL payload");
+      console.log(`  removed ${res.removed.length} file(s) from your global config`);
+    } else {
+      console.log(`Uninstalled ModelGuild (MCP) from ${targetDir}`);
+      console.log(`  removed ${res.removed.length} file(s); .mcp.json ${res.mcpAction}`);
+    }
+  } else if (global) {
+    console.log("Installed ModelGuild (MCP) GLOBAL payload — available in EVERY project");
+    console.log(`  ${res.installed.length} file(s) written, ${res.skipped.length} skipped`);
+    console.log(`  commands: ${path.join(g.homeDir, ".claude", "commands", "guild")}/`);
+    console.log(`  agents:   ${path.join(g.xdgConfigHome, "opencode", "agent")}/`);
+    console.log(`  policy:   ${path.join(g.homeDir, ".claude", "modelguild")}/`);
+    console.log(`  .mcp.json: NOT written — register the server globally yourself (see below).`);
   } else {
     console.log(`Installed ModelGuild (MCP) into ${targetDir}`);
     console.log(`  ${res.installed.length} file(s) written, ${res.skipped.length} skipped`);
@@ -114,17 +139,19 @@ function runInit(argv: string[]): number {
         `not ModelGuild's — rename or remove them and re-run to use ours.`,
     );
   }
-  if (!uninstall && !writeMcp) printRegisterInstructions(targetDir, launch);
+  if (!uninstall && !writeMcp) printRegisterInstructions(targetDir, launch, global);
   if (!uninstall) {
     console.log("Next steps:");
     console.log("  1. Authenticate opencode:  opencode auth login");
-    if (!writeMcp) {
-      console.log("  2. Register the MCP server (see 'Register the MCP server' above).");
-    } else {
+    if (writeMcp) {
       console.log("  2. (Done — --write-mcp wrote the project .mcp.json for you.)");
+    } else if (global) {
+      console.log("  2. Register the MCP server globally, once (see above): `claude mcp add modelguild -s user -- …`.");
+    } else {
+      console.log("  2. Register the MCP server (see 'Register the MCP server' above).");
     }
     console.log("  3. Restart Claude Code so it picks up the MCP server.");
-    console.log("  4. Check the setup:        npx modelguild doctor");
+    console.log(`  4. Check the setup:        npx modelguild doctor${global ? " --global" : ""}`);
   }
   return 0;
 }
@@ -133,9 +160,22 @@ function runInit(argv: string[]): number {
  * the recommended `claude mcp add` CLI form (any scope), and the raw `.mcp.json` snippet for
  * hand-placement. The snippet reuses `mcpServerEntry` so its shape can't drift from what
  * `--write-mcp` would write. */
-function printRegisterInstructions(targetDir: string, launch: ServerLaunch): void {
+function printRegisterInstructions(targetDir: string, launch: ServerLaunch, global = false): void {
   const launchStr = [launch.command, ...launch.args].join(" ");
   console.log("");
+  if (global) {
+    // Global payload ⇒ the natural registration is the global (user) scope. One registration
+    // works in every project (the server resolves the active project from its cwd).
+    console.log("Register the MCP server globally, once (the global payload works in every project):");
+    console.log("");
+    console.log(`    claude mcp add modelguild -s user -- ${launchStr}`);
+    console.log(
+      "    -s user writes ~/.claude.json (all your projects). The MCP server key must be " +
+        "exactly 'modelguild' — the /guild:* commands grant mcp__modelguild__* .",
+    );
+    console.log("");
+    return;
+  }
   console.log("Register the MCP server (init did NOT write .mcp.json — you choose the scope):");
   console.log("");
   console.log("  Recommended — register with the Claude CLI:");
@@ -153,14 +193,20 @@ function printRegisterInstructions(targetDir: string, launch: ServerLaunch): voi
 
 /** A light, token-free doctor: no model call. Confirms the MCP-era payload is present
  * and coherent. This is the deep check — the bash `collab/doctor.sh` was retired at M12. */
-async function runDoctor(argv: string[]): Promise<number> {
+async function runDoctor(
+  argv: string[],
+  inject?: { homeDir?: string; xdgConfigHome?: string },
+): Promise<number> {
   let targetDir = process.cwd();
+  let global = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dir") targetDir = argv[++i] ?? targetDir;
     else if (a.startsWith("--dir=")) targetDir = a.slice("--dir=".length);
+    else if (a === "--global") global = true;
   }
   targetDir = path.resolve(targetDir);
+  const gdirs = resolveGlobalDirs({ homeDir: inject?.homeDir, xdgConfigHome: inject?.xdgConfigHome });
   let ok = true;
   const line = (good: boolean, msg: string) => {
     console.log(`${good ? "✓" : "✗"} ${msg}`);
@@ -205,21 +251,32 @@ async function runDoctor(argv: string[]): Promise<number> {
     );
   }
 
-  // Command docs + agent defs present.
+  // Command docs + agent defs present — at the GLOBAL locations when --global, else the
+  // project. `payloadDest` maps each dest-rel to where it actually lives in this mode.
+  const destOpts = { global, targetDir, global_dirs: gdirs };
   let docsPresent = 0;
   let agentsPresent = 0;
   for (const { dest } of payloadFiles()) {
-    if (!existsSync(path.join(targetDir, dest))) continue;
+    const { base, rel } = payloadDest(dest, destOpts);
+    if (!existsSync(path.join(base, rel))) continue;
     if (dest.startsWith(".claude/commands/")) docsPresent++;
     else if (dest.startsWith(".opencode/agent/")) agentsPresent++;
   }
-  line(docsPresent >= 7, `${docsPresent}/8 command docs present in .claude/commands/guild/`);
-  line(agentsPresent === 3, `${agentsPresent}/3 hardened agent defs present in .opencode/agent/`);
+  const docsDir = global
+    ? `${path.join(gdirs.homeDir, ".claude", "commands", "guild")}/`
+    : ".claude/commands/guild/";
+  const agentsDir = global
+    ? `${path.join(gdirs.xdgConfigHome, "opencode", "agent")}/`
+    : ".opencode/agent/";
+  line(docsPresent >= 7, `${docsPresent}/8 command docs present in ${docsDir}`);
+  line(agentsPresent === 3, `${agentsPresent}/3 hardened agent defs present in ${agentsDir}`);
 
   // Policy / config templates present.
+  const policy = payloadDest("modelguild/models.policy", destOpts);
+  const policyPath = path.join(policy.base, policy.rel);
   line(
-    existsSync(path.join(targetDir, "modelguild/models.policy")),
-    "model policy present (modelguild/models.policy)",
+    existsSync(policyPath),
+    `model policy present (${global ? policyPath : "modelguild/models.policy"})`,
   );
 
   // opencode binary (best-effort; a missing binary is a warning, not a hard fail here).
@@ -250,11 +307,14 @@ async function main(): Promise<number> {
     console.log("  init [--dir D]   Place the MCP-era payload into a project (--uninstall to remove).");
     console.log("                   Does NOT write .mcp.json by default — it prints how to register");
     console.log("                   the server yourself (`claude mcp add`, your choice of scope).");
+    console.log("       [--global]  Install the payload into your GLOBAL config (all projects):");
+    console.log("                   commands→~/.claude/commands/guild, agents→the opencode global");
+    console.log("                   agent dir, policy→~/.claude/modelguild. No --dir/--write-mcp.");
     console.log("       [--write-mcp]  Opt in to the old behavior: write/merge the project .mcp.json.");
     console.log("       [--npx]     Default launch line: `npx -y modelguild serve`.");
     console.log("       [--abs]     Pin an absolute path to this interpreter+entry (offline/no-registry).");
     console.log("       [--server-command \"cmd args\"]  Override the launch command verbatim.");
-    console.log("  doctor [--dir D] Token-free health check.");
+    console.log("  doctor [--dir D] Token-free health check ([--global] checks the global locations).");
     return 0;
   }
   console.error(`modelguild: unknown command '${cmd}' (see --help)`);
