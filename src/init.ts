@@ -3,16 +3,19 @@
  *
  * Where the bash `install.sh` copies the whole bash payload (ask.sh/log.sh/… + all four
  * agent defs + witness.md) into a project, `init` places ONLY the MCP-era surface:
- *   (a) registers the production MCP server in the target `.mcp.json` under the KEY
- *       `claudecollab` — the exact key M10's command grants (`mcp__claudecollab__<tool>`)
- *       require;
- *   (b) the 8 command docs (7 migrated + configure) → `.claude/commands/collab/`;
- *   (c) the 3 hardened agent defs the MCP tools resolve (`collab-read`/`collab-build`/
+ *   (a) the 8 command docs (7 migrated + configure) → `.claude/commands/collab/`;
+ *   (b) the 3 hardened agent defs the MCP tools resolve (`collab-read`/`collab-build`/
  *       `collab-research`) → `.opencode/agent/` (opencode serve resolves `--agent` from
  *       the project's `.opencode/`, and research/delegate REFUSE if their def is absent —
  *       so these are load-bearing, not optional);
- *   (d) the policy/config templates → `collab/` (where `resolveCollabRoot` reads them).
+ *   (c) the policy/config templates → `collab/` (where `resolveCollabRoot` reads them).
  * It does NOT install the bash wrappers or witness.md — those are retiring (M12).
+ *
+ * MCP REGISTRATION is user-driven by default: `init` does NOT touch `.mcp.json`. The user
+ * registers the server themselves (`claude mcp add claudecollab -s <scope> -- …`), choosing
+ * per-project or global scope. The opt-in `--write-mcp` flag restores the old behavior —
+ * writing/merging the project-scoped `.mcp.json` entry under the KEY `claudecollab` (the
+ * exact key the command grants `mcp__claudecollab__<tool>` require).
  *
  * OWNERSHIP is ported from `install.sh`'s SHA-256 model, not reinvented: every file we
  * write records the sha256 of its written bytes in `collab/.claudecollab-install.json`.
@@ -130,6 +133,10 @@ export interface InitOptions {
   serverLaunch: ServerLaunch;
   /** true → uninstall (hash-verified removal) instead of install. */
   uninstall?: boolean;
+  /** OPT-IN: write/merge the project `.mcp.json` server entry (the old auto-write). Default
+   * false — the user registers the server themselves (`claude mcp add`, their choice of
+   * scope), so `mcpAction` is `"skipped"` unless this is set. */
+  writeMcp?: boolean;
 }
 
 export interface InitResult {
@@ -139,7 +146,7 @@ export interface InitResult {
   /** Command docs a user already had at our path that are NOT ours (shadowing). */
   shadowed: string[];
   warnings: string[];
-  mcpAction: "created" | "merged" | "updated" | "removed" | "unchanged";
+  mcpAction: "created" | "merged" | "updated" | "removed" | "unchanged" | "skipped";
 }
 
 type Records = Record<string, string>; // destRel -> sha256(hex)
@@ -208,7 +215,7 @@ function ensureDir(p: string): void {
 // ---------------------------------------------------------------------------
 // .mcp.json merge / removal
 // ---------------------------------------------------------------------------
-function mcpServerEntry(opts: InitOptions): Record<string, unknown> {
+export function mcpServerEntry(opts: InitOptions): Record<string, unknown> {
   const env: Record<string, string> = {
     COLLAB_PROJECT_DIR: opts.targetDir,
     ...(opts.serverLaunch.env ?? {}),
@@ -406,7 +413,9 @@ export function init(opts: InitOptions): InitResult {
   }
 
   writeRecords(opts.targetDir, newRecords);
-  result.mcpAction = writeMcpJson(opts);
+  // MCP registration is user-driven by default (`claude mcp add`, their choice of scope);
+  // only the opt-in `--write-mcp` path writes the project `.mcp.json` for them.
+  result.mcpAction = opts.writeMcp ? writeMcpJson(opts) : "skipped";
   addGitignoreBlock(opts.targetDir);
   return result;
 }

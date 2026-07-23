@@ -2,17 +2,20 @@
 # install.sh — thin bootstrap for ClaudeCollab (TypeScript / MCP era).
 #
 # ClaudeCollab is distributed as an npm package (`claudecollab`) whose `init`
-# command places the payload into a project and registers the MCP server:
+# command places the payload into a project:
 #   .claude/commands/collab/  the slash commands (/collab:consult, /collab:panel, …)
 #   .opencode/agent/          the hardened collab-read / collab-build / collab-research defs
 #   collab/                   the model policy + config template
-#   .mcp.json                 registers the `claudecollab` MCP server (npx -y claudecollab serve)
+# MCP registration is user-driven: `init` does NOT write .mcp.json by default. It prints
+# the `claude mcp add claudecollab -s <scope> -- …` command for you to run (your choice of
+# global/project/local scope). The opt-in `--write-mcp` flag restores the old behavior of
+# merging a project-scoped `.mcp.json` entry for the `claudecollab` MCP server.
 #
 # THIS SCRIPT IS ONLY A CONVENIENCE. It exists so the classic one-liner still works:
 #   curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash
 # All it does is make the npm package available and run `claudecollab init` in your
 # project. The real installer — including the SHA-256 ownership model that upgrades/
-# removes only files it wrote, the .mcp.json merge, and the shadow-detection warnings —
+# removes only files it wrote, the optional --write-mcp .mcp.json merge, and the shadow-detection warnings —
 # lives inside the package (`claudecollab init`, src/init.ts). This script reimplements
 # none of that; it just delegates.
 #
