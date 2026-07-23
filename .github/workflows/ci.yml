@@ -1,14 +1,23 @@
 name: CI
 
-# Fast, token-free checks that need no opencode auth and call no model: shell
-# syntax, ShellCheck, the fake-opencode wrapper unit tests, and command/agent
-# frontmatter and documentation validation. The agent permission runtime proofs
-# are intentionally not here because they need a real authenticated opencode.
+# Fast, token-free checks that need no opencode auth and call no model. Since the
+# bash wrapper layer was retired (PLAN.md M12), the surviving shell is a handful of
+# lint scripts (shebangs, frontmatter, docs, agent-permissions, shellcheck) plus the
+# dev-container host-config tooling — so the shell jobs lint THOSE, and the product
+# is the TypeScript/MCP server, exercised by the `node` job.
 #
-# Two jobs: `shell` on Linux, and `macos` running the same opencode-free set
-# against BSD awk/sed/mktemp and stock bash 3.2. The macOS job is free only
-# because this repo is public (private repos bill macOS minutes at 10x), which
-# is why it landed at release rather than earlier.
+# Three jobs:
+#   shell  — Linux: shellcheck + the surviving opencode-free lint scripts, each run on
+#            the repo AND against its own --self-test (which proves the lint still
+#            catches the regressions it exists to catch, now that the run-tests.sh
+#            meta-tests that used to prove that are gone).
+#   macos  — the same lints on stock bash 3.2 + BSD awk/sed/grep, the platform
+#            difference no lint can catch. Free only because this repo is public.
+#   node   — the TS/MCP rewrite: typecheck + the offline test suites. Same
+#            credential-free, opencode-free rule (see that job for the 3 excluded).
+#
+# The resolved-config agent proofs (verify-collab-*.sh) are NOT here: they need a
+# real authenticated opencode, and this CI is credential-free by decision.
 
 on:
   push:
@@ -20,7 +29,7 @@ permissions:
 
 jobs:
   shell:
-    name: shell checks + wrapper tests
+    name: shell lints (surviving scripts) + self-tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,14 +38,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Enumerate shell scripts
-        id: scripts
         run: |
-          # All tracked *.sh plus the extension-less fake-opencode stub.
-          files="$(git ls-files '*.sh' 'collab/tests/fake-opencode')"
+          # All tracked *.sh (the bash wrapper layer and its extension-less fixtures
+          # were retired at M12, so only the lint/verify/dev-container scripts remain).
+          files="$(git ls-files '*.sh')"
           echo "Files to check:"; echo "$files"
           # shellcheck disable=SC2086
           printf '%s\n' $files > /tmp/shfiles
-          echo "list=/tmp/shfiles" >> "$GITHUB_OUTPUT"
 
       - name: Syntax check (bash -n)
         run: |
@@ -48,9 +56,8 @@ jobs:
           exit "$rc"
 
       - name: ShellCheck (severity=warning)
-        # Single source of truth: the same script a dev runs locally and doctor --full
-        # calls, so the file set + flags can't drift between local and CI. It skips
-        # cleanly if shellcheck is absent — the Install step above guarantees it here.
+        # Single source of truth: the same script a dev runs locally, so the file set +
+        # flags can't drift between local and CI.
         run: bash collab/tests/check-shellcheck.sh
 
       - name: Shebang conformance (#!/usr/bin/env bash everywhere)
@@ -59,7 +66,7 @@ jobs:
       - name: Frontmatter validation
         run: bash collab/tests/check-frontmatter.sh
 
-      - name: Documentation workflow lint
+      - name: Documentation workflow lint (+ self-test)
         run: bash collab/tests/check-docs.sh --self-test
 
       - name: Host-config symlink confinement
@@ -69,23 +76,26 @@ jobs:
         # Opencode-free: guards the realistic regression (a human weakens an agent
         # def — re-adds "*": allow, drops the deny floor, flips mode). It does NOT
         # prove opencode's resolved enforcement — that's verify-collab-*.sh, which
-        # needs the opencode binary and runs locally / via doctor.sh, not here.
+        # needs the opencode binary and runs locally, not here.
         run: bash collab/tests/check-agent-permissions.sh
 
-      - name: Wrapper unit tests (fake opencode, no model calls)
-        run: bash collab/tests/run-tests.sh
-
-      - name: Installer smoke tests (install/uninstall into temp dirs)
-        run: bash collab/tests/test-install.sh
+      - name: Lint self-tests (prove the lints still catch regressions)
+        # The run-tests.sh meta-tests that used to prove this retired with the bash
+        # layer; each lint now carries its own --self-test (ported from those).
+        run: |
+          bash collab/tests/check-agent-permissions.sh --self-test
+          bash collab/tests/check-shebangs.sh --self-test
+          bash collab/tests/check-shellcheck.sh --self-test
 
   macos:
     name: macOS / BSD (stock bash 3.2)
     runs-on: macos-latest
-    # Same token-free, opencode-free checks as the Linux job, run against BSD
-    # awk/sed/mktemp and stock bash 3.2 — the platform difference no lint can
-    # catch. ShellCheck is deliberately NOT repeated here: it is static analysis
-    # with identical results on either OS, so it would cost a brew install to
-    # prove nothing.
+    # The same surviving lints as the Linux job, run against BSD awk/sed/grep and
+    # stock bash 3.2 — the platform difference no lint can catch (the lint scripts
+    # lean on awk/grep heavily). ShellCheck-the-tool is NOT brew-installed here: it is
+    # static analysis with identical results on either OS, so it would cost an install
+    # to prove nothing; check-shellcheck.sh still runs and skips cleanly (which also
+    # proves its absent-shellcheck skip path on BSD).
     steps:
       - uses: actions/checkout@v4
 
@@ -97,7 +107,7 @@ jobs:
       #
       # Shadowing `bash` on PATH (rather than invoking /bin/bash per step) is what
       # makes this total: it also covers `#!/usr/bin/env bash` shebangs and the
-      # nested `bash foo.sh` calls the test scripts make internally.
+      # nested `bash foo.sh` calls the lint scripts make internally.
       - name: Pin stock bash 3.2 onto PATH
         run: |
           mkdir -p /tmp/stockbash
@@ -109,56 +119,88 @@ jobs:
           echo "which bash : $(command -v bash)"
           bash --version | head -1
           # If Apple ever ships a newer stock bash, this job stops testing what it
-          # was created to test. That must be loud, not a silent pass: the whole
-          # point is coverage of 3.2, which the Linux job cannot provide.
+          # was created to test. That must be loud, not a silent pass.
           major="$(bash -c 'echo "${BASH_VERSINFO[0]}"')"
           if [ "$major" != "3" ]; then
             echo "::error::Expected stock bash 3.x, got ${major}.x — this job is no longer testing bash 3.2. Re-point the pin or retire the job deliberately."
             exit 1
           fi
 
-      # gtimeout only. The test fixtures use it as a safety net so a hang fails the
-      # run instead of wedging it, and without it five delegate cases (FIFO, device,
-      # unreadable, large-directory) report INCONCLUSIVE and cover nothing on the
-      # one platform they most need to cover — BSD find/awk is what they exercise.
-      #
-      # coreutils installs g-prefixed binaries ONLY. It does NOT shadow BSD awk or
-      # sed, so the platform difference under test is preserved. Do not add gawk or
-      # gnu-sed here: that would quietly turn this job back into a second Linux run.
-      - name: Install coreutils (gtimeout for the test fixtures)
-        run: brew install coreutils
-
       - name: Syntax check (bash -n)
         run: |
           rc=0
-          for f in $(git ls-files '*.sh' 'collab/tests/fake-opencode'); do
+          for f in $(git ls-files '*.sh'); do
             bash -n "$f" && echo "syntax ok: $f" || { echo "SYNTAX FAIL: $f"; rc=1; }
           done
           exit "$rc"
 
-      - name: Shebang conformance
-        run: bash collab/tests/check-shebangs.sh
+      - name: Shebang conformance (+ self-test)
+        run: |
+          bash collab/tests/check-shebangs.sh
+          bash collab/tests/check-shebangs.sh --self-test
 
       - name: Frontmatter validation
         run: bash collab/tests/check-frontmatter.sh
 
-      - name: Documentation workflow lint
+      - name: Documentation workflow lint (+ self-test)
         run: bash collab/tests/check-docs.sh --self-test
+
+      - name: ShellCheck lint script (skips cleanly without shellcheck; + self-test)
+        run: |
+          bash collab/tests/check-shellcheck.sh
+          bash collab/tests/check-shellcheck.sh --self-test
 
       - name: Host-config symlink confinement
         # Genuinely macOS-relevant: prepare-host-config.sh runs on the HOST, so a
         # Mac user runs this code path for real.
         run: bash .devcontainer/test-prepare-host-config.sh
 
-      - name: Agent permission invariants (source-level allowlist lint)
+      - name: Agent permission invariants (+ self-test)
         # High value here: its effective-permission resolver is awk, and this is
         # the only place that awk meets BSD awk.
-        run: bash collab/tests/check-agent-permissions.sh
+        run: |
+          bash collab/tests/check-agent-permissions.sh
+          bash collab/tests/check-agent-permissions.sh --self-test
 
-      - name: Wrapper unit tests (fake opencode, no model calls)
-        run: bash collab/tests/run-tests.sh
+  node:
+    name: node (TS/MCP — typecheck + offline suites)
+    runs-on: ubuntu-latest
+    # `npm test` (test/run.ts) runs all 13 test/*.test.ts suites, and three of
+    # them — lifecycle, orphan, mcp-client — spawn the REAL `opencode serve`
+    # binary to prove process lifecycle (PLAN.md M1: shutdown-on-stdin-close,
+    # the orphan flagship, no-process-leak). This CI is credential-free and
+    # opencode-free by decision (see header) and never installs or authenticates
+    # opencode, so those three cannot run honestly here — and they have NO graceful
+    # skip when the binary is absent (verified: `spawn opencode ENOENT` crashes the
+    # process rather than reporting skipped). So this job runs the ten OFFLINE
+    # suites individually (each supports standalone `tsx test/<name>.test.ts`) and
+    # states which three are excluded and why, so a green run here always means
+    # those ten suites actually executed — never a skipped-everything pass.
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Installer smoke tests (install/uninstall into temp dirs)
-        # The highest-risk surface on BSD: newest code, heavy awk, and it edits
-        # users' .gitignore and deletes files.
-        run: bash collab/tests/test-install.sh
+      - name: Set up Node 22 (matches the dev container's major)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Offline test suites (10 of 13)
+        run: |
+          echo "Running 10/13 test/*.test.ts suites offline."
+          echo "SKIPPED (need the real opencode binary; this CI never installs it):"
+          echo "  lifecycle, orphan, mcp-client — see job comment; run them locally."
+          echo
+          rc=0
+          for suite in client log policy config consult panel research delegate models init; do
+            echo "=== test/${suite}.test.ts ==="
+            npx tsx "test/${suite}.test.ts" || rc=1
+            echo
+          done
+          exit "$rc"

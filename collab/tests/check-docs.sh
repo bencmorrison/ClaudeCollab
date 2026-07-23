@@ -37,21 +37,46 @@ if grep -RIn --include='*.md' 'Bash(bash collab/log\.sh:\*)' .claude/commands/co
   bad "broad log.sh grant found; allow only required subcommands"
 fi
 
-for command in panel workshop collaborate; do
+# MCP-era command shape (M10): the multi-call workflows drive the MCP tools, not
+# `ask.sh`, and touch ZERO collab bash — subagent-voice logging retired with the
+# witness (a subagent voice was Claude's own captured:false transcription, testimony
+# for the cancelled witness; the log's receipts are the external models' auto-captured
+# responses). Assert each grants the MCP tool(s) it invokes. (bash 3.2 has no
+# associative arrays — the macOS CI job runs this lint — so use a case, not declare -A.)
+for command in panel workshop collaborate configure; do
   file=".claude/commands/collab/$command.md"
-  if ! grep -Fq 'allowed-tools:' "$file" || ! grep -Fq 'Bash(RUN=$(bash collab/log.sh new-run:*))' "$file"; then
-    bad "$command must grant the exact RUN=\$(bash collab/log.sh new-run ...) command"
-  fi
-  if ! grep -Fq 'RUN=$(bash collab/log.sh new-run' "$file"; then
-    bad "$command no longer documents the new-run assignment its frontmatter grants"
-  fi
-  combined_grant="Bash(COLLAB_RUN_ID=* COLLAB_COMMAND=/collab:$command COLLAB_CONFIRMED=1 bash collab/ask.sh:*)"
-  grep -m1 '^allowed-tools:' "$file" | grep -Fq "$combined_grant" \
-    || bad "$command must grant the exact combined run-id, command, and confirmation invocation"
+  grep -Fq 'allowed-tools:' "$file" || bad "$command has no allowed-tools frontmatter"
+  # collab_models (M11) replaced the `Bash(opencode models:*)` binary shell-out in every
+  # doc that enumerates models — assert it is granted where it belongs.
+  case "$command" in
+    panel)       mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_models" ;;
+    workshop)    mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_consult mcp__claudecollab__collab_models" ;;
+    collaborate) mcp_grants="mcp__claudecollab__collab_consult mcp__claudecollab__collab_models" ;;
+    configure)   mcp_grants="mcp__claudecollab__collab_models" ;;
+    *)           mcp_grants="" ;;
+  esac
+  fm_line="$(grep -m1 '^allowed-tools:' "$file")"
+  for g in $mcp_grants; do
+    printf '%s' "$fm_line" | grep -Fq "$g" \
+      || bad "$command must grant the MCP tool $g in allowed-tools"
+  done
 done
 
-grep -Fq '"Bash(COLLAB_RUN_ID=* COLLAB_COMMAND=/collab:* COLLAB_CONFIRMED=1 bash collab/ask.sh:*)"' README.md \
-  || bad "README optional permissions omit the combined run-id, command, and confirmation invocation"
+# Every command doc must touch ZERO collab bash (M12, bash layer retired): no ask.sh, no
+# log.sh, no panel-models.sh, and none of the old env-var invocation forms. The last
+# opencode-binary shell-out (`Bash(opencode models:*)`) was replaced by the collab_models
+# MCP tool, so a doc must not grant `Bash(opencode` either. (witness.md retired with the
+# witness; configure.md was migrated to the MCP tools + `claudecollab doctor` at M12.)
+migrated_cmds=(consult panel research delegate review workshop collaborate configure)
+for command in "${migrated_cmds[@]}"; do
+  file=".claude/commands/collab/$command.md"
+  if grep -nE 'collab/ask\.sh|collab/log\.sh|panel-models\.sh|COLLAB_RUN_ID|COLLAB_CONFIRMED' "$file"; then
+    bad "$command still references collab bash; the migrated docs drive the MCP tools only"
+  fi
+  if grep -nE 'Bash\(opencode' "$file"; then
+    bad "$command still grants an opencode-binary Bash shell-out; use the collab_models MCP tool"
+  fi
+done
 
 delegate=.claude/commands/collab/delegate.md
 grep -m1 '^allowed-tools:' "$delegate" | grep -Fq 'Read' || bad "delegate patch review requires Read in allowed-tools"
@@ -59,11 +84,6 @@ grep -Fq 'with the `Read` tool' "$delegate" || bad "delegate must review the rec
 
 review=.claude/commands/collab/review.md
 grep -m1 '^allowed-tools:' "$review" | grep -Fq 'Bash(git ls-files:*)' || bad "review uses git ls-files but does not grant it"
-grep -Fq '"Bash(git ls-files:*)"' README.md || bad "README optional permissions omit review's git ls-files command"
-
-witness=.claude/commands/collab/witness.md
-grep -Fq 'outside ASCII `[A-Za-z0-9._-]`' "$witness" || bad "witness report filename sanitization rule is missing"
-grep -Fq 'use `model` if nothing remains' "$witness" || bad "witness filename empty-result fallback is missing"
 
 lifecycle_files=(
   AGENTS.md
@@ -89,10 +109,6 @@ done < <(grep -RInE 'started[[:space:]]*[/+&][[:space:]]*completed([^[:alnum:]]|
 for file in AGENTS.md README.md SECURITY.md; do
   grep -Fq 'expected-call' "$file" || bad "$file must document the expected-call lifecycle entry"
 done
-
-if ! grep -Fq 'PAYLOAD_FILES' AGENTS.md || ! grep -Fq 'check-docs.sh' install.sh; then
-  bad "docs lint must be described in AGENTS.md and included in install.sh PAYLOAD_FILES"
-fi
 
 [ "$failed" -eq 0 ] || exit 1
 echo "documentation workflow lint: PASS"
@@ -131,15 +147,31 @@ if [ "${1:-}" = "--self-test" ]; then
   printf '\nRun `/review` for details.\n' >> "$fixture/README.md"
   expect_rejected "obsolete command name" "$fixture"
 
-  fixture="$tmp/command-grant-mismatch"
+  fixture="$tmp/missing-mcp-grant"
   cp -a "$baseline" "$fixture"
   cat > "$fixture/.claude/commands/collab/panel.md" <<'EOF'
 ---
-allowed-tools: Bash(RUN=$(bash collab/log.sh new-run:*)), Bash(COLLAB_RUN_ID=* COLLAB_COMMAND=/collab:workshop COLLAB_CONFIRMED=1 bash collab/ask.sh:*)
+allowed-tools: mcp__claudecollab__collab_consult, Task
 ---
-RUN=$(bash collab/log.sh new-run)
+Ask the panel.
 EOF
-  expect_rejected "command/grant mismatch" "$fixture"
+  expect_rejected "panel missing its collab_panel MCP grant" "$fixture"
+
+  fixture="$tmp/migrated-doc-collab-bash"
+  cp -a "$baseline" "$fixture"
+  printf '\nRun `COLLAB_COMMAND=/collab:consult bash collab/ask.sh "q"`.\n' \
+    >> "$fixture/.claude/commands/collab/consult.md"
+  expect_rejected "collab bash in a migrated command doc" "$fixture"
+
+  fixture="$tmp/migrated-doc-opencode-bash"
+  cp -a "$baseline" "$fixture"
+  cat > "$fixture/.claude/commands/collab/consult.md" <<'EOF'
+---
+allowed-tools: mcp__claudecollab__collab_consult, Bash(opencode models:*), Task
+---
+Consult.
+EOF
+  expect_rejected "opencode-binary Bash grant in a migrated command doc" "$fixture"
 
   fixture="$tmp/stale-lifecycle"
   cp -a "$baseline" "$fixture"

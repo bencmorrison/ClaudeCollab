@@ -95,13 +95,11 @@ EOF
 # check_agent <file> <space-separated expected-allow tools> [read-spec]
 #
 # read-spec describes the SHAPE of the read map, because they are not all alike:
-#   nonsecret          (default) `*` allows, each secret glob denies — the shape used
-#                      by collab-read/build/collab:research: "read the repo, except secrets".
-#   scoped:<glob>      `*` DENIES and only <glob> allows — collab-watch's inverted
-#                      map: "read nothing except the log". Secrets need no globs
-#                      here; they're denied by the floor, and listing them would
-#                      imply the floor were allow. Asserted anyway (below), since
-#                      "secrets are unreadable" is the guarantee either way.
+#   plain              read is a plain top-level `read: allow` with NO secret-glob submap
+#                      — the loosened read-only reviewer shape of collab-read/collab-research
+#                      (2026-07-22 realignment): read the repo, dotfiles included.
+#   nonsecret          (default) `*` allows, each secret glob denies — collab-build's read
+#                      TOOL (defense-in-depth): "read the repo, except secrets".
 check_agent() {
   local f="$1" expect="$2" readspec="${3:-nonsecret}" label f0="$fail"; label="$(basename "$f")"
   if [ ! -f "$f" ]; then bad "$label" "file not found"; return; fi
@@ -136,51 +134,98 @@ EOF
     esac
   done
 
-  # read map. Either shape must leave every representative secret effectively denied.
-  local rm; rm="$(printf '%s\n' "$fm" | read_map)"
+  # read map handling depends on the readspec shape.
+  local rm s; rm="$(printf '%s\n' "$fm" | read_map)"
   case "$readspec" in
-    scoped:*)
-      local scope="${readspec#scoped:}"
-      [ "$(effective "$rm" '*')" = "deny" ] \
-        || bad "$label" "read map: '*' resolves to '$(effective "$rm" '*')', expected deny — this agent's scope is enforced BY CONSTRUCTION, and an allow floor silently hands it the whole repo"
-      [ "$(effective "$rm" "$scope")" = "allow" ] \
-        || bad "$label" "read map: scope '$scope' resolves to '$(effective "$rm" "$scope")', expected allow (the agent cannot read the only thing it exists to read)"
-      if [ "$scope" = "collab/logs/**" ]; then
-        [ "$(effective "$rm" "**/collab/logs/**")" = "allow" ] \
-          || bad "$label" "read map: absolute log scope '**/collab/logs/**' resolves to '$(effective "$rm" "**/collab/logs/**")', expected allow (/collab:witness passes an absolute path)"
-      fi
+    plain)
+      # Loosened read path (collab-read/collab-research, 2026-07-22 permission realignment):
+      # read is a plain top-level `read: allow` with NO secret-glob submap. The secret
+      # fences were removed as vendor-asymmetry bias — a review subagent reads the repo,
+      # dotfiles included. Assert read resolves to allow at top level AND there is no submap;
+      # a re-added secret-glob carve-out (a read submap) is now itself a regression.
+      [ "$(effective "$tp" read)" = "allow" ] \
+        || bad "$label" "read resolves to '$(effective "$tp" read)', expected a plain top-level 'read: allow'"
+      [ -z "$rm" ] \
+        || bad "$label" "read has a submap; the loosened path expects a plain 'read: allow' with NO secret-glob carve-outs (removed 2026-07-22 — do not re-fence a read-only reviewer)"
       ;;
-    *)
+    nonsecret|*)
+      # collab-build: `*` allows, each secret glob denies (defense-in-depth on the read TOOL).
       [ "$(effective "$rm" '*')" = "allow" ] \
         || bad "$label" "read map: '*' resolves to '$(effective "$rm" '*')', expected allow (agent can't read non-secret files)"
+      for s in $SECRET_GLOBS; do
+        [ "$(effective "$rm" "$s")" = "deny" ] \
+          || bad "$label" "read map: secret '$s' resolves to '$(effective "$rm" "$s")', expected deny (last-match-wins — is a '\"*\": allow' after it?)"
+      done
       ;;
   esac
-  local s
-  for s in $SECRET_GLOBS; do
-    [ "$(effective "$rm" "$s")" = "deny" ] \
-      || bad "$label" "read map: secret '$s' resolves to '$(effective "$rm" "$s")', expected deny (last-match-wins — is a '\"*\": allow' after it?)"
-  done
 
   [ "$fail" -eq "$f0" ] && pass "$label: allowlist invariants hold (frontmatter-bounded, effective/last-match-aware)"
 }
 
-echo "== collab-read (allowlist: webfetch/websearch) =="
-check_agent "$AGENT_DIR/collab-read.md" "webfetch websearch"
+# --self-test: prove THIS lint catches the realistic weakenings a human edit could make
+# (ported from the retired run-tests.sh meta-tests; the collab-watch cases went with the
+# retired witness agent). It re-invokes the lint against crafted agent dirs and asserts it
+# passes the real defs and fails each tampered one. Opencode-free; run in CI + doctor.sh.
+if [ "${1:-}" = "--self-test" ]; then
+  SELF="$here/$(basename "${BASH_SOURCE[0]}")"
+  REAL="$repo_root/.opencode/agent"
+  st_fail=0
+  st_ok() { printf '\033[32mok\033[0m   self-test: %s\n' "$1"; }
+  st_no() { printf '\033[31mFAIL\033[0m self-test: %s\n' "$1"; st_fail=1; }
+  run_variant() { COLLAB_AGENT_DIR="$1" bash "$SELF" >/dev/null 2>&1; }
+  d="$(mktemp -d "${TMPDIR:-/tmp}/collab-aplint.XXXXXX")"; mkdir -p "$d/agent"
+  seed() { cp "$REAL/collab-read.md" "$REAL/collab-build.md" "$REAL/collab-research.md" "$d/agent/"; }
+
+  # S1. The real defs pass.
+  seed
+  run_variant "$d/agent" && st_ok "real agents pass" || st_no "lint rejects the real agents (false positive)"
+
+  # S2. `write` re-added to collab-read's allow-set (no-write ROLE broken) -> FAIL.
+  seed
+  printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  "*": deny' \
+    '  read: allow' '  grep: allow' '  glob: allow' '  webfetch: allow' '  websearch: allow' \
+    '  write: allow' '---' 'body' > "$d/agent/collab-read.md"
+  run_variant "$d/agent" && st_no "MISSED write re-added to collab-read" || st_ok "catches write re-added to the read-only collab-read allow-set"
+
+  # S3. Unprotected frontmatter (no floor) with a valid-looking block in the BODY -> FAIL.
+  seed
+  printf '%s\n' '---' 'description: x' 'mode: all' '---' 'Example (not real frontmatter):' \
+    'permission:' '  "*": deny' '  read:' '    "*": allow' > "$d/agent/collab-read.md"
+  run_variant "$d/agent" && st_no "MISSED unprotected frontmatter (body block fooled it)" || st_ok "ignores body block, catches missing floor"
+
+  # S4. collab-build with '*': deny placed AFTER the allows (effective = all denied) -> FAIL.
+  seed
+  printf '%s\n' '---' 'description: x' 'mode: all' 'permission:' '  edit: allow' '  write: allow' \
+    '  patch: allow' '  bash: allow' '  "*": deny' '  read:' '    "*": allow' '---' 'body' \
+    > "$d/agent/collab-build.md"
+  run_variant "$d/agent" && st_no "MISSED collab-build floor-after-allows (edit path dead)" || st_ok "catches '*': deny placed after the allows"
+
+  # S5. A secret glob removed from collab-build's canonical set -> FAIL.
+  seed
+  grep -v '"\*\*/\.gnupg/\*\*": deny' "$REAL/collab-build.md" > "$d/agent/collab-build.md"
+  run_variant "$d/agent" && st_no "MISSED a removed secret glob from the canonical set" || st_ok "guards the full canonical secret-glob set (collab-build)"
+
+  rm -rf "$d"
+  echo
+  if [ "$st_fail" -eq 0 ]; then printf '\033[32magent-permissions self-test: the lint catches every tampered variant\033[0m\n'
+  else printf '\033[31magent-permissions self-test: FAILED — the lint missed a regression\033[0m\n'; fi
+  exit "$st_fail"
+fi
+
+# collab-read: read-only reviewer ROLE (2026-07-22 realignment). read+grep+glob+web
+# ALLOWED like a Claude review subagent; read is a plain top-level allow (no secret
+# globs). no-write/no-task is the role. `plain` readspec asserts the no-submap shape.
+echo "== collab-read (allowlist: read/grep/glob/webfetch/websearch) =="
+check_agent "$AGENT_DIR/collab-read.md" "grep glob webfetch websearch" plain
 
 echo "== collab-build (allowlist: edit/write/patch/bash) =="
 check_agent "$AGENT_DIR/collab-build.md" "edit write patch bash"
 
-# collab-research is the source-backed /collab:research path.
-# `bash` must stay OUT of this allow-set — it's what keeps the secret-read and
-# grep/glob denies real on a path that can reach the network.
-echo "== collab-research (allowlist: webfetch/websearch) =="
-check_agent "$AGENT_DIR/collab-research.md" "webfetch websearch"
-
-# collab-watch is the /collab:witness oversight path. Its read map is INVERTED (deny floor,
-# only collab/logs/** allowed) — that scoping is the construction guarantee that keeps
-# an auditor auditing the log instead of drifting into reviewing the source.
-echo "== collab-watch (allowlist: no tool; read scoped to collab/logs/**) =="
-check_agent "$AGENT_DIR/collab-watch.md" "" "scoped:collab/logs/**"
+# collab-research is the source-backed /collab:research path — now IDENTICAL to
+# collab-read (2026-07-22 realignment): read+grep+glob+web allowed, no-write/no-task.
+# `bash` stays OUT of the allow-set (that no-shell/no-write scoping is the ROLE).
+echo "== collab-research (allowlist: read/grep/glob/webfetch/websearch) =="
+check_agent "$AGENT_DIR/collab-research.md" "grep glob webfetch websearch" plain
 
 echo
 if [ "$fail" -eq 0 ]; then printf '\033[32magent permissions: allowlist invariants hold\033[0m\n'

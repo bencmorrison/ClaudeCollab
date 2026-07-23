@@ -2,7 +2,7 @@
 .claude/settings.local.json
 
 # Per-user config written by /collab:configure (personal deny/ask/allow rules and
-# preferred models; ask.sh/panel-models auto-prefer these). Never commit personal
+# preferred models; the collab MCP tools read these). Never commit personal
 # prefs. The committed collab.conf.example is the template.
 collab/models.policy.local
 collab/collab.conf.local
@@ -18,6 +18,9 @@ collab/collab.conf.local
 # Node (opencode/claude are installed globally; this is just in case deps land here)
 node_modules/
 
+# TS/MCP rewrite build output (tsconfig outDir); tests run via tsx, not a build.
+dist/
+
 # opencode project-local install cruft (created when opencode resolves an agent
 # def in .opencode/); we commit .opencode/agent/*.md, not the package manifests.
 .opencode/package.json
@@ -28,9 +31,9 @@ node_modules/
 # linger if a run is interrupted mid-probe.
 .collab-*-probe.*
 
-# The evidence layer (collab/log.sh): raw model calls, prompts and responses from
-# every /collab:consult, /collab:panel, /collab:delegate, etc. Local audit data for the watcher — it holds
-# whatever repo context was pasted into a prompt, so it is never committed.
+# The evidence layer (src/log.ts): raw model calls, prompts and responses from
+# every /collab:consult, /collab:panel, /collab:delegate, etc. Local receipts — they hold
+# whatever repo context was pasted into a prompt, so they are never committed.
 collab/logs/
 
 # Host-side staging for selected devcontainer Claude config. Recreated before the

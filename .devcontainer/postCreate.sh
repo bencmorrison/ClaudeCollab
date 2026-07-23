@@ -16,7 +16,9 @@ sudo npm install -g @anthropic-ai/claude-code@latest opencode-ai@latest 2>&1 | t
 # Named volumes are normally seeded node-owned from the image dirs, but chown
 # defensively in case a volume initialized root-owned.
 sudo chown node:node "$HOME/.claude" "$HOME/.local/share/opencode" "$HOME/.config/gh" 2>/dev/null || true
-chmod +x collab/ask.sh 2>/dev/null || true
+# Keep the surviving shell (the verify/lint scripts) executable — the bash wrapper
+# layer was retired (PLAN.md M12); the product is the TypeScript/MCP server (npm).
+chmod +x collab/verify-collab-*.sh collab/tests/*.sh 2>/dev/null || true
 
 # Link the selected host Claude config snapshot into the active ~/.claude.
 # settings.json is copied only on a fresh volume because host hooks/statusLine/

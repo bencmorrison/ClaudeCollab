@@ -22,7 +22,8 @@ permission:
   # build`, so this is defense-in-depth, not construction. Diff review is the boundary.
   "*": deny
   # --- mutation: ALLOWED. The point of the agent — edit/create files, run builds
-  #     and tests. Under ask.sh's --auto these apply without blocking. ---
+  #     and tests. The default-deny floor leaves nothing in an `ask` state, so these
+  #     resolve to allow without blocking. ---
   edit: allow
   write: allow
   patch: allow

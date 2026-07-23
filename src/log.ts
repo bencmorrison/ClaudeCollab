@@ -1,0 +1,1071 @@
+/**
+ * log.ts — the ClaudeCollab evidence layer, ported from `collab/log.sh` (PLAN.md M3).
+ *
+ * WHY A PORT, NOT A REWRITE. The log is the ONLY data source a watcher (`/collab:witness`)
+ * audits instead of Claude's own summary, so its integrity is the whole honesty story.
+ * The bash `log.sh` is the oracle (CONTRACT.md area D, C22–C35); this module mirrors its
+ * schema, hashing, and verify semantics BYTE-FOR-BYTE so that:
+ *   - a TS-written run passes `bash log.sh verify`, and
+ *   - a bash-written run passes `verify()` here,
+ * and the two writers can even share one run (identical lock protocol + line bytes).
+ * The cross-verification is proven in test/log.test.ts, both directions, incl. negatives.
+ *
+ * WHAT IT IS NOT (inherited from log.sh): not tamper-proofing. The hash chain catches
+ * accidental corruption cheaply; anything that can write the log can rewrite the chain.
+ *
+ * DELIBERATE DIVERGENCES FROM log.sh, each with a reason:
+ *   - Prompts/responses are passed as in-memory STRINGS, not file paths. M5+ tools hold
+ *     the text already (client.ts `finalAssistantText`), and sha256 of a JS string's
+ *     UTF-8 equals sha256 of a file holding those bytes — so hashes cross-verify. The
+ *     `$(cat)` trailing-newline scar log.sh warns about cannot recur: no capture step
+ *     strips anything (client.ts invariant 2).
+ *   - Write methods NEVER throw into the caller (C31 "logging must never fail the call
+ *     it records"). They return a `{ ok }` result and warn to stderr on failure —
+ *     including a lock timeout, a disk error, or an invalid argument. `verify`/`prune`
+ *     are audit/maintenance paths and return results too.
+ *
+ * MIXED-WRITER RUNS ARE SUPPORTED (PLAN.md "no log migration — same schema, mixed-origin
+ * logs verify as one run"). The `.lock` dir protocol and line format are identical to
+ * bash, so bash and TS appends interleave safely; test/log.test.ts pins concurrent
+ * distinct-turn behavior and bash↔TS coexistence in a single run.
+ */
+
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  appendFileSync,
+  writeFileSync,
+  statSync,
+  lstatSync,
+  rmSync,
+  readlinkSync,
+  symlinkSync,
+  unlinkSync,
+  readdirSync,
+} from "node:fs";
+import { randomBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import {
+  buildEntryLine,
+  canonicalStringify,
+  recomputeEntryHash,
+  sha256Hex,
+  sha256HexBytes,
+  lineHash,
+  type JsonValue,
+} from "./canonical.js";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type PromptMode = "full" | "hash" | "off";
+export type CaptureState = "complete" | "failed";
+export type Verdict = "Adopt" | "Adapt" | "Reject" | "Defer";
+/** Policy tiers (mirrors `policy.ts` `PolicyTier`; duplicated here to avoid a src-layer
+ * import cycle — `config.ts` already imports from `log.ts`). */
+export type PolicyTier = "allow" | "ask" | "deny";
+
+/**
+ * `tier` / `confirmed` on a `started`/`completed` entry — a DELIBERATE positive-direction
+ * addition OVER the bash oracle (bash records neither). Without them, `/collab:witness`
+ * cannot audit whether an ask-tier model was consulted with claimed user approval. They
+ * are OPTIONAL: emitted only when the caller supplies them, so allow-tier and legacy
+ * (bash-written) entries carry neither key. Both verifiers accept entries with or without
+ * these fields — bash `verify` recomputes `entry_hash` over `del(.entry_hash)` (the whole
+ * object, no field whitelist), so extra keys are naturally hashed and never rejected, and
+ * TS `verify` recomputes the same way. Cross-verification (both directions) is pinned in
+ * test/log.test.ts and test/consult.test.ts.
+ */
+function policyFields(
+  tier: PolicyTier | undefined,
+  confirmed: boolean | undefined,
+): { [k: string]: JsonValue } {
+  const out: { [k: string]: JsonValue } = {};
+  if (tier !== undefined) out.tier = tier;
+  if (confirmed !== undefined) out.confirmed = confirmed;
+  return out;
+}
+
+/** Every write method returns this instead of throwing (C31). `ok:false` carries a
+ * reason for diagnostics but is NEVER propagated as an exception into the tool call. */
+export interface WriteResult {
+  ok: boolean;
+  error?: string;
+}
+
+/** `started` also reports the turn it stamped (position within the run). */
+export interface StartedResult extends WriteResult {
+  turn?: number;
+}
+
+/** `final` reports the calls.jsonl path (bash prints it on stdout). */
+export interface PathResult extends WriteResult {
+  path?: string;
+}
+
+/** Result of `verify`. `code` mirrors log.sh exit codes: 0 ok, 7 integrity failure. */
+export interface VerifyResult {
+  ok: boolean;
+  code: 0 | 7;
+  message: string;
+}
+
+// ---------------------------------------------------------------------------
+// Environment / config resolution (env override > collab.conf.local > default),
+// mirroring log.sh's cfg()/conf_get() exactly (C35).
+// ---------------------------------------------------------------------------
+
+export interface EvidenceLogOptions {
+  /** Environment map; defaults to `process.env`. Injected for test isolation. */
+  env?: NodeJS.ProcessEnv;
+  /** Working directory (for project-key derivation under partitioning). Default cwd. */
+  cwd?: string;
+  /** The install's `collab/` dir — home of `collab.conf.local` and the default
+   * `logs/` root, mirroring bash `here`. Default: `<cwd>/collab`. */
+  collabDir?: string;
+}
+
+/**
+ * Parse one KEY's value from a `collab.conf.local`-style file, byte-identically to
+ * log.sh's `conf_get` awk: strip leading whitespace on each line; skip `#`-comment and
+ * `=`-less lines; key = text before the first `=` with ALL whitespace removed; value =
+ * text after `=` with a trailing ` # comment` stripped, then trimmed, then ONE layer of
+ * surrounding double quotes and then ONE layer of single quotes removed; LAST assignment
+ * wins; empty value ⇒ treated as unset.
+ */
+export function confGet(contents: string, key: string): string {
+  let val = "";
+  for (const rawLine of contents.split("\n")) {
+    const line = rawLine.replace(/^[\t ]+/, "");
+    if (line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    const lk = line.slice(0, eq).replace(/[\t ]/g, "");
+    if (lk !== key) continue;
+    let lv = line.slice(eq + 1);
+    lv = lv.replace(/[\t ]+#.*/, ""); // strip trailing " # comment"
+    lv = lv.replace(/^[\t ]+/, "").replace(/[\t ]+$/, ""); // trim
+    lv = lv.replace(/^"/, "").replace(/"$/, ""); // one layer of "…"
+    lv = lv.replace(/^'/, "").replace(/'$/, ""); // one layer of '…'
+    val = lv;
+  }
+  return val;
+}
+
+/** Whitespace class matching awk `[[:space:]]` is broader than `[\t ]`, but log.sh's
+ * key files use spaces/tabs; the `\r` a CRLF file would carry is handled by splitting
+ * lines and trimming trailing whitespace, which covers the realistic cases. */
+
+export class EvidenceLog {
+  readonly #env: NodeJS.ProcessEnv;
+  readonly #cwd: string;
+  readonly #collabDir: string;
+  readonly #confFile: string | undefined;
+  #confContents: string | undefined;
+
+  constructor(opts: EvidenceLogOptions = {}) {
+    this.#env = opts.env ?? process.env;
+    this.#cwd = opts.cwd ?? process.cwd();
+    this.#collabDir = opts.collabDir ?? path.join(this.#cwd, "collab");
+    // Conf file resolution mirrors log.sh: COLLAB_CONF > <collabDir>/collab.conf.local.
+    const confEnv = this.#env.COLLAB_CONF;
+    if (confEnv) this.#confFile = confEnv;
+    else {
+      const local = path.join(this.#collabDir, "collab.conf.local");
+      this.#confFile = existsSync(local) ? local : undefined;
+    }
+  }
+
+  #confRead(): string {
+    if (this.#confContents === undefined) {
+      try {
+        this.#confContents = this.#confFile ? readFileSync(this.#confFile, "utf8") : "";
+      } catch {
+        this.#confContents = "";
+      }
+    }
+    return this.#confContents;
+  }
+
+  /** cfg(KEY, default) — env (non-empty) > conf file > default. */
+  #cfg(key: string, def: string): string {
+    const e = this.#env[key];
+    if (e !== undefined && e !== "") return e;
+    const c = confGet(this.#confRead(), key);
+    if (c !== "") return c;
+    return def;
+  }
+
+  #disabled(): boolean {
+    return this.#cfg("COLLAB_LOG", "on") === "off";
+  }
+
+  #promptMode(): PromptMode {
+    const m = this.#cfg("COLLAB_LOG_PROMPTS", "full");
+    return m === "hash" || m === "off" ? m : "full";
+  }
+
+  /** The base log root, honoring an explicit COLLAB_LOG_DIR and opt-in partitioning. */
+  #logDir(): string {
+    const explicit = this.#cfg("COLLAB_LOG_DIR", "");
+    if (explicit !== "") return explicit;
+    const base = path.join(this.#collabDir, "logs");
+    // Partition only when the root is OUR default (no explicit COLLAB_LOG_DIR in env
+    // OR conf), mirroring log.sh's guard exactly.
+    const envLd = this.#env.COLLAB_LOG_DIR;
+    const confLd = confGet(this.#confRead(), "COLLAB_LOG_DIR");
+    if (
+      this.#cfg("COLLAB_LOG_PARTITION", "") === "1" &&
+      (envLd === undefined || envLd === "") &&
+      confLd === ""
+    ) {
+      return path.join(base, this.#projectKey());
+    }
+    return base;
+  }
+
+  /** A filesystem-safe token for the CWD's project — git top-level else CWD, as a
+   * sanitized basename plus a 12-hex prefix of sha256(absolute root) so two repos that
+   * share a basename never collide (log.sh `_project_key`). Never throws: a failing git
+   * falls back to CWD, and the hash always succeeds under node crypto. */
+  #projectKey(): string {
+    let root = "";
+    try {
+      const r = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+        cwd: this.#cwd,
+        encoding: "utf8",
+      });
+      if (r.status === 0 && typeof r.stdout === "string") root = r.stdout.trim();
+    } catch {
+      /* git absent — fall back below */
+    }
+    if (!root) root = this.#cwd;
+    let base = path.basename(root) || "project";
+    base = base.replace(/[^A-Za-z0-9._-]/g, "_") || "project";
+    const hash = sha256Hex(root).slice(0, 12) || "0";
+    return `${base}-${hash}`;
+  }
+
+  // --- run resolution ------------------------------------------------------
+  #runDir(runId: string): string {
+    return path.join(this.#logDir(), runId);
+  }
+
+  #resolveRun(runId?: string): string {
+    if (runId) return runId;
+    const ambient = this.#env.COLLAB_RUN_ID;
+    if (ambient) return ambient;
+    return `${nowStamp()}-${randHex()}`;
+  }
+
+  #ensureRun(runId: string): string {
+    const rd = this.#runDir(runId);
+    mkdirSync(path.join(rd, "reports"), { recursive: true });
+    // Refresh `latest` → runId (relative target, like `ln -sfn`).
+    const latest = path.join(this.#logDir(), "latest");
+    try {
+      if (existsSync(latest) || isSymlink(latest)) unlinkSync(latest);
+    } catch {
+      /* best-effort */
+    }
+    try {
+      symlinkSync(runId, latest);
+    } catch {
+      /* best-effort — a symlink-less FS must not fail the call */
+    }
+    return rd;
+  }
+
+  // --- locked append -------------------------------------------------------
+  /**
+   * Append one entry under the run's `.lock` dir, computing prev_hash (and, for
+   * `started`, the turn) INSIDE the lock — the same race log.sh had when turn was
+   * counted outside it (three concurrent panel calls all claimed turn 1).
+   *
+   * The lock is a `mkdir` on `<file>.lock`, identical to bash: atomic and portable, and
+   * interoperable with bash writers on the same run. A lock older than ~1 min is a
+   * crashed writer's and is stolen; after ~10s of contention we DROP this entry rather
+   * than risk a torn unlocked append (a missing entry is a bounded gap `verify` reports;
+   * a torn line poisons the record around it).
+   */
+  async #appendLocked(
+    file: string,
+    payload: { [key: string]: JsonValue },
+    withTurn: boolean,
+  ): Promise<{ ok: boolean; turn?: number }> {
+    const lock = `${file}.lock`;
+    const acquired = await acquireLock(lock);
+    if (!acquired) {
+      process.stderr.write(
+        "collab: log lock busy for 10s — DROPPING this entry rather than risk a torn append (verify will show the gap).\n",
+      );
+      return { ok: false };
+    }
+    try {
+      let prev = "";
+      let existing = "";
+      if (existsSync(file)) {
+        existing = readFileSync(file, "utf8");
+        const lines = existing.split("\n").filter((l) => l.length > 0);
+        if (lines.length > 0) prev = lineHash(lines[lines.length - 1]);
+      }
+      const full: { [key: string]: JsonValue } = { ...payload, prev_hash: prev };
+      let turn: number | undefined;
+      if (withTurn) {
+        // turn = count of started entries so far + 1, counted INSIDE the lock. Match
+        // bash's grep of the literal substring `"status":"started"`.
+        const count = countOccurrences(existing, '"status":"started"');
+        turn = count + 1;
+        full.turn = turn;
+      }
+      const { line } = buildEntryLine(full);
+      appendFileSync(file, line + "\n");
+      return { ok: true, turn };
+    } finally {
+      releaseLock(lock);
+    }
+  }
+
+  // --- entry base ----------------------------------------------------------
+  #base(runId: string, type: string, status: string | null): { [key: string]: JsonValue } {
+    return {
+      timestamp: nowStamp8601(),
+      run_id: runId,
+      type,
+      status: status === "" || status === null ? null : status,
+    };
+  }
+
+  // =========================================================================
+  // Read-only helpers (no logging side effects)
+  // =========================================================================
+
+  /** The run directory for `runId` (or the resolved ambient/fresh run). */
+  dir(runId?: string): string {
+    return this.#runDir(this.#resolveRun(runId));
+  }
+
+  /** The calls.jsonl path for `runId`. */
+  path(runId?: string): string {
+    return path.join(this.#runDir(this.#resolveRun(runId)), "calls.jsonl");
+  }
+
+  /** Whether the evidence layer is on (COLLAB_LOG != "off"). Read-only; no side
+   * effects. Exposed for diagnostics (collab_status / doctor) so the "logging on/off"
+   * report reuses the SAME cfg() resolution as every write path, rather than a second
+   * copy that could drift from C35's env>conf>default order. */
+  enabled(): boolean {
+    return !this.#disabled();
+  }
+
+  /** The effective log root after COLLAB_LOG_DIR + partitioning resolution — the exact
+   * directory writes land under. Read-only; for the same diagnostic reason as `enabled`. */
+  logDir(): string {
+    return this.#logDir();
+  }
+
+  /** The most recent run's id (via the `latest` symlink). Returns undefined if none. */
+  latest(): string | undefined {
+    const l = path.join(this.#logDir(), "latest");
+    if (!isSymlink(l)) return undefined;
+    try {
+      return path.basename(readlinkSync(l));
+    } catch {
+      return undefined;
+    }
+  }
+
+  // =========================================================================
+  // Mutating subcommands
+  // =========================================================================
+
+  /** Mint a FRESH run id (deliberately ignoring an ambient COLLAB_RUN_ID — asking for a
+   * new run and getting the current one would silently merge two audit units), create
+   * its dir, write meta.json, prune old runs, and return the id. Empty string when
+   * logging is disabled. Never throws. */
+  newRun(command = "ask"): string {
+    if (this.#disabled()) return "";
+    try {
+      const rid = `${nowStamp()}-${randHex()}`;
+      const rd = this.#ensureRun(rid);
+      try {
+        const meta = canonicalStringify({
+          run_id: rid,
+          command,
+          started_at: nowStamp8601(),
+        });
+        writeFileSync(path.join(rd, "meta.json"), meta + "\n");
+      } catch {
+        /* meta is best-effort */
+      }
+      const days = parseInt(this.#cfg("COLLAB_LOG_RETENTION_DAYS", "14"), 10);
+      this.prune(Number.isFinite(days) ? days : 14);
+      return rid;
+    } catch (err) {
+      warn("new-run", err);
+      return "";
+    }
+  }
+
+  /** Record a durable intent to make a call, BEFORE capture setup (C22). This is the
+   * pre-marker that makes a crash-before-`started` gap visible to verify. */
+  async expect(args: {
+    callId: string;
+    command?: string;
+    model?: string;
+    agent?: string;
+    run?: string;
+  }): Promise<WriteResult> {
+    if (!args.callId) return fail("expect: callId is required");
+    if (this.#disabled()) return { ok: true };
+    try {
+      const rid = this.#resolveRun(args.run);
+      const rd = this.#ensureRun(rid);
+      const payload = {
+        ...this.#base(rid, "expected-call", "expected"),
+        call_id: args.callId,
+        command: args.command ?? "",
+        model: nullIfEmpty(args.model),
+        agent: args.agent ?? "",
+      };
+      const r = await this.#appendLocked(path.join(rd, "calls.jsonl"), payload, false);
+      return { ok: r.ok };
+    } catch (err) {
+      warn("expect", err);
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /** Record the start of a model call and stamp its turn (C22/C23/C26). Returns the
+   * turn. Prompt privacy per COLLAB_LOG_PROMPTS: full ⇒ text + digest; hash ⇒ digest
+   * only; off ⇒ neither. */
+  async started(args: {
+    callId: string;
+    command?: string;
+    model?: string;
+    agent?: string;
+    session?: string;
+    prompt?: string;
+    /** Policy tier the call was made under (C1–C7). Optional, positive-direction
+     * addition over bash (see the `#policyFields` note) — absent on legacy/allow entries. */
+    tier?: PolicyTier;
+    /** Whether the human approved an ask-tier call. Optional; see `#policyFields`. */
+    confirmed?: boolean;
+    run?: string;
+  }): Promise<StartedResult> {
+    if (this.#disabled()) return { ok: true };
+    try {
+      const rid = this.#resolveRun(args.run);
+      const rd = this.#ensureRun(rid);
+      const mode = this.#promptMode();
+      const hasPrompt = args.prompt !== undefined;
+      const promptHash = hasPrompt && mode !== "off" ? sha256Hex(args.prompt as string) : "";
+      const payload = {
+        ...this.#base(rid, "call", "started"),
+        call_id: args.callId,
+        command: args.command ?? "",
+        model: nullIfEmpty(args.model),
+        agent: args.agent ?? "",
+        session_id: nullIfEmpty(args.session),
+        prompt_mode: mode,
+        // full ⇒ the prompt text (empty string if none was supplied, matching log.sh's
+        // rawfile of an empty temp file); otherwise null.
+        prompt: mode === "full" ? (args.prompt ?? "") : null,
+        prompt_hash: nullIfEmpty(promptHash),
+        ...policyFields(args.tier, args.confirmed),
+      };
+      const r = await this.#appendLocked(path.join(rd, "calls.jsonl"), payload, true);
+      return { ok: r.ok, turn: r.turn };
+    } catch (err) {
+      warn("started", err);
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /**
+   * Record the completion of a model call (C22/C25). `raw_response` is stored in FULL,
+   * byte-exact.
+   *
+   * CARRIED DECISION (M2 review) — present-empty vs absent response: a `complete` state
+   * with NO `response` (undefined) downgrades to `failed` (mirrors log.sh's missing
+   * response-file downgrade). A `response` of `""` is a PRESENT-but-empty answer: it
+   * stays `complete`, with raw_response `""` and response_hash = sha256("") — the same
+   * distinction log.sh draws between a missing file and an empty file.
+   */
+  async completed(args: {
+    callId: string;
+    exit?: number;
+    turn?: number;
+    session?: string;
+    command?: string;
+    model?: string;
+    agent?: string;
+    captureState: CaptureState;
+    response?: string;
+    /** Policy tier / human-approval, mirrored from `started` for the same audit reason
+     * (see `#policyFields`). Both optional; absent on legacy/allow entries. */
+    tier?: PolicyTier;
+    confirmed?: boolean;
+    run?: string;
+  }): Promise<WriteResult> {
+    if (args.captureState !== "complete" && args.captureState !== "failed") {
+      return fail("completed: captureState must be complete|failed");
+    }
+    if (this.#disabled()) return { ok: true };
+    try {
+      const rid = this.#resolveRun(args.run);
+      const rd = this.#ensureRun(rid);
+      let capture: CaptureState = args.captureState;
+      let response = args.response;
+      // complete + missing response ⇒ downgrade to failed (present-empty stays complete).
+      if (capture === "complete" && response === undefined) capture = "failed";
+      let rawResponse: string;
+      let responseHash: string;
+      if (capture === "failed") {
+        rawResponse = "";
+        responseHash = "";
+      } else {
+        rawResponse = response as string; // may be "" (present-empty)
+        responseHash = sha256Hex(rawResponse);
+      }
+      const payload = {
+        ...this.#base(rid, "call", "completed"),
+        call_id: args.callId,
+        command: args.command ?? "",
+        model: nullIfEmpty(args.model),
+        agent: args.agent ?? "",
+        session_id: nullIfEmpty(args.session),
+        turn: args.turn === undefined ? null : args.turn,
+        exit_code: args.exit ?? 0,
+        capture_state: capture,
+        raw_response: rawResponse,
+        response_hash: nullIfEmpty(responseHash),
+        ...policyFields(args.tier, args.confirmed),
+      };
+      const r = await this.#appendLocked(path.join(rd, "calls.jsonl"), payload, false);
+      return { ok: r.ok };
+    } catch (err) {
+      warn("completed", err);
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /** Record Claude's final user-facing answer (C29). Returns the calls.jsonl path. */
+  async final(text: string, run?: string): Promise<PathResult> {
+    if (this.#disabled()) return { ok: true };
+    try {
+      const rid = this.#resolveRun(run);
+      const rd = this.#ensureRun(rid);
+      const file = path.join(rd, "calls.jsonl");
+      const payload = {
+        ...this.#base(rid, "claude-final", null),
+        text,
+        response_hash: nullIfEmpty(sha256Hex(text)),
+      };
+      const r = await this.#appendLocked(file, payload, false);
+      return { ok: r.ok, path: file };
+    } catch (err) {
+      warn("final", err);
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /** Record Claude's claimed disposition of a model's point — a CLAIM to audit, not a
+   * fact (C29). Verdict restricted to Adopt|Adapt|Reject|Defer. */
+  async disposition(args: {
+    model?: string;
+    point: string;
+    verdict: Verdict;
+    why?: string;
+    run?: string;
+  }): Promise<WriteResult> {
+    if (!args.point || !args.verdict) return fail("disposition: point and verdict are required");
+    if (!["Adopt", "Adapt", "Reject", "Defer"].includes(args.verdict)) {
+      return fail(`disposition: verdict must be Adopt|Adapt|Reject|Defer (got '${args.verdict}')`);
+    }
+    if (this.#disabled()) return { ok: true };
+    try {
+      const rid = this.#resolveRun(args.run);
+      const rd = this.#ensureRun(rid);
+      const payload = {
+        ...this.#base(rid, "claude-disposition", null),
+        claim: true,
+        model: nullIfEmpty(args.model),
+        point: args.point,
+        verdict: args.verdict,
+        why: nullIfEmpty(args.why),
+      };
+      const r = await this.#appendLocked(path.join(rd, "calls.jsonl"), payload, false);
+      return { ok: r.ok };
+    } catch (err) {
+      warn("disposition", err);
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /** Record a Claude subagent's collab turn — a CLAIM, not captured evidence (C29/C30):
+   * claim:true, captured:false, text in `claimed_response` (never `raw_response`). */
+  async subagentVoice(args: {
+    response: string;
+    model?: string;
+    label?: string;
+    prompt?: string;
+    run?: string;
+  }): Promise<WriteResult> {
+    if (args.response === undefined || args.response === null) {
+      return fail("subagent-voice: response is required");
+    }
+    if (this.#disabled()) return { ok: true };
+    try {
+      const rid = this.#resolveRun(args.run);
+      const rd = this.#ensureRun(rid);
+      const mode = this.#promptMode();
+      const hasPrompt = args.prompt !== undefined;
+      const promptHash = hasPrompt && mode !== "off" ? sha256Hex(args.prompt as string) : "";
+      const payload = {
+        ...this.#base(rid, "subagent-voice", null),
+        claim: true,
+        captured: false,
+        transport: "claude-subagent",
+        model: nullIfEmpty(args.model),
+        label: nullIfEmpty(args.label),
+        prompt_mode: mode,
+        prompt: mode === "full" ? (args.prompt ?? "") : null,
+        prompt_hash: nullIfEmpty(promptHash),
+        claimed_response: args.response,
+        response_hash: nullIfEmpty(sha256Hex(args.response)),
+      };
+      const r = await this.#appendLocked(path.join(rd, "calls.jsonl"), payload, false);
+      return { ok: r.ok };
+    } catch (err) {
+      warn("subagent-voice", err);
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /** Record what a delegated model actually changed — machine evidence, claim:false, the
+   * patch hashed and folded into the integrity contract (C29). `patchFile` must already
+   * exist inside the run dir (ask.sh writes it there); the entry stores its basename and
+   * verify resolves it under the run dir. */
+  async diff(args: {
+    callId: string;
+    patchFile: string;
+    base?: string;
+    after?: string;
+    complete?: boolean;
+    reason?: string;
+    run?: string;
+    /** Tamper signal (M8): the serve-runtime scaffolding (`.opencode/node_modules/**` + its
+     * manifests — excluded from the ignored fingerprint) changed during the call. Optional,
+     * like tier/confirmed: absent on bash-written and pre-M8 entries; both verifiers tolerate
+     * its presence and absence (it is not a verified invariant, just recorded evidence). */
+    scaffoldChanged?: boolean;
+  }): Promise<WriteResult> {
+    if (!args.patchFile || !existsSync(args.patchFile)) {
+      return fail("diff: patchFile must exist");
+    }
+    if (this.#disabled()) return { ok: true };
+    try {
+      const rid = this.#resolveRun(args.run);
+      const rd = this.#ensureRun(rid);
+      const buf = readFileSync(args.patchFile);
+      const text = buf.toString("utf8");
+      const filesChanged = countOccurrences2(text, /^diff --git /gm);
+      const payload = {
+        ...this.#base(rid, "delegate-diff", null),
+        call_id: args.callId ?? "",
+        patch: path.basename(args.patchFile),
+        base_tree: args.base ?? "",
+        after_tree: args.after ?? "",
+        files_changed: filesChanged,
+        patch_bytes: buf.byteLength,
+        claim: false,
+        capture_complete: args.complete ?? true,
+        incomplete_reason: nullIfEmpty(args.reason),
+        // Optional tamper signal — only written when provided, so bash-written / pre-M8
+        // entries omit it and stay byte-identical; both verifiers fold it into the hash chain
+        // like any other payload field without asserting on it.
+        ...(args.scaffoldChanged === undefined ? {} : { scaffold_changed: args.scaffoldChanged }),
+        response_hash: nullIfEmpty(sha256HexBytes(buf)),
+      };
+      const r = await this.#appendLocked(path.join(rd, "calls.jsonl"), payload, false);
+      return { ok: r.ok };
+    } catch (err) {
+      warn("diff", err);
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  // =========================================================================
+  // verify — the integrity contract (C24/C27/C28). Returns a result; never throws
+  // for an integrity failure (code 7) — that is data, not an exception.
+  // =========================================================================
+  verify(runId?: string): VerifyResult {
+    const rid = this.#resolveRun(runId);
+    const rd = this.#runDir(rid);
+    const file = path.join(rd, "calls.jsonl");
+    if (!existsSync(file)) {
+      return { ok: false, code: 7, message: `verify: no log at ${file}` };
+    }
+    // Reading the log is IO that can fail (a directory in place of the file, a permission
+    // error, or the file raced away between existsSync and here). An MCP handler calls
+    // verify(); it must get a failed RESULT, never an exception (C31 posture extended to
+    // the audit path).
+    let content: string;
+    try {
+      content = readFileSync(file, "utf8");
+    } catch (err) {
+      warn("verify(read)", err);
+      return { ok: false, code: 7, message: `verify: cannot read ${file}: ${String(err)}` };
+    }
+    // 1. Clean JSONL: newline-terminated line count must equal parseable-value count.
+    //    "Parseable" here means jq-parseable, NOT merely JSON.parse-able. jq (bash's
+    //    verifier) REJECTS a lone UTF-16 surrogate escape (e.g. `\ud800`) as invalid
+    //    JSON and errors the whole stream; JS's JSON.parse ACCEPTS it, yielding an
+    //    ill-formed string. Counting only JSON.parse success would let a log with a lone
+    //    surrogate pass TS verify while bash verify fails it — a false-clean in exactly
+    //    the direction this project exists to kill (verified: jq -s exits 5 on `\ud800`).
+    //    So a line that parses but carries a lone surrogate is treated as UNclean.
+    const nLines = (content.match(/\n/g) || []).length;
+    const rawLines = content.split("\n").filter((l) => l.length > 0);
+    const parsed: Array<{ [k: string]: JsonValue }> = [];
+    let parseOk = true;
+    for (const l of rawLines) {
+      try {
+        const value = JSON.parse(l) as JsonValue;
+        if (containsLoneSurrogate(value)) parseOk = false;
+        parsed.push(value as { [k: string]: JsonValue });
+      } catch {
+        parseOk = false;
+      }
+    }
+    if (!parseOk || parsed.length !== nLines) {
+      return fail7(file, `is not clean JSONL (${nLines} lines, ${parseOk ? parsed.length : -1} parsed).`);
+    }
+
+    // 2a. expected-call ids: unique, non-empty strings.
+    const expected = parsed.filter((e) => e.type === "expected-call");
+    const badExpected: string[] = [];
+    const seen = new Map<string, number>();
+    for (const e of expected) {
+      const cid = e.call_id;
+      if (typeof cid !== "string" || cid === "") {
+        badExpected.push("missing or invalid call_id");
+      } else {
+        seen.set(cid, (seen.get(cid) ?? 0) + 1);
+      }
+    }
+    for (const [cid, n] of seen) if (n > 1) badExpected.push(`duplicate call_id ${cid}`);
+    if (badExpected.length > 0) {
+      return fail7Raw(
+        `INTEGRITY FAIL: expected-call entries require unique, non-empty string call_id values:\n  ${badExpected.join("\n  ")}`,
+      );
+    }
+
+    // 2b. A run is empty only if it has NEITHER a lifecycle call NOR a well-formed
+    // subagent voice (an all-Anthropic collab of subagent voices is a real exchange).
+    const nExpected = expected.filter(
+      (e) => typeof e.call_id === "string" && e.call_id !== "",
+    ).length;
+    const nVoices = parsed.filter(
+      (e) => e.type === "subagent-voice" && typeof e.claimed_response === "string",
+    ).length;
+    if (nExpected === 0 && nVoices === 0) {
+      return fail7Raw("INTEGRITY FAIL: run contains no model lifecycle calls or subagent voices.");
+    }
+
+    // 2c. Per call_id cardinality: EXACTLY one expected, started, completed — both
+    // directions (an orphaned completed is as fatal as an orphaned started).
+    const ids = new Set<string>();
+    for (const e of parsed) if (typeof e.call_id === "string") ids.add(e.call_id);
+    const badCard: string[] = [];
+    for (const id of ids) {
+      const eN = parsed.filter((e) => e.type === "expected-call" && e.call_id === id).length;
+      const sN = parsed.filter(
+        (e) => e.type === "call" && e.status === "started" && e.call_id === id,
+      ).length;
+      const cN = parsed.filter(
+        (e) => e.type === "call" && e.status === "completed" && e.call_id === id,
+      ).length;
+      if (eN !== 1 || sN !== 1 || cN !== 1) {
+        badCard.push(`${id}|expected=${eN},started=${sN},completed=${cN}`);
+      }
+    }
+    if (badCard.length > 0) {
+      return fail7Raw(
+        `INTEGRITY FAIL: every call_id requires exactly one expected, started, and completed entry:\n  ${badCard.join("\n  ")}`,
+      );
+    }
+
+    // 3. Hash chain + per-entry self-check + capture/prompt/response payload checks.
+    let prev = "";
+    for (let idx = 0; idx < rawLines.length; idx++) {
+      const line = rawLines[idx];
+      const e = parsed[idx];
+      const i = idx + 1;
+      const gotPrev = typeof e.prev_hash === "string" ? e.prev_hash : "";
+      if (gotPrev !== prev) {
+        return fail7Raw(`INTEGRITY FAIL: prev_hash mismatch at line ${i} (log corrupted or rewritten).`);
+      }
+      const storedHash = typeof e.entry_hash === "string" ? e.entry_hash : "";
+      if (storedHash === "" || storedHash !== recomputeEntryHash(e)) {
+        return fail7Raw(`INTEGRITY FAIL: entry_hash mismatch at line ${i} (entry payload altered or unprotected).`);
+      }
+      // capture completeness
+      let capture: string;
+      if (e.type === "call" && e.status === "completed") {
+        capture = typeof e.capture_state === "string" ? e.capture_state : "missing";
+      } else if (e.type === "delegate-diff") {
+        capture = e.capture_complete ? "complete" : "failed";
+      } else {
+        capture = "complete";
+      }
+      if (capture !== "complete") {
+        return fail7Raw(`INTEGRITY FAIL: line ${i} records incomplete evidence capture (${capture}).`);
+      }
+      // prompt-mode/hash consistency (only for started entries)
+      const pmode =
+        e.type === "call" && e.status === "started"
+          ? typeof e.prompt_mode === "string"
+            ? e.prompt_mode
+            : "missing"
+          : "none";
+      const ph = typeof e.prompt_hash === "string" ? e.prompt_hash : "";
+      if (pmode === "full") {
+        const promptText = typeof e.prompt === "string" ? e.prompt : "";
+        if (ph === "" || sha256Hex(promptText) !== ph) {
+          return fail7Raw(`INTEGRITY FAIL: prompt_hash mismatch at line ${i} (the recorded prompt does not match its digest).`);
+        }
+      } else if (pmode === "hash") {
+        if (!/^[0-9a-f]{64}$/.test(ph)) {
+          return fail7Raw(`INTEGRITY FAIL: invalid prompt_hash at line ${i}.`);
+        }
+      } else if (pmode === "off") {
+        if (ph !== "") {
+          return fail7Raw(`INTEGRITY FAIL: prompt hashing is present despite off mode at line ${i}.`);
+        }
+      } else if (pmode === "none") {
+        /* not a started entry */
+      } else {
+        return fail7Raw(`INTEGRITY FAIL: invalid prompt_mode at line ${i}.`);
+      }
+      // response_hash payload check
+      const rh = typeof e.response_hash === "string" ? e.response_hash : "";
+      if (rh !== "") {
+        if (e.type === "delegate-diff") {
+          const pf = path.join(rd, typeof e.patch === "string" ? e.patch : "");
+          if (!existsSync(pf)) {
+            return fail7Raw(`INTEGRITY FAIL: line ${i} references patch '${path.basename(pf)}' which is MISSING — the record points at evidence that no longer exists.`);
+          }
+          if (sha256HexBytes(readFileSync(pf)) !== rh) {
+            return fail7Raw(`INTEGRITY FAIL: patch '${path.basename(pf)}' does not match its digest (line ${i}) — the recorded diff was altered.`);
+          }
+        } else {
+          const payloadText =
+            e.type === "claude-final"
+              ? typeof e.text === "string"
+                ? e.text
+                : ""
+              : e.type === "subagent-voice"
+                ? typeof e.claimed_response === "string"
+                  ? e.claimed_response
+                  : ""
+                : typeof e.raw_response === "string"
+                  ? e.raw_response
+                  : "";
+          if (sha256Hex(payloadText) !== rh) {
+            return fail7Raw(`INTEGRITY FAIL: response_hash mismatch at line ${i} (the recorded answer does not match its digest).`);
+          }
+        }
+      }
+      prev = lineHash(line);
+    }
+
+    return {
+      ok: true,
+      code: 0,
+      message: `ok: ${file} — ${nLines} entries, every expected call has exactly one started/completed pair, captures and hashes intact.`,
+    };
+  }
+
+  /** Delete run dirs older than `days` (default from config, 14). 0/invalid disables.
+   * Only touches directories whose name looks like a minted run id (C32). Never throws. */
+  prune(days?: number): void {
+    try {
+      const d =
+        days ?? parseInt(this.#cfg("COLLAB_LOG_RETENTION_DAYS", "14"), 10);
+      if (!Number.isFinite(d) || d <= 0) return;
+      const dir = this.#logDir();
+      if (!existsSync(dir)) return;
+      const cutoff = Date.now() - d * 86_400_000;
+      for (const name of readdirSync(dir)) {
+        // Match log.sh's `-name '[0-9]*Z-*'`: starts with a digit, contains `Z-`.
+        if (!/^[0-9].*Z-/.test(name)) continue;
+        const full = path.join(dir, name);
+        try {
+          const st = statSync(full);
+          if (!st.isDirectory()) continue;
+          if (st.mtimeMs < cutoff) rmSync(full, { recursive: true, force: true });
+        } catch {
+          /* skip unreadable */
+        }
+      }
+    } catch (err) {
+      warn("prune", err);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// module-level helpers
+// ---------------------------------------------------------------------------
+
+/** `date -u +%Y-%m-%dT%H:%M:%SZ` then `tr -d ':-'` ⇒ `YYYYMMDDTHHMMSSZ`. */
+function nowStamp(): string {
+  return nowStamp8601().replace(/[:-]/g, "");
+}
+
+/** `date -u +%Y-%m-%dT%H:%M:%SZ` (no milliseconds). */
+function nowStamp8601(): string {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** Short random hex — `od -An -tx1 -N4 /dev/urandom` ⇒ 8 hex chars. */
+function randHex(): string {
+  return randomBytes(4).toString("hex");
+}
+
+function nullIfEmpty(s: string | undefined): JsonValue {
+  return s === undefined || s === "" ? null : s;
+}
+
+function isSymlink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (needle === "") return 0;
+  let count = 0;
+  let pos = 0;
+  for (;;) {
+    const i = haystack.indexOf(needle, pos);
+    if (i === -1) break;
+    count++;
+    pos = i + needle.length;
+  }
+  return count;
+}
+
+function countOccurrences2(haystack: string, re: RegExp): number {
+  return (haystack.match(re) || []).length;
+}
+
+function warn(where: string, err: unknown): void {
+  process.stderr.write(`collab: log ${where} failed (best-effort, call unaffected): ${String(err)}\n`);
+}
+
+/** True if any string in a parsed JSON value is NOT well-formed UTF-16 — i.e. carries a
+ * lone/unpaired surrogate. Detected by a UTF-8 round-trip: a well-formed string encodes
+ * and decodes to itself, while a lone surrogate is replaced by U+FFFD and breaks
+ * equality. This is what makes TS's cleanliness check match jq, which rejects a lone
+ * `\uXXXX` surrogate escape outright (verified: `jq -s` exits 5 on `\ud800`). */
+function containsLoneSurrogate(value: JsonValue): boolean {
+  if (typeof value === "string") {
+    return Buffer.from(value, "utf8").toString("utf8") !== value;
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsLoneSurrogate);
+  }
+  if (value !== null && typeof value === "object") {
+    for (const k of Object.keys(value)) {
+      // Keys are strings too; a lone surrogate in a key is just as invalid to jq.
+      if (Buffer.from(k, "utf8").toString("utf8") !== k) return true;
+      if (containsLoneSurrogate((value as { [key: string]: JsonValue })[k])) return true;
+    }
+  }
+  return false;
+}
+
+function fail(msg: string): WriteResult {
+  process.stderr.write(`collab: log ${msg}\n`);
+  return { ok: false, error: msg };
+}
+
+function fail7(file: string, msg: string): VerifyResult {
+  return { ok: false, code: 7, message: `INTEGRITY FAIL: ${file} ${msg}` };
+}
+function fail7Raw(msg: string): VerifyResult {
+  return { ok: false, code: 7, message: msg };
+}
+
+// ---------------------------------------------------------------------------
+// lock (mkdir-based, stale steal, ~10s give-up), shared protocol with bash.
+// ---------------------------------------------------------------------------
+
+/**
+ * Stale-lock steal threshold: 120s, NOT 60s.
+ *
+ * log.sh steals with `find "$lock" -mmin +1`, and its comment calls that "older than a
+ * minute" — but that comment MISLABELS find's rounding. `-mmin +1` means the age in
+ * WHOLE minutes is strictly greater than 1, i.e. age ≥ 2 minutes, i.e. > 120s. Measured
+ * on this runner: a lock mtime'd 61s ago → no match, 105s ago → no match, 130s ago →
+ * match. So bash actually steals at ~120s. We match the OBSERVED bash behavior, not its
+ * comment. DO NOT "correct" this back to 60s — that would make TS steal a lock bash
+ * still considers live, and the two writers would diverge on a shared run. (The bash
+ * source is deliberately left unchanged; this comment is the record.)
+ */
+const LOCK_STALE_MS = 120_000;
+const LOCK_POLL_MS = 50;
+const LOCK_MAX_TRIES = 200; // ~10s
+
+/** Acquire `<file>.lock` by mkdir. Returns false after ~10s of contention (caller then
+ * DROPS the entry). Async so the wait yields the event loop rather than blocking a
+ * server; the mkdir itself is atomic, so concurrent in-process appends serialize too. */
+async function acquireLock(lock: string): Promise<boolean> {
+  let tries = 0;
+  for (;;) {
+    try {
+      mkdirSync(lock); // atomic: throws if it already exists
+      return true;
+    } catch {
+      // Steal a stale lock (older than ~120s, matching bash's find -mmin +1; see the
+      // LOCK_STALE_MS rationale) — a crashed writer's, not a live one's.
+      try {
+        const st = statSync(lock);
+        if (Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+          try {
+            rmSync(lock, { recursive: true, force: true });
+          } catch {
+            /* another writer won the steal — retry */
+          }
+          continue;
+        }
+      } catch {
+        // lock vanished between mkdir and stat — retry immediately
+        continue;
+      }
+      tries++;
+      if (tries > LOCK_MAX_TRIES) return false;
+      await sleep(LOCK_POLL_MS);
+    }
+  }
+}
+
+function releaseLock(lock: string): void {
+  try {
+    rmSync(lock, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}

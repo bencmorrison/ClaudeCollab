@@ -1,0 +1,244 @@
+/**
+ * collab_research — source-backed investigation by a web-capable model (PLAN.md M7).
+ *
+ * The MCP translation of the bash `/collab:research` / `ask.sh --research` path: one
+ * read-only, WEB-CAPABLE model turn through the UNMODIFIED `collab-research` agent
+ * (`.opencode/agent/collab-research.md` — a default-deny allowlist re-allowing only
+ * read-non-secret + webfetch/websearch; C47/C48). The model's answer — and every
+ * citation in it — is untrusted DATA the DRIVER must verify against the cited source
+ * (C45 verify-not-relay), never instructions to act on (C42/C52). This tool is the
+ * TRANSPORT; the `/collab:research` command doc does the fetch-each-source verification.
+ *
+ * ONE DELIBERATE DEVIATION FROM bash C16 (task-directed, PLAN.md M7). bash falls back to
+ * the weaker `plan` agent when `collab-research.md` is missing (loud warning; hard-error
+ * only under `COLLAB_REQUIRE_HARDENED`). This tool has NO fallback EVER: a missing def is
+ * a structured `agent-def-missing` refusal (exit-5 analogue, C57), no model called, no
+ * log written. Silently degrading a hardened path to a weaker one — while the caller
+ * still believes it got the research agent's guarantees — is the failure mode this repo
+ * kills; a loud refusal is the honest outcome. See `resolveAgentDefDir` for exactly what
+ * the presence check does and does NOT observe (it is the same filesystem lever bash's
+ * C16 uses; it cannot see opencode's own `--agent` resolution).
+ *
+ * Everything else mirrors collab_consult: gate (leading-dash → policy tier) BEFORE any
+ * log write so a refusal logs nothing (C24 gap parity), then the shared expect→started→
+ * completed lifecycle spine (src/consult.ts `runAgentLifecycle`), reused not forked.
+ */
+
+import os from "node:os";
+import { type ServeProvider } from "./client.js";
+import { EvidenceLog } from "./log.js";
+import {
+  resolveRootWithConflict,
+  gateModel,
+  runAgentLifecycle,
+  type McpToolResult,
+} from "./consult.js";
+import {
+  readConfContents,
+  resolveModel,
+  resolveAgentDefDir,
+  hardenedDefPresent,
+} from "./config.js";
+import { type PolicyTier } from "./policy.js";
+
+/** The web-capable research agent this tool ALWAYS uses, unmodified (C15/C47/C48). */
+export const RESEARCH_AGENT = "collab-research";
+/** The command label recorded in the evidence log (drives `/collab:witness`). */
+export const RESEARCH_COMMAND = "/collab:research";
+
+// --- Params + deps ---------------------------------------------------------
+export interface ResearchParams {
+  question: string;
+  model?: string;
+  runId?: string;
+  confirmed?: boolean;
+}
+
+export interface ResearchDeps {
+  serve: ServeProvider;
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  home?: string;
+  /** Injected in tests so root/policy/log all share one collab dir; else resolved. */
+  log?: EvidenceLog;
+  messageTimeoutMs?: number;
+}
+
+// --- Result / error shapes -------------------------------------------------
+export type ResearchErrorKind =
+  | "agent-def-missing"
+  | "model-id"
+  | "policy-deny"
+  | "policy-ask"
+  | "call-failed"
+  | "agent-mismatch";
+
+export interface ResearchAttribution {
+  /** The EXACT model id used: the resolved id, or the id opencode actually ran when the
+   * caller left it to opencode's default. */
+  model: string;
+  /** The id we resolved and asked for — `""` means "opencode's own default". */
+  requestedModel: string;
+  agent: string;
+  runId: string;
+  callId: string;
+}
+
+export interface ResearchError {
+  kind: ResearchErrorKind;
+  message: string;
+  /**
+   * The bash exit code this maps to: 5 agent-def-missing (C57), 2 model-id (C55), 3 deny,
+   * 4 ask (C56). `null` for a `call-failed` (bash propagates opencode's own non-zero
+   * status verbatim, C53; 0 is reserved for success) — same rule as collab_consult.
+   */
+  exitAnalogue: number | null;
+  model: string;
+  tier?: PolicyTier;
+}
+
+export interface ResearchOk {
+  ok: true;
+  answer: string;
+  attribution: ResearchAttribution;
+  rootConflict?: string;
+}
+export interface ResearchFail {
+  ok: false;
+  error: ResearchError;
+  rootConflict?: string;
+}
+export type ResearchResult = ResearchOk | ResearchFail;
+
+/**
+ * Run one research call. Pure of the MCP layer: returns a discriminated result the server
+ * translates. Never throws for an expected refusal or a model failure — both are data.
+ */
+export async function research(
+  params: ResearchParams,
+  deps: ResearchDeps,
+): Promise<ResearchResult> {
+  const env = deps.env ?? process.env;
+  const cwd = deps.cwd ?? process.cwd();
+  const home = deps.home ?? os.homedir();
+
+  // 1. Resolve the config root ONCE; surface a multi-root conflict.
+  const rootRes = resolveRootWithConflict(env, cwd, home);
+  const collabDir = rootRes.root;
+  const rootConflict = rootRes.conflict;
+  const confContents = readConfContents(collabDir, env);
+
+  // 2. NO-FALLBACK def gate (deviation from bash C16, task-directed). If the hardened
+  //    collab-research def is not present in the resolved agent-def dir, REFUSE loudly —
+  //    never silently degrade to a weaker agent. Refused before any log write (gap parity).
+  const agentDefDir = resolveAgentDefDir({ env, cwd, confContents });
+  if (!hardenedDefPresent(RESEARCH_AGENT, agentDefDir)) {
+    return {
+      ok: false,
+      rootConflict,
+      error: {
+        kind: "agent-def-missing",
+        model: "",
+        exitAnalogue: 5,
+        message:
+          `The hardened '${RESEARCH_AGENT}' agent def was not found in ${agentDefDir} ` +
+          `(${RESEARCH_AGENT}.md). Refusing to run research: unlike the bash path there is NO ` +
+          `fallback to a weaker agent, because silently degrading a hardened path while the ` +
+          `caller still expects its guarantees is worse than refusing. Install the def (or set ` +
+          `COLLAB_AGENT_DIR to where it lives) and retry.`,
+      },
+    };
+  }
+
+  // 3. Resolve the model (param > COLLAB_MODEL env > conf > opencode default).
+  const requestedModel = resolveModel({ flag: params.model, env, confContents });
+
+  // 4. Gate: leading-dash refusal (C12) THEN policy tier (C1–C7), all BEFORE any log write.
+  const gate = gateModel(requestedModel, params.confirmed === true, { collabDir, env });
+  if (!gate.ok) {
+    return {
+      ok: false,
+      rootConflict,
+      error: {
+        kind: gate.refusal.kind,
+        message: gate.refusal.message,
+        exitAnalogue: gate.refusal.exitAnalogue,
+        model: gate.refusal.model,
+        tier: gate.refusal.tier,
+      },
+    };
+  }
+
+  // --- Past the gate: from here every path writes exactly one started + completed. ---
+  const log = deps.log ?? new EvidenceLog({ env, cwd, collabDir });
+  const runId =
+    params.runId && params.runId.length > 0 ? params.runId : log.newRun(RESEARCH_COMMAND);
+
+  const outcome = await runAgentLifecycle(
+    {
+      question: params.question,
+      requestedModel,
+      agent: RESEARCH_AGENT,
+      command: RESEARCH_COMMAND,
+      title: "collab_research",
+      runId,
+      tier: gate.tier,
+      confirmed: gate.confirmed,
+    },
+    { serve: deps.serve, log, messageTimeoutMs: deps.messageTimeoutMs },
+  );
+
+  if (outcome.ok) {
+    return {
+      ok: true,
+      answer: outcome.text,
+      rootConflict,
+      attribution: {
+        model: outcome.actualModel,
+        requestedModel,
+        agent: RESEARCH_AGENT,
+        runId,
+        callId: outcome.callId,
+      },
+    };
+  }
+  const modelLabel = requestedModel === "" ? "(opencode default)" : requestedModel;
+  // agent-mismatch (positive-direction addition over bash; no exit analogue) carries its
+  // own message; a plain call failure is wrapped. Both stay exitAnalogue null.
+  const message =
+    outcome.kind === "agent-mismatch"
+      ? outcome.reason
+      : `The research call to '${modelLabel}' failed: ${outcome.reason}. No answer was produced.`;
+  return {
+    ok: false,
+    rootConflict,
+    error: {
+      kind: outcome.kind,
+      model: requestedModel,
+      exitAnalogue: null,
+      message,
+    },
+  };
+}
+
+// --- MCP tool-result translation -------------------------------------------
+/**
+ * Map a `ResearchResult` to the MCP wire shape. Success: the byte-exact answer is BOTH the
+ * text block and `structuredContent.answer`, with exact-id attribution. Failure: the
+ * structured error with `isError:true`, so the driver treats a refusal (def-missing,
+ * policy, or a failed call) as something to act on, not a normal answer.
+ */
+export function researchToToolResult(r: ResearchResult): McpToolResult {
+  if (r.ok) {
+    const structured: Record<string, unknown> = { answer: r.answer, ...r.attribution };
+    if (r.rootConflict) structured.rootConflict = r.rootConflict;
+    return { content: [{ type: "text", text: r.answer }], structuredContent: structured };
+  }
+  const structured: Record<string, unknown> = { error: r.error };
+  if (r.rootConflict) structured.rootConflict = r.rootConflict;
+  return {
+    content: [{ type: "text", text: r.error.message }],
+    structuredContent: structured,
+    isError: true,
+  };
+}
