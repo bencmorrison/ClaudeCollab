@@ -262,10 +262,21 @@ export interface InitResult {
   /** Command docs a user already had at our path that are NOT ours (shadowing). */
   shadowed: string[];
   warnings: string[];
-  mcpAction: "created" | "merged" | "updated" | "removed" | "unchanged" | "skipped";
+  /** `.mcp.json` outcome. `kept` (uninstall only): a `modelguild` key was present but left in
+   * place because the ownership record does not prove init wrote it, or the current entry no
+   * longer matches what init wrote — mirrors the skip-if-edited file guarantee. */
+  mcpAction: "created" | "merged" | "updated" | "removed" | "unchanged" | "skipped" | "kept";
 }
 
 type Records = Record<string, string>; // destRel -> sha256(hex)
+
+/** Proof that init wrote the project `.mcp.json` `modelguild` key: the key name plus the
+ * sha256 of the exact entry init serialized. Persisted in the ownership record only on a
+ * `--write-mcp` install; absent for a default install (init did not touch `.mcp.json`). */
+interface McpRecord {
+  key: string;
+  entryHash: string;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -317,10 +328,40 @@ function readRecords(recordPath: string): Records {
   return {};
 }
 
-function writeRecords(recordPath: string, records: Records): void {
+/** Read the MCP ownership proof from the record, if present and well-formed. A missing/legacy
+ * record (no `mcp` field) or an unreadable one returns `undefined` — treated as NOT owned, so
+ * uninstall never deletes a `.mcp.json` key it cannot prove init wrote. */
+function readMcpRecord(recordPath: string): McpRecord | undefined {
+  if (!existsSync(recordPath)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(recordPath, "utf8")) as { mcp?: unknown };
+    const m = parsed.mcp;
+    if (m && typeof m === "object" && !Array.isArray(m)) {
+      const key = (m as Record<string, unknown>).key;
+      const entryHash = (m as Record<string, unknown>).entryHash;
+      if (typeof key === "string" && key.length > 0 && typeof entryHash === "string" && /^[0-9a-f]{64}$/.test(entryHash)) {
+        return { key, entryHash };
+      }
+    }
+  } catch {
+    /* unreadable/corrupt → undefined (conservative: nothing is "owned") */
+  }
+  return undefined;
+}
+
+function writeRecords(recordPath: string, records: Records, mcp?: McpRecord): void {
   mkdirSync(path.dirname(recordPath), { recursive: true });
-  const body = JSON.stringify({ version: 1, files: records }, null, 2) + "\n";
+  const payload: { version: number; files: Records; mcp?: McpRecord } = { version: 1, files: records };
+  if (mcp) payload.mcp = mcp;
+  const body = JSON.stringify(payload, null, 2) + "\n";
   writeFileSync(recordPath, body);
+}
+
+/** Canonical sha256 of a `.mcp.json` server entry, used to prove init wrote it and to detect
+ * a later user edit. Relies on JSON key order round-tripping write→parse (init writes the file,
+ * so order is preserved); a hand-reordered entry hashes differently and is conservatively kept. */
+function mcpEntryHash(entry: unknown): string {
+  return sha256(Buffer.from(JSON.stringify(entry), "utf8"));
 }
 
 function ensureDir(p: string): void {
@@ -342,9 +383,10 @@ export function mcpServerEntry(opts: InitOptions): Record<string, unknown> {
   };
 }
 
-function writeMcpJson(opts: InitOptions): InitResult["mcpAction"] {
+function writeMcpJson(opts: InitOptions): { action: InitResult["mcpAction"]; entryHash: string } {
   const p = safeJoin(opts.targetDir, ".mcp.json");
   const entry = mcpServerEntry(opts);
+  const entryHash = mcpEntryHash(entry);
   let root: Record<string, unknown> = {};
   let existed = false;
   let hadKey = false;
@@ -374,27 +416,54 @@ function writeMcpJson(opts: InitOptions): InitResult["mcpAction"] {
   root.mcpServers = servers;
   ensureDir(path.dirname(p));
   writeFileSync(p, JSON.stringify(root, null, 2) + "\n");
-  if (!existed) return "created";
-  return hadKey ? "updated" : "merged";
+  const action: InitResult["mcpAction"] = !existed ? "created" : hadKey ? "updated" : "merged";
+  return { action, entryHash };
 }
 
-function removeMcpKey(targetDir: string): InitResult["mcpAction"] {
+/**
+ * Remove the `modelguild` key from a project `.mcp.json` — but ONLY when the ownership record
+ * proves init wrote it (`owned`) AND the current entry still matches what init wrote. This
+ * mirrors the SHA-256 file ownership: init removes only what it can prove it wrote, unedited.
+ * A user-created key (default install: init never touched `.mcp.json`), a legacy record with
+ * no `mcp` field, or a user-edited entry are all KEPT with a warning, never deleted.
+ * A read/parse failure or a missing key is `unchanged`.
+ */
+function removeMcpKey(
+  targetDir: string,
+  owned: McpRecord | undefined,
+): { action: InitResult["mcpAction"]; warning?: string } {
   const p = safeJoin(targetDir, ".mcp.json");
-  if (!existsSync(p)) return "unchanged";
+  if (!existsSync(p)) return { action: "unchanged" };
   let root: Record<string, unknown>;
   try {
     const parsed = JSON.parse(readFileSync(p, "utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "unchanged";
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { action: "unchanged" };
     root = parsed as Record<string, unknown>;
   } catch {
-    return "unchanged";
+    return { action: "unchanged" };
   }
   const servers = root.mcpServers as Record<string, unknown> | undefined;
-  if (!servers || typeof servers !== "object") return "unchanged";
-  if (!Object.prototype.hasOwnProperty.call(servers, MCP_KEY)) return "unchanged";
+  if (!servers || typeof servers !== "object") return { action: "unchanged" };
+  if (!Object.prototype.hasOwnProperty.call(servers, MCP_KEY)) return { action: "unchanged" };
+  // The key exists — but delete it only with proof init wrote it (fail-safe: never remove a
+  // registration the user made themselves).
+  if (!owned || owned.key !== MCP_KEY) {
+    return {
+      action: "kept",
+      warning:
+        `keeping the '${MCP_KEY}' .mcp.json key — no ownership record proves init wrote it ` +
+        `(a registration you made yourself is yours to remove: \`claude mcp remove ${MCP_KEY}\`).`,
+    };
+  }
+  if (mcpEntryHash(servers[MCP_KEY]) !== owned.entryHash) {
+    return {
+      action: "kept",
+      warning: `keeping the changed '${MCP_KEY}' .mcp.json key — it no longer matches what init wrote.`,
+    };
+  }
   delete servers[MCP_KEY];
   writeFileSync(p, JSON.stringify(root, null, 2) + "\n");
-  return "removed";
+  return { action: "removed" };
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +526,7 @@ export function init(opts: InitOptions): InitResult {
   };
   const plan = planFor(opts);
   const records = readRecords(plan.recordPath);
+  const ownedMcp = readMcpRecord(plan.recordPath);
 
   if (opts.uninstall) {
     for (const { dest } of payloadFiles()) {
@@ -476,7 +546,13 @@ export function init(opts: InitOptions): InitResult {
       }
     }
     // No project .mcp.json in global mode; the global payload never wrote one.
-    result.mcpAction = opts.global ? "unchanged" : removeMcpKey(opts.targetDir);
+    if (opts.global) {
+      result.mcpAction = "unchanged";
+    } else {
+      const { action, warning } = removeMcpKey(opts.targetDir, ownedMcp);
+      result.mcpAction = action;
+      if (warning) result.warnings.push(warning);
+    }
     // Remove the record file, then (project only) the gitignore block, then empty dirs.
     if (existsSync(plan.recordPath)) unlinkSync(plan.recordPath);
     if (plan.gitignoreDir) stripGitignoreOnly(plan.gitignoreDir);
@@ -527,11 +603,21 @@ export function init(opts: InitOptions): InitResult {
     result.installed.push(dest);
   }
 
-  writeRecords(plan.recordPath, newRecords);
   // MCP registration is user-driven by default (`claude mcp add`, their choice of scope);
   // only the opt-in `--write-mcp` path writes the project `.mcp.json` for them. Global mode
   // has no project `.mcp.json`, so writeMcp is ignored there (forced skipped).
-  result.mcpAction = !opts.global && opts.writeMcp ? writeMcpJson(opts) : "skipped";
+  let mcpRecord: McpRecord | undefined;
+  if (!opts.global && opts.writeMcp) {
+    const { action, entryHash } = writeMcpJson(opts);
+    result.mcpAction = action;
+    mcpRecord = { key: MCP_KEY, entryHash }; // proof for a future uninstall
+  } else {
+    result.mcpAction = "skipped";
+    // Carry forward a prior --write-mcp ownership proof so a DEFAULT re-run does not forget
+    // that init wrote the key (mirrors carrying an unchanged file's record forward).
+    mcpRecord = ownedMcp;
+  }
+  writeRecords(plan.recordPath, newRecords, mcpRecord);
   // A project `.gitignore` block only makes sense for a project install.
   if (plan.gitignoreDir) addGitignoreBlock(plan.gitignoreDir);
   return result;

@@ -7,6 +7,14 @@
 modelguild/models.policy.local
 modelguild/modelguild.conf.local
 
+# This repo registers the modelguild MCP server per-user (see README "Register the
+# server"), so our own .mcp.json is a private local registration with a machine-specific
+# launch path — never commit it. NOTE: this is a THIS-REPO choice, not the installer's:
+# `init` does NOT gitignore .mcp.json in projects it installs into, because a project-scoped
+# .mcp.json (`claude mcp add -s project` / `--write-mcp`) is designed to be committed for
+# team sharing. Commit it there for a shared team registration; gitignore it for a personal one.
+.mcp.json
+
 # Secrets / local env — never commit these
 .env
 *.env

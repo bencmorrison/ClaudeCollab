@@ -99,6 +99,8 @@ It records ownership in a **separate** record (`~/.claude/modelguild/.modelguild
 - **`-s project`** — committed to *this* repo's `.mcp.json` (shared with anyone who clones it).
 - **`-s local`** — this project only, private to you (not committed).
 
+> **Commit `.mcp.json`, or gitignore it? Your call, by scope.** A `-s project` registration (and `--write-mcp`, below) writes `.mcp.json` **to be committed** — that's the point: everyone who clones the repo gets the server. If instead it's a *personal* local registration (a machine-specific launch path, `-s local`, or a hand-placed file you don't want to share), add `.mcp.json` to your `.gitignore` so a stray `git add -A` can't commit it. `init` does **not** gitignore `.mcp.json` for you — it can't know which of the two you intend. (This repo itself gitignores its own `.mcp.json`, because our dogfood registration is personal and path-specific.)
+
 #### 3a. Recommended — from npm
 
 ```bash
@@ -248,7 +250,7 @@ This is **receipts**. When Claude tells you "GPT-5 agreed with my approach", tha
 npx modelguild init --uninstall --dir /path/to/your/project
 # node /path/to/modelguild/dist/cli.js init --uninstall --dir <project>   # if you installed from source
 ```
-It removes only the files ModelGuild installed and can still prove it owns (by hash); your own files, config, and `modelguild/logs/` are left in place. If a project `.mcp.json` `modelguild` key exists (from `--write-mcp`), uninstall removes it — but a registration you made yourself with `claude mcp add` is yours to remove: `claude mcp remove modelguild` (add `-s user`/`-s local`/`-s project` for a non-default scope). Any Claude Code permission grant you added to `.claude/settings*.json` is yours to remove too.
+It removes only the files ModelGuild installed and can still prove it owns (by hash); your own files, config, and `modelguild/logs/` are left in place. The same ownership rule covers `.mcp.json`: uninstall removes the `modelguild` key **only** when it can prove `init` wrote it — a `--write-mcp` install records the entry's hash, and uninstall deletes the key only while it still matches. A registration you made yourself (`claude mcp add`, a hand-placed file), an entry you later edited, or a key from an *older* `--write-mcp` install (predating this ownership record) is **kept** with a warning — it's yours to remove: `claude mcp remove modelguild` (add `-s user`/`-s local`/`-s project` for a non-default scope). Any Claude Code permission grant you added to `.claude/settings*.json` is yours to remove too.
 
 ## Skip the permission prompts
 
