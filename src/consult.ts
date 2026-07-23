@@ -38,6 +38,7 @@ import {
   candidateRoots,
   readConfContents,
   resolveModel,
+  resolveMessageTimeoutMs,
   checkResolvedModelId,
   type CollabRoot,
   type RootSource,
@@ -204,6 +205,13 @@ export interface ConsultParams {
   sessionId?: string;
   /** Keep the session alive after this turn and return its id (for a further turn). */
   keepSession?: boolean;
+  /**
+   * Per-call model-turn HTTP timeout (ms), ALREADY validated/resolved by the server layer
+   * (`parsePerCallTimeoutMs`): a positive number capped at `TIMER_MAX_MS`, or the ceiling
+   * for `"max"`. When set it takes precedence over `GUILD_MESSAGE_TIMEOUT_MS` env/conf/
+   * default; the test seam `deps.messageTimeoutMs` still wins over it.
+   */
+  timeoutMs?: number;
 }
 
 export interface ConsultDeps {
@@ -493,7 +501,12 @@ export async function consult(params: ConsultParams, deps: ConsultDeps): Promise
       sessionId: params.sessionId,
       keepSession: params.keepSession === true,
     },
-    { serve: deps.serve, log, messageTimeoutMs: deps.messageTimeoutMs },
+    {
+      serve: deps.serve,
+      log,
+      messageTimeoutMs:
+        deps.messageTimeoutMs ?? params.timeoutMs ?? resolveMessageTimeoutMs({ env, confContents }),
+    },
   );
 
   if (outcome.ok) {

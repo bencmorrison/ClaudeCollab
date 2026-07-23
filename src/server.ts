@@ -23,6 +23,7 @@ import { panel, panelToToolResult } from "./panel.js";
 import { research, researchToToolResult } from "./research.js";
 import { delegate, delegateToToolResult } from "./delegate.js";
 import { models, modelsToToolResult } from "./models.js";
+import { parsePerCallTimeoutMs } from "./config.js";
 
 const STATUS_TOOL = "guild_status";
 const CONSULT_TOOL = "guild_consult";
@@ -31,6 +32,33 @@ const RESEARCH_TOOL = "guild_research";
 const DELEGATE_TOOL = "guild_delegate";
 const MODELS_TOOL = "guild_models";
 const HTTP_MS = 10_000;
+
+/** Shared inputSchema property for the optional per-call timeout on every model-calling
+ * tool. A number of ms OR the string "max"; validation/precedence live in the handler
+ * (`parsePerCallTimeoutMs`), so a union type here is expressed as a number-or-string. */
+const TIMEOUT_MS_PROP = {
+  type: ["number", "string"],
+  description:
+    "Optional per-model-turn HTTP timeout for THIS call, in milliseconds (e.g. 1800000 = " +
+    "30 min). Overrides the GUILD_MESSAGE_TIMEOUT_MS env/config setting for this one call; " +
+    'the default is 900000 (15 min). Pass the string "max" for the longest timeout Node ' +
+    "can honour (~24.8 days) — effectively never abort a working model. Raise it when a " +
+    "heavy task on a slow reasoning model would otherwise abort mid-answer. An invalid " +
+    "value (0, negative, non-numeric) is a tool input error, not a silent fall to default.",
+};
+
+/** Resolve the optional `timeoutMs` tool argument to a number (or undefined when absent),
+ * or an error message when present-but-invalid — a per-call value is an explicit ask, so
+ * it is surfaced as a tool input error rather than silently defaulted (mirrors the model/
+ * models param validation idiom). */
+function resolveTimeoutArg(
+  tool: string,
+  raw: unknown,
+): { value: number | undefined } | { error: string } {
+  if (raw === undefined) return { value: undefined };
+  const parsed = parsePerCallTimeoutMs(raw);
+  return parsed.ok ? { value: parsed.value } : { error: `${tool}: ${parsed.error}` };
+}
 
 const lifecycle = new OpencodeLifecycle();
 
@@ -157,6 +185,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "structuredContent.sessionId) so you can thread a follow-up. Omit to delete " +
               "the session after answering (the default single-shot behaviour).",
           },
+          timeoutMs: TIMEOUT_MS_PROP,
         },
         required: ["question"],
         additionalProperties: false,
@@ -211,6 +240,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "continue each member's OWN session with guild_consult({ sessionId, runId }) — " +
               "do NOT re-transmit any model's words. Omit to delete sessions after answering.",
           },
+          timeoutMs: TIMEOUT_MS_PROP,
         },
         required: ["question"],
         additionalProperties: false,
@@ -256,6 +286,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "Set true ONLY after the human user has explicitly approved researching with " +
               "an ask-gated model. Represents the user's approval, not the assistant's.",
           },
+          timeoutMs: TIMEOUT_MS_PROP,
         },
         required: ["question"],
         additionalProperties: false,
@@ -304,6 +335,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "Set true ONLY after the human user has explicitly approved delegating to an " +
               "ask-gated model. Represents the user's approval, not the assistant's.",
           },
+          timeoutMs: TIMEOUT_MS_PROP,
         },
         required: ["task"],
         additionalProperties: false,
@@ -334,6 +366,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         isError: true,
       };
     }
+    const tmo = resolveTimeoutArg(CONSULT_TOOL, a.timeoutMs);
+    if ("error" in tmo) {
+      return { content: [{ type: "text", text: tmo.error }], isError: true };
+    }
     const result = await consult(
       {
         question,
@@ -342,6 +378,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         confirmed: a.confirmed === true,
         sessionId: typeof a.sessionId === "string" ? a.sessionId : undefined,
         keepSession: a.keepSession === true,
+        timeoutMs: tmo.value,
       },
       { serve: lifecycle },
     );
@@ -369,6 +406,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       models = a.models as string[];
     }
+    const tmo = resolveTimeoutArg(PANEL_TOOL, a.timeoutMs);
+    if ("error" in tmo) {
+      return { content: [{ type: "text", text: tmo.error }], isError: true };
+    }
     const result = await panel(
       {
         question,
@@ -376,6 +417,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         runId: typeof a.runId === "string" ? a.runId : undefined,
         confirmed: a.confirmed === true,
         keepSessions: a.keepSessions === true,
+        timeoutMs: tmo.value,
       },
       { serve: lifecycle },
     );
@@ -391,12 +433,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         isError: true,
       };
     }
+    const tmo = resolveTimeoutArg(RESEARCH_TOOL, a.timeoutMs);
+    if ("error" in tmo) {
+      return { content: [{ type: "text", text: tmo.error }], isError: true };
+    }
     const result = await research(
       {
         question,
         model: typeof a.model === "string" ? a.model : undefined,
         runId: typeof a.runId === "string" ? a.runId : undefined,
         confirmed: a.confirmed === true,
+        timeoutMs: tmo.value,
       },
       { serve: lifecycle },
     );
@@ -412,12 +459,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         isError: true,
       };
     }
+    const tmo = resolveTimeoutArg(DELEGATE_TOOL, a.timeoutMs);
+    if ("error" in tmo) {
+      return { content: [{ type: "text", text: tmo.error }], isError: true };
+    }
     const result = await delegate(
       {
         task,
         model: typeof a.model === "string" ? a.model : undefined,
         runId: typeof a.runId === "string" ? a.runId : undefined,
         confirmed: a.confirmed === true,
+        timeoutMs: tmo.value,
       },
       { serve: lifecycle },
     );

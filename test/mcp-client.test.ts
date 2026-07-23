@@ -65,6 +65,22 @@ export async function run(): Promise<number> {
       servePid = status.pid;
       c.check(pidAlive(status.pid), "reported serve pid is a live process during the call");
     }
+
+    // An invalid per-call timeoutMs is rejected by the handler (resolveTimeoutArg) BEFORE
+    // any model call — a tool INPUT error, isError:true, naming the field. Exercises the
+    // server-level branch the offline parse test can't reach (one case: the four tools'
+    // branches are the identical delegation). Offline: no opencode turn is attempted.
+    const badTimeout = await client.callTool(
+      { name: "guild_consult", arguments: { question: "hi", timeoutMs: 0 } },
+      undefined,
+      { timeout: CALL_MS },
+    );
+    c.check(badTimeout.isError === true, "guild_consult with timeoutMs:0 → isError");
+    const btContent = badTimeout.content as Array<{ type: string; text?: string }>;
+    c.check(
+      /timeoutMs/.test(btContent[0]?.text ?? ""),
+      `invalid-timeout error names the field (${JSON.stringify(btContent[0]?.text)})`,
+    );
   } finally {
     await client.close().catch(() => {});
   }

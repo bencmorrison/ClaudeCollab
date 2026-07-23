@@ -579,6 +579,67 @@ export async function run(): Promise<number> {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // N. Per-call timeoutMs precedence + wiring (issue #37 per-call override).
+  //    Observed behaviourally: the fake delays its response, so a small effective
+  //    timeout ABORTS (ok:false) and a large one does not. No deps.messageTimeoutMs
+  //    here — so the effective timeout is exactly params.timeoutMs ?? env/conf/default.
+  // -------------------------------------------------------------------------
+  {
+    // (a) A small per-call timeoutMs WINS over a large env GUILD_MESSAGE_TIMEOUT_MS:
+    //     the call aborts despite env allowing it — proving the param reached the turn.
+    const root = makeCollabRoot();
+    const logDir = tmp("m5-logs-");
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "60000" });
+    const fake = await startFakeOpencode({ historyText: "late answer", messageDelayMs: 300 });
+    try {
+      const r = await consult(
+        { question: "hi", model: "openai/allowed-model", timeoutMs: 100 },
+        { serve: fakeServe(fake), env }, // NO messageTimeoutMs seam: params.timeoutMs is the source
+      );
+      c.check(!r.ok, "per-call: a small timeoutMs aborts the turn (wins over large env value)");
+      c.check(!r.ok && r.error.kind === "call-failed", "per-call: abort surfaces as call-failed");
+      c.check(fake.recorded.messageBodies.length === 1, "per-call: the model call was actually attempted");
+    } finally {
+      await fake.close();
+    }
+  }
+  {
+    // (b) Absent a per-call param, the env GUILD_MESSAGE_TIMEOUT_MS is what binds: a small
+    //     env value aborts the same delayed response — proving the resolver fallback path.
+    const root = makeCollabRoot();
+    const logDir = tmp("m5-logs-");
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "100" });
+    const fake = await startFakeOpencode({ historyText: "late answer", messageDelayMs: 300 });
+    try {
+      const r = await consult(
+        { question: "hi", model: "openai/allowed-model" }, // no timeoutMs
+        { serve: fakeServe(fake), env },
+      );
+      c.check(!r.ok, "no per-call: the env GUILD_MESSAGE_TIMEOUT_MS binds (small env value aborts)");
+    } finally {
+      await fake.close();
+    }
+  }
+  {
+    // (c) A large per-call timeoutMs lets the same delayed response THROUGH — the positive
+    //     control for (a), proving the abort in (a) was the timeout, not something else.
+    const root = makeCollabRoot();
+    const logDir = tmp("m5-logs-");
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "40" });
+    const fake = await startFakeOpencode({ historyText: "late answer", messageDelayMs: 200 });
+    try {
+      const r = await consult(
+        { question: "hi", model: "openai/allowed-model", timeoutMs: 30000 },
+        { serve: fakeServe(fake), env }, // per-call 30s wins over the tiny env 40ms
+      );
+      c.check(r.ok, "per-call: a large timeoutMs lets a slow response through (wins over tiny env value)");
+      c.check(r.ok && r.answer === "late answer", "per-call: the delayed answer is returned intact");
+    } finally {
+      await fake.close();
+    }
+  }
+
   // cleanup
   for (const d of tmpDirs) {
     try {

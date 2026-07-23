@@ -13,6 +13,9 @@ import path from "node:path";
 import {
   confGet,
   resolveModel,
+  resolveMessageTimeoutMs,
+  parsePerCallTimeoutMs,
+  TIMER_MAX_MS,
   checkResolvedModelId,
   resolveCollabRoot,
   candidateRoots,
@@ -22,6 +25,7 @@ import {
   resolveAgentDefDirs,
   hardenedDefPresentIn,
 } from "../src/config.js";
+import { MESSAGE_HTTP_MS } from "../src/client.js";
 import { Checker } from "./harness.js";
 
 const tmpDirs: string[] = [];
@@ -63,6 +67,65 @@ export async function run(): Promise<number> {
       "resolveModel: conf file supplies default (run-tests 21)");
     t.check(resolveModel({ env: {} as NodeJS.ProcessEnv, confContents: "" }) === "",
       "resolveModel: nothing set → empty (opencode default)");
+
+    // ---- resolveMessageTimeoutMs: env > conf > default, fail-safe on garbage -----
+    const tConf = "GUILD_MESSAGE_TIMEOUT_MS=300000\n";
+    const noEnv = {} as NodeJS.ProcessEnv;
+    // The ACTUAL default (no explicit fallback) is MESSAGE_HTTP_MS — guards the 15-min value.
+    t.check(resolveMessageTimeoutMs({ env: {} as NodeJS.ProcessEnv, confContents: "" }) === MESSAGE_HTTP_MS,
+      "resolveMessageTimeoutMs: nothing set → MESSAGE_HTTP_MS default");
+    t.check(MESSAGE_HTTP_MS === 900000,
+      "MESSAGE_HTTP_MS default is 900000 (15 min)");
+    t.check(resolveMessageTimeoutMs({ env: {} as NodeJS.ProcessEnv, confContents: "", fallback: 900000 }) === 900000,
+      "resolveMessageTimeoutMs: nothing set → explicit fallback");
+    t.check(resolveMessageTimeoutMs({ env: { GUILD_MESSAGE_TIMEOUT_MS: "600000" } as NodeJS.ProcessEnv, confContents: tConf, fallback: 900000 }) === 600000,
+      "resolveMessageTimeoutMs: env wins over conf");
+    t.check(resolveMessageTimeoutMs({ env: noEnv, confContents: tConf, fallback: 900000 }) === 300000,
+      "resolveMessageTimeoutMs: conf supplies value over default");
+    t.check(resolveMessageTimeoutMs({ env: { GUILD_MESSAGE_TIMEOUT_MS: "" } as NodeJS.ProcessEnv, confContents: tConf, fallback: 900000 }) === 300000,
+      "resolveMessageTimeoutMs: empty env string ignored, falls through to conf");
+    t.check(resolveMessageTimeoutMs({ env: { GUILD_MESSAGE_TIMEOUT_MS: "nonsense" } as NodeJS.ProcessEnv, confContents: "", fallback: 900000 }) === 900000,
+      "resolveMessageTimeoutMs: non-numeric → default (fail-safe)");
+    t.check(resolveMessageTimeoutMs({ env: { GUILD_MESSAGE_TIMEOUT_MS: "900000abc" } as NodeJS.ProcessEnv, confContents: "", fallback: 900000 }) === 900000,
+      "resolveMessageTimeoutMs: trailing-garbage rejected (Number, not parseInt)");
+    t.check(resolveMessageTimeoutMs({ env: { GUILD_MESSAGE_TIMEOUT_MS: "0" } as NodeJS.ProcessEnv, confContents: "", fallback: 900000 }) === 900000,
+      "resolveMessageTimeoutMs: 0 → default (not disable; AbortSignal.timeout(0) would fire immediately)");
+    t.check(resolveMessageTimeoutMs({ env: { GUILD_MESSAGE_TIMEOUT_MS: "-5" } as NodeJS.ProcessEnv, confContents: "", fallback: 900000 }) === 900000,
+      "resolveMessageTimeoutMs: negative → default (fail-safe)");
+    t.check(resolveMessageTimeoutMs({ env: { GUILD_MESSAGE_TIMEOUT_MS: "9999999999999" } as NodeJS.ProcessEnv, confContents: "", fallback: 900000 }) === 2147483647,
+      "resolveMessageTimeoutMs: overflow (> 2^31-1) → capped at 2147483647, NOT default (Node timer ceiling)");
+    t.check(resolveMessageTimeoutMs({ env: { GUILD_MESSAGE_TIMEOUT_MS: "max" } as NodeJS.ProcessEnv, confContents: "", fallback: 900000 }) === 2147483647,
+      "resolveMessageTimeoutMs: literal 'max' → the 2^31-1 timer ceiling");
+    t.check(resolveMessageTimeoutMs({ env: { GUILD_MESSAGE_TIMEOUT_MS: "  MAX  " } as NodeJS.ProcessEnv, confContents: "", fallback: 900000 }) === 2147483647,
+      "resolveMessageTimeoutMs: 'max' is trimmed + case-insensitive");
+
+    // ---- parsePerCallTimeoutMs: STRICT per-call param (invalid → error, not default) ----
+    t.check(TIMER_MAX_MS === 2147483647, "TIMER_MAX_MS is 2^31-1");
+    const okNum = parsePerCallTimeoutMs(600000);
+    t.check(okNum.ok === true && okNum.ok && okNum.value === 600000,
+      "parsePerCallTimeoutMs: a positive number → that value");
+    const okStr = parsePerCallTimeoutMs("600000");
+    t.check(okStr.ok === true && okStr.ok && okStr.value === 600000,
+      "parsePerCallTimeoutMs: a positive numeric STRING → that value");
+    const okMax = parsePerCallTimeoutMs("max");
+    t.check(okMax.ok === true && okMax.ok && okMax.value === TIMER_MAX_MS,
+      "parsePerCallTimeoutMs: 'max' → the 2^31-1 ceiling");
+    const okMaxCase = parsePerCallTimeoutMs("  MAX ");
+    t.check(okMaxCase.ok === true && okMaxCase.ok && okMaxCase.value === TIMER_MAX_MS,
+      "parsePerCallTimeoutMs: 'max' trimmed + case-insensitive");
+    const okCap = parsePerCallTimeoutMs(9999999999999);
+    t.check(okCap.ok === true && okCap.ok && okCap.value === TIMER_MAX_MS,
+      "parsePerCallTimeoutMs: over-cap number → capped at TIMER_MAX_MS (not error)");
+    // Invalid values are ERRORS here (unlike the lenient knob) — an explicit per-call ask.
+    for (const bad of [0, -5, Number.NaN, Infinity, "0", "-5", "nonsense", "600000abc", "", true, null, {}]) {
+      const r = parsePerCallTimeoutMs(bad as unknown);
+      t.check(r.ok === false && !r.ok && typeof r.error === "string" && r.error.length > 0,
+        `parsePerCallTimeoutMs: invalid ${JSON.stringify(bad)} → error (NOT a silent default)`);
+    }
+    // undefined is handled by the caller (absent param), not by this parser — but assert it errors
+    // rather than silently passing, so a stray undefined can't become a bogus timeout.
+    t.check(parsePerCallTimeoutMs(undefined).ok === false,
+      "parsePerCallTimeoutMs: undefined is not a valid value (caller must gate on presence)");
 
     // ---- leading-dash guard (C12) ----------------------------------------------
     const bad = checkResolvedModelId("--print-logs");

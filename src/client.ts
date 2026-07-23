@@ -30,8 +30,9 @@ import type { ServeHandle } from "./lifecycle.js";
 // --- HTTP timeout defaults (ms) --------------------------------------------
 /** Session create/list/delete/history: fast control-plane calls. */
 export const SHORT_HTTP_MS = 15_000;
-/** A model turn — generous; a real call can be slow. */
-export const MESSAGE_HTTP_MS = 180_000;
+/** A model turn — generous; a real call can be slow. 15 min default (raised from 3 min
+ * for long-running planning/review work); override per-install with GUILD_MESSAGE_TIMEOUT_MS. */
+export const MESSAGE_HTTP_MS = 900_000;
 
 // --- Model id -------------------------------------------------------------
 /** The message-send model shape: `{providerID, modelID}` (verified live). */
@@ -112,11 +113,18 @@ async function requestJson(ctx: RequestCtx): Promise<unknown> {
   try {
     res = await fetch(`${baseUrl}${path}`, init);
   } catch (err) {
-    // Timeout aborts and connection failures land here — annotate with context.
+    // Timeout aborts and connection failures both land here — annotate the DURATION only
+    // when the failure was actually the timeout firing, so a too-small configured value
+    // (e.g. a seconds-vs-ms typo, 600 → 600ms) is self-evident, without mislabelling a
+    // connection-refused error as a timeout. `AbortSignal.timeout` rejects fetch with a
+    // DOMException whose name is "TimeoutError" (verified live, Node v22: a caller abort
+    // is "AbortError", a connection failure a TypeError "fetch failed"); it survives the
+    // `AbortSignal.any` wrap in `effectiveSignal`.
+    const timedOut = (err as Error)?.name === "TimeoutError";
     throw new OpencodeHttpError(
-      `${method} ${path} failed${sessionId ? ` (session=${sessionId})` : ""}: ${
-        (err as Error).message
-      }`,
+      `${method} ${path} failed${timedOut ? ` after ${timeoutMs}ms (timeout)` : ""}${
+        sessionId ? ` (session=${sessionId})` : ""
+      }: ${(err as Error).message}`,
       { method, path, sessionId },
       { cause: err },
     );
