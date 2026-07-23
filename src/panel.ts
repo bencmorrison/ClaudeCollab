@@ -21,7 +21,10 @@
  *   - A member whose model call THROWS records completed/failed and surfaces a per-model
  *     call-failed error; it NEVER aborts the other members (Promise.all resolves each to
  *     a result object, so no member's rejection can reject the whole panel).
- *   - The WHOLE panel refuses only when the resolved model set is EMPTY (C14 exit-2).
+ *   - The WHOLE panel refuses up front in two cases: the hardened guild-read def is absent
+ *     (agent-def-missing, exit-5 analogue — one check for every member, the NO-FALLBACK
+ *     deviation guild_research/guild_delegate also make), or the resolved model set is EMPTY
+ *     (C14 exit-2).
  *
  * CONFIRMED IS PANEL-WIDE (documented honestly): a single `confirmed:true` on the panel
  * call approves EVERY ask-tier member of THIS call — the human is asked once about "this
@@ -47,7 +50,13 @@ import {
   runAgentLifecycle,
   type McpToolResult,
 } from "./consult.js";
-import { readConfContents, resolvePanelModels, resolveMessageTimeoutMs } from "./config.js";
+import {
+  readConfContents,
+  resolvePanelModels,
+  resolveMessageTimeoutMs,
+  resolveAgentDefDirs,
+  hardenedDefPresentIn,
+} from "./config.js";
 import { type PolicyTier } from "./policy.js";
 
 /** The read-only agent every panel member uses, unmodified (C15/C47/C48). */
@@ -138,8 +147,16 @@ export interface PanelOk {
 
 export interface PanelFail {
   ok: false;
-  /** The whole panel refused: the resolved model set was empty (C14 exit-2). */
-  error: { kind: "no-models"; message: string; exitAnalogue: number };
+  /**
+   * The whole panel refused, up front, for one of two reasons:
+   *   - `agent-def-missing` (exit-5 analogue, C57): the hardened guild-read def every member
+   *     needs is absent — one check for the whole panel (all members use the same agent), the
+   *     NO-FALLBACK deviation from bash C16 that guild_research/guild_delegate also make.
+   *   - `no-models` (exit-2 analogue, C14): the resolved model set was empty.
+   */
+  error:
+    | { kind: "agent-def-missing"; message: string; exitAnalogue: number }
+    | { kind: "no-models"; message: string; exitAnalogue: number };
   warnings: string[];
   rootConflict?: string;
 }
@@ -160,10 +177,35 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
   const rootRes = resolveRootWithConflict(env, cwd, home);
   const collabDir = rootRes.root;
   const rootConflict = rootRes.conflict;
-
-  // 2. Resolve the panel's model set (args > $GUILD_MODELS > conf), WIRING C13/C14's
-  //    resolvePanelModels — dedup, order, and the diversity/shape warnings intact.
   const confContents = readConfContents(collabDir, env);
+
+  // 2. NO-FALLBACK def gate for the WHOLE panel (deviation from bash C16, mirroring
+  //    guild_research/guild_delegate). Every member runs through the SAME hardened guild-read
+  //    agent, so one presence check up front decides the whole panel: if the def is absent,
+  //    REFUSE loudly rather than run any member on whatever opencode resolves in its place.
+  //    Refused BEFORE the model-set resolution and any log write (gap parity) — no member runs.
+  const agentDefDirs = resolveAgentDefDirs({ env, cwd, confContents });
+  if (!hardenedDefPresentIn(PANEL_AGENT, agentDefDirs).present) {
+    return {
+      ok: false,
+      warnings: [],
+      rootConflict,
+      error: {
+        kind: "agent-def-missing",
+        exitAnalogue: 5,
+        message:
+          `The hardened '${PANEL_AGENT}' agent def (${PANEL_AGENT}.md) was not found in ` +
+          `any of: ${agentDefDirs.join(", ")}. Refusing to run the panel: unlike the bash path ` +
+          `there is NO fallback to a weaker agent, because silently degrading a hardened path ` +
+          `while the caller still expects its guarantees is worse than refusing. Install the ` +
+          `def (per-project or via 'init --global'), or set GUILD_AGENT_DIR to where it lives, ` +
+          `and retry.`,
+      },
+    };
+  }
+
+  // 3. Resolve the panel's model set (args > $GUILD_MODELS > conf), WIRING C13/C14's
+  //    resolvePanelModels — dedup, order, and the diversity/shape warnings intact.
   const panelRes = resolvePanelModels({ args: params.models, env, confContents });
   if (panelRes.error !== undefined || panelRes.models.length === 0) {
     return {
@@ -180,7 +222,7 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
     };
   }
 
-  // 3. One run for the whole panel (C23/C43). Mint up front so every member logs into the
+  // 4. One run for the whole panel (C23/C43). Mint up front so every member logs into the
   //    same auditable unit; a threaded runId reuses that run.
   const log = deps.log ?? new EvidenceLog({ env, cwd, collabDir });
   const runId = params.runId && params.runId.length > 0 ? params.runId : log.newRun(PANEL_COMMAND);
@@ -191,7 +233,7 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
   const messageTimeoutMs =
     deps.messageTimeoutMs ?? params.timeoutMs ?? resolveMessageTimeoutMs({ env, confContents });
 
-  // 4. Members run CONCURRENTLY; each is gated + logged independently. One member's
+  // 5. Members run CONCURRENTLY; each is gated + logged independently. One member's
   //    refusal or failure never touches another's result (order preserved by Promise.all).
   const results = await Promise.all(
     panelRes.models.map(async (model): Promise<PanelMemberResult> => {

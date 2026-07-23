@@ -39,6 +39,18 @@ function rootWithPolicy(policy: string): string {
   return root;
 }
 
+/** An agent-def dir CONTAINING a guild-read.md so the whole-panel presence gate passes.
+ * Pinned via GUILD_AGENT_DIR on every gate-traversing test so the pass does NOT depend on an
+ * ambient def (repo cwd `.opencode/agent/` or a container-global install) — the #24 hermeticity
+ * rule (mirrors defDirWithResearch/defDirWithBuild). Note the no-models test also needs this:
+ * the def gate runs BEFORE model-set resolution, so without it that test would refuse with
+ * agent-def-missing instead of no-models. */
+function defDirWithRead(): string {
+  const dir = tmp("m6-agent-");
+  writeFileSync(path.join(dir, "guild-read.md"), "---\nmode: all\n---\nfake\n");
+  return dir;
+}
+
 /** A clean env: process.env minus every GUILD_* knob, then the given overrides. */
 function envWith(overrides: Record<string, string>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = { ...process.env };
@@ -59,13 +71,57 @@ export async function run(): Promise<number> {
   console.log("== panel.test (M6 guild_panel) ==");
 
   // -------------------------------------------------------------------------
+  // 0. NO-FALLBACK def gate: a MISSING guild-read.md refuses the WHOLE panel up front
+  //    (exit-5), NOTHING logged, NO model call — one check for every member (all use
+  //    guild-read), mirroring research/delegate (issue #34). Refused BEFORE model-set
+  //    resolution, so even a valid model list does not run any member.
+  // -------------------------------------------------------------------------
+  {
+    const root = rootWithPolicy(""); // default-allow
+    const logDir = tmp("m6-logs-");
+    const emptyDefDir = tmp("m6-emptyagent-"); // no guild-read.md inside
+    // HERMETICITY (issue #24): resolveAgentDefDirs also looks in the GLOBAL opencode dir
+    // (`${XDG_CONFIG_HOME:-~/.config}/opencode/agent/`). On a box with a global install (e.g.
+    // this dev container) that dir HAS guild-read.md, so the def would resolve globally and the
+    // panel would NOT refuse. Point XDG_CONFIG_HOME at an empty temp dir so the global dir
+    // resolves to an empty location; now BOTH dirs are genuinely def-free.
+    const emptyXdg = tmp("m6-emptyxdg-"); // <emptyXdg>/opencode/agent does not exist
+    const env = envWith({
+      GUILD_ROOT: root,
+      GUILD_LOG_DIR: logDir,
+      GUILD_AGENT_DIR: emptyDefDir,
+      XDG_CONFIG_HOME: emptyXdg,
+    });
+    const fake = await startFakeOpencode({ historyText: "should never be reached" });
+    try {
+      const r = await panel(
+        { question: "q", models: ["alpha/one", "beta/two"] },
+        { serve: fakeServe(fake), env, messageTimeoutMs: 5_000 },
+      );
+      c.check(!r.ok, "def-missing: the WHOLE panel refuses");
+      if (!r.ok) {
+        c.check(r.error.kind === "agent-def-missing", "def-missing: kind is agent-def-missing");
+        c.check(r.error.exitAnalogue === 5, "def-missing: exit analogue is 5 (C57)");
+        c.check(r.error.message.includes("guild-read"), "def-missing: message names the agent");
+        c.check(r.error.message.includes(emptyDefDir), "def-missing: message names the dir searched");
+        c.check(/no.*fallback/i.test(r.error.message), "def-missing: message states there is no fallback");
+      }
+      c.check(fake.recorded.messageBodies.length === 0, "def-missing: no member reached a model");
+      c.check(readdirSync(logDir).length === 0, "def-missing: NOTHING logged (gap parity)");
+      c.check(panelToToolResult(r).isError === true, "def-missing: MCP result flags isError");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 1. Model-set resolution: precedence (param > env) + dedup + diversity warning.
   // -------------------------------------------------------------------------
   {
     // 1a. Explicit `models` param wins over $GUILD_MODELS (C13 precedence).
     const root = rootWithPolicy(""); // empty ⇒ default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MODELS: "env/should-not-win" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MODELS: "env/should-not-win", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "voice" });
     try {
       const r = await panel(
@@ -129,7 +185,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("# mixed\ndeny beta/denied\nask gamma/ask\n");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "the allow answer" });
     try {
       const r = await panel(
@@ -170,7 +226,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("ask gamma/ask\n");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "approved voice" });
     try {
       const r = await panel(
@@ -200,7 +256,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "voice" });
     try {
       const r = await panel(
@@ -225,7 +281,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy(""); // default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "panel voice", syncText: "SYNC-MUST-NOT-LEAK" });
     try {
       const r = await panel(
@@ -283,7 +339,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir }); // no GUILD_MODELS
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() }); // no GUILD_MODELS
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
       const r = await panel(
@@ -310,7 +366,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "voice" });
     try {
       const r1 = await panel(
@@ -343,7 +399,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     // failMessage makes EVERY model turn fail — so both members record completed/failed
     // and each surfaces a per-member call-failed, and the panel still resolves (no throw).
     const fake = await startFakeOpencode({ historyText: "x", failMessage: true });
@@ -381,7 +437,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy("ask gamma/ask\n");
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "voice" });
     try {
       // Call 1: confirmed:true → the ask member proceeds.
@@ -432,7 +488,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy(""); // default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "honest answer" });
     try {
       const r = await panel(
@@ -476,7 +532,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy(""); // default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "plan voice", distinctSessions: true });
     try {
       const r = await panel(
@@ -513,7 +569,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy(""); // default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({
       historyText: "ok voice",
       distinctSessions: true,
@@ -556,7 +612,7 @@ export async function run(): Promise<number> {
   {
     const root = rootWithPolicy(""); // default-allow
     const logDir = tmp("m6-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "60000" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "60000", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "voice", messageDelayMs: 300 });
     try {
       const r = await panel(
