@@ -1,0 +1,103 @@
+/**
+ * `modelguild doctor` test (fix/doctor-detects-global).
+ *
+ * Regression guard for the bug where DEFAULT (non-`--global`) doctor only checked the PROJECT
+ * payload locations, so a working GLOBAL install (`init --global`) falsely reported 0/8 docs,
+ * 0/3 agents, a missing policy, and exited 1 — even though everything resolves fine globally.
+ *
+ * `runDoctor` returns 0/1 and takes an `inject?: { homeDir, xdgConfigHome }`, so we drive it
+ * with injected temp dirs and NEVER touch the real `~/.claude` / `~/.config`. Offline: the
+ * MCP-registration and opencode-binary checks are warnings (not failures) when the tools are
+ * absent, so the pass/fail is driven only by the docs/agents/policy payload checks under test.
+ */
+
+import { mkdtempSync, realpathSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Checker, repoRoot } from "./harness.js";
+import { init, type ServerLaunch } from "../src/init.js";
+import { runDoctor } from "../src/cli.js";
+
+const LAUNCH: ServerLaunch = { command: "npx", args: ["-y", "modelguild", "serve"] };
+
+function tempDir(): string {
+  // realpath: macOS /tmp is a symlink; keep paths canonical to match safeJoin/existsSync.
+  return realpathSync(mkdtempSync(path.join(os.tmpdir(), "cc-doctor-")));
+}
+
+/** Run runDoctor with stdout/stderr captured, so we can assert the ✓/✗ lines AND the code. */
+async function captureDoctor(
+  argv: string[],
+  inject: { homeDir: string; xdgConfigHome: string },
+): Promise<{ code: number; out: string }> {
+  const origLog = console.log;
+  const origWarn = console.warn;
+  const origErr = console.error;
+  let out = "";
+  const sink = (...a: unknown[]) => { out += a.join(" ") + "\n"; };
+  console.log = sink;
+  console.warn = sink;
+  console.error = sink;
+  try {
+    const code = await runDoctor(argv, inject);
+    return { code, out };
+  } finally {
+    console.log = origLog;
+    console.warn = origWarn;
+    console.error = origErr;
+  }
+}
+
+export async function run(): Promise<number> {
+  const c = new Checker();
+  console.log("== doctor.test ==");
+
+  // ---- (a) GLOBAL-only install: plain `doctor` (no --global) must PASS -----
+  // Payload lands ONLY in the injected global dirs; the project dir is empty.
+  const gHome = tempDir();
+  const gXdg = tempDir();
+  const inject = { homeDir: gHome, xdgConfigHome: gXdg };
+  const emptyProject = tempDir();
+  init({ targetDir: tempDir(), packageRoot: repoRoot, serverLaunch: LAUNCH, global: true, homeDir: gHome, xdgConfigHome: gXdg });
+
+  const a = await captureDoctor(["--dir", emptyProject], inject);
+  c.check(a.code === 0, `(a) GLOBAL-only install: plain doctor PASSES (exit ${a.code})`);
+  c.check(!a.out.includes("✗"), "(a) plain doctor over a global install prints NO ✗ line");
+  c.check(a.out.includes("8/8 command docs"), "(a) plain doctor counts 8/8 docs from the global dir");
+  c.check(a.out.includes("3/3 hardened agent defs"), "(a) plain doctor counts 3/3 agents from the global dir");
+  c.check(a.out.includes("[found: global]"), "(a) plain doctor reports the payload was found globally");
+
+  // ---- (b) PROJECT install: plain `doctor` must PASS -----------------------
+  // Inject EMPTY global dirs so the global lookups find nothing and the project wins.
+  const proj = tempDir();
+  const emptyHome = tempDir();
+  const emptyXdg = tempDir();
+  init({ targetDir: proj, packageRoot: repoRoot, serverLaunch: LAUNCH });
+  const b = await captureDoctor(["--dir", proj], { homeDir: emptyHome, xdgConfigHome: emptyXdg });
+  c.check(b.code === 0, `(b) PROJECT install: plain doctor PASSES (exit ${b.code})`);
+  c.check(!b.out.includes("✗"), "(b) plain doctor over a project install prints NO ✗ line");
+  c.check(b.out.includes("[found: project]"), "(b) plain doctor reports the payload was found in the project");
+
+  // ---- (c) NEITHER: plain `doctor` must FAIL (fail-closed) -----------------
+  const c1 = await captureDoctor(["--dir", tempDir()], { homeDir: tempDir(), xdgConfigHome: tempDir() });
+  c.check(c1.code === 1, `(c) NEITHER project nor global: plain doctor FAILS (exit ${c1.code})`);
+  c.check(c1.out.includes("0/8 command docs"), "(c) reports 0/8 docs when nothing is installed");
+  c.check(c1.out.includes("✗"), "(c) prints a ✗ line when the payload is absent");
+
+  // ---- --global mode is unchanged: checks ONLY the global location ---------
+  // A global install passes --global doctor.
+  const g = await captureDoctor(["--dir", emptyProject, "--global"], inject);
+  c.check(g.code === 0, `(d) --global doctor PASSES for a global install (exit ${g.code})`);
+  c.check(!g.out.includes("[found:"), "(d) --global doctor does not print the project-or-global 'found' suffix");
+
+  // A PROJECT-only install must NOT satisfy --global doctor (global location empty).
+  const g2 = await captureDoctor(["--dir", proj, "--global"], { homeDir: emptyHome, xdgConfigHome: emptyXdg });
+  c.check(g2.code === 1, `(e) --global doctor FAILS for a project-only install (exit ${g2.code})`);
+
+  console.log(`doctor.test: ${c.passes} passed, ${c.failures} failed`);
+  return c.failures;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  run().then((f) => process.exit(f > 0 ? 1 : 0));
+}
