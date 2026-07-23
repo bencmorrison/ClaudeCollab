@@ -38,6 +38,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -100,6 +101,102 @@ const PRUNE_DIRS = [
 const RECORD_REL = "modelguild/.modelguild-install.json";
 const MCP_KEY = "modelguild";
 
+// ---------------------------------------------------------------------------
+// Destination resolution — project (default) vs global.
+//
+// A payload entry's project-relative `dest` (e.g. `.claude/commands/guild/consult.md`) is
+// the stable RECORD KEY in BOTH modes; only the on-disk base changes. `payloadDest` maps a
+// dest-rel to `{ base, rel }` so callers pick `safeJoin(base, rel)` (symlink-safe writes,
+// init) or `path.join(base, rel)` (plain existence check, doctor) as they need.
+// ---------------------------------------------------------------------------
+export interface GlobalDirs {
+  /** Resolved home dir (defaults to os.homedir()). */
+  homeDir: string;
+  /** Resolved XDG config home ($XDG_CONFIG_HOME else <homeDir>/.config). */
+  xdgConfigHome: string;
+}
+
+/** Resolve the global-mode home + XDG dirs, applying injectable overrides ONCE (never read
+ * unmockably in a loop). */
+export function resolveGlobalDirs(opts: {
+  homeDir?: string;
+  xdgConfigHome?: string;
+  env?: NodeJS.ProcessEnv;
+}): GlobalDirs {
+  const env = opts.env ?? process.env;
+  const homeDir = opts.homeDir && opts.homeDir.length > 0 ? opts.homeDir : os.homedir();
+  const xdgConfigHome =
+    opts.xdgConfigHome && opts.xdgConfigHome.length > 0
+      ? opts.xdgConfigHome
+      : env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.length > 0
+        ? env.XDG_CONFIG_HOME
+        : path.join(homeDir, ".config");
+  return { homeDir, xdgConfigHome };
+}
+
+/**
+ * Map a project-relative payload `dest` to its on-disk `{ base, rel }` for the given mode.
+ * Project mode: base is the target project (`dest` unchanged). Global mode: commands/policy
+ * land under `<home>/.claude/…`, agent defs under `<xdg>/opencode/agent/`.
+ */
+export function payloadDest(
+  destRel: string,
+  opts: { global?: boolean; targetDir: string; global_dirs?: GlobalDirs },
+): { base: string; rel: string } {
+  if (!opts.global) return { base: opts.targetDir, rel: destRel };
+  const g = opts.global_dirs;
+  if (!g) throw new Error("payloadDest: global mode requires resolved global dirs");
+  if (destRel.startsWith(".claude/commands/guild/")) {
+    return { base: g.homeDir, rel: destRel }; // <home>/.claude/commands/guild/<name>.md
+  }
+  if (destRel.startsWith(".opencode/agent/")) {
+    // <xdg>/opencode/agent/guild-<x>.md — SINGULAR `agent`, the dir opencode resolves.
+    return { base: g.xdgConfigHome, rel: path.join("opencode", destRel.slice(".opencode/".length)) };
+  }
+  if (destRel.startsWith("modelguild/")) {
+    return {
+      base: g.homeDir,
+      rel: path.join(".claude", "modelguild", destRel.slice("modelguild/".length)),
+    };
+  }
+  throw new Error(`payloadDest: unmapped payload dest '${destRel}'`);
+}
+
+/** The full install/uninstall plan for a run: how to resolve each dest, where the ownership
+ * record lives, which dirs to prune, and whether a project `.gitignore` block applies. */
+interface InstallPlan {
+  destFor(destRel: string): string; // absolute, symlink-safe
+  recordPath: string;
+  pruneDirs: string[]; // absolute, deepest-first
+  gitignoreDir?: string; // project mode only
+}
+
+function planFor(opts: InitOptions): InstallPlan {
+  if (opts.global) {
+    const g = resolveGlobalDirs(opts);
+    const destOpts = { global: true as const, targetDir: opts.targetDir, global_dirs: g };
+    return {
+      destFor: (rel) => {
+        const { base, rel: r } = payloadDest(rel, destOpts);
+        return safeJoin(base, r);
+      },
+      recordPath: safeJoin(g.homeDir, path.join(".claude", "modelguild", ".modelguild-install.json")),
+      pruneDirs: [
+        path.join(g.homeDir, ".claude", "commands", "guild"),
+        path.join(g.homeDir, ".claude", "commands"),
+        path.join(g.xdgConfigHome, "opencode", "agent"),
+        path.join(g.homeDir, ".claude", "modelguild"),
+      ],
+    };
+  }
+  return {
+    destFor: (rel) => safeJoin(opts.targetDir, rel),
+    recordPath: safeJoin(opts.targetDir, RECORD_REL),
+    pruneDirs: PRUNE_DIRS.map((d) => path.join(opts.targetDir, d)),
+    gitignoreDir: opts.targetDir,
+  };
+}
+
 const GITIGNORE_BEGIN = "# >>> ModelGuild >>>";
 const GITIGNORE_END = "# <<< ModelGuild <<<";
 const GITIGNORE_BODY = [
@@ -125,7 +222,7 @@ export interface ServerLaunch {
 }
 
 export interface InitOptions {
-  /** Absolute path to the target project the payload lands in. */
+  /** Absolute path to the target project the payload lands in. Ignored when `global`. */
   targetDir: string;
   /** Absolute path to the package root the payload is read from. */
   packageRoot: string;
@@ -135,8 +232,27 @@ export interface InitOptions {
   uninstall?: boolean;
   /** OPT-IN: write/merge the project `.mcp.json` server entry (the old auto-write). Default
    * false — the user registers the server themselves (`claude mcp add`, their choice of
-   * scope), so `mcpAction` is `"skipped"` unless this is set. */
+   * scope), so `mcpAction` is `"skipped"` unless this is set. Ignored (forced skipped) in
+   * `global` mode — there is no project `.mcp.json`. */
   writeMcp?: boolean;
+  /**
+   * GLOBAL payload install: place the payload into the user's global config so `/guild:*`,
+   * the hardened agent defs, and the policy are available in EVERY project without a
+   * per-project `init`. Destinations change (SOURCE files are identical, only DEST differs):
+   *   command docs → `<homeDir>/.claude/commands/guild/<name>.md`
+   *   agent defs   → `<xdgConfigHome>/opencode/agent/guild-<x>.md`
+   *   policy/conf  → `<homeDir>/.claude/modelguild/<file>`
+   *   record       → `<homeDir>/.claude/modelguild/.modelguild-install.json` (SEPARATE from
+   *                  the per-project record so the two installs never read each other's).
+   * No `.gitignore` block is written (there is no project). Same SHA-256 ownership semantics.
+   */
+  global?: boolean;
+  /** Home dir for global-mode destinations. INJECTABLE for tests; defaults to `os.homedir()`.
+   * Resolved once (not read unmockably inside the payload loop). */
+  homeDir?: string;
+  /** XDG config home for the global opencode agent dir. INJECTABLE for tests; defaults to
+   * `$XDG_CONFIG_HOME` else `<homeDir>/.config`. */
+  xdgConfigHome?: string;
 }
 
 export interface InitResult {
@@ -182,8 +298,8 @@ function safeJoin(base: string, rel: string): string {
   return cur;
 }
 
-function readRecords(targetDir: string): Records {
-  const p = path.join(targetDir, RECORD_REL);
+function readRecords(recordPath: string): Records {
+  const p = recordPath;
   if (!existsSync(p)) return {};
   try {
     const parsed = JSON.parse(readFileSync(p, "utf8")) as { files?: unknown };
@@ -201,11 +317,10 @@ function readRecords(targetDir: string): Records {
   return {};
 }
 
-function writeRecords(targetDir: string, records: Records): void {
-  const p = safeJoin(targetDir, RECORD_REL);
-  mkdirSync(path.dirname(p), { recursive: true });
+function writeRecords(recordPath: string, records: Records): void {
+  mkdirSync(path.dirname(recordPath), { recursive: true });
   const body = JSON.stringify({ version: 1, files: records }, null, 2) + "\n";
-  writeFileSync(p, body);
+  writeFileSync(recordPath, body);
 }
 
 function ensureDir(p: string): void {
@@ -320,9 +435,8 @@ function stripGitignoreOnly(targetDir: string): void {
 // ---------------------------------------------------------------------------
 // Install / uninstall
 // ---------------------------------------------------------------------------
-function pruneEmptyDirs(targetDir: string): void {
-  for (const d of PRUNE_DIRS) {
-    const abs = path.join(targetDir, d);
+function pruneEmptyDirs(dirs: string[]): void {
+  for (const abs of dirs) {
     if (!existsSync(abs)) continue;
     try {
       if (readdirSync(abs).length === 0) rmdirSync(abs);
@@ -341,11 +455,12 @@ export function init(opts: InitOptions): InitResult {
     warnings: [],
     mcpAction: "unchanged",
   };
-  const records = readRecords(opts.targetDir);
+  const plan = planFor(opts);
+  const records = readRecords(plan.recordPath);
 
   if (opts.uninstall) {
     for (const { dest } of payloadFiles()) {
-      const abs = safeJoin(opts.targetDir, dest);
+      const abs = plan.destFor(dest);
       if (!existsSync(abs)) continue;
       const recorded = records[dest];
       if (!recorded) {
@@ -360,12 +475,12 @@ export function init(opts: InitOptions): InitResult {
         result.warnings.push(`keeping changed file ${dest} — it no longer matches what init wrote.`);
       }
     }
-    result.mcpAction = removeMcpKey(opts.targetDir);
-    // Remove the record file, then the gitignore block, then empty dirs.
-    const recPath = path.join(opts.targetDir, RECORD_REL);
-    if (existsSync(recPath)) unlinkSync(recPath);
-    stripGitignoreOnly(opts.targetDir);
-    pruneEmptyDirs(opts.targetDir);
+    // No project .mcp.json in global mode; the global payload never wrote one.
+    result.mcpAction = opts.global ? "unchanged" : removeMcpKey(opts.targetDir);
+    // Remove the record file, then (project only) the gitignore block, then empty dirs.
+    if (existsSync(plan.recordPath)) unlinkSync(plan.recordPath);
+    if (plan.gitignoreDir) stripGitignoreOnly(plan.gitignoreDir);
+    pruneEmptyDirs(plan.pruneDirs);
     return result;
   }
 
@@ -379,7 +494,7 @@ export function init(opts: InitOptions): InitResult {
     }
     const payloadBytes = readFileSync(srcAbs);
     const payloadHash = sha256(payloadBytes);
-    const destAbs = safeJoin(opts.targetDir, dest);
+    const destAbs = plan.destFor(dest);
 
     if (existsSync(destAbs)) {
       if (!lstatSync(destAbs).isFile()) {
@@ -412,10 +527,12 @@ export function init(opts: InitOptions): InitResult {
     result.installed.push(dest);
   }
 
-  writeRecords(opts.targetDir, newRecords);
+  writeRecords(plan.recordPath, newRecords);
   // MCP registration is user-driven by default (`claude mcp add`, their choice of scope);
-  // only the opt-in `--write-mcp` path writes the project `.mcp.json` for them.
-  result.mcpAction = opts.writeMcp ? writeMcpJson(opts) : "skipped";
-  addGitignoreBlock(opts.targetDir);
+  // only the opt-in `--write-mcp` path writes the project `.mcp.json` for them. Global mode
+  // has no project `.mcp.json`, so writeMcp is ignored there (forced skipped).
+  result.mcpAction = !opts.global && opts.writeMcp ? writeMcpJson(opts) : "skipped";
+  // A project `.gitignore` block only makes sense for a project install.
+  if (plan.gitignoreDir) addGitignoreBlock(plan.gitignoreDir);
   return result;
 }

@@ -49,8 +49,8 @@ import {
 import {
   readConfContents,
   resolveModel,
-  resolveAgentDefDir,
-  hardenedDefPresent,
+  resolveAgentDefDirs,
+  hardenedDefPresentIn,
 } from "./config.js";
 import { type PolicyTier } from "./policy.js";
 import { snapshotWorktree, captureDelegateDiff, scaffoldDigest } from "./snapshot.js";
@@ -183,8 +183,8 @@ export async function delegate(
   // 2. NO-FALLBACK def gate (deviation from bash C16). A missing guild-build def REFUSES
   //    loudly — never silently degrades to the UNRESTRICTED `build`. Refused before any log
   //    write (gap parity) and before any snapshot (nothing ran).
-  const agentDefDir = resolveAgentDefDir({ env, cwd, confContents });
-  if (!hardenedDefPresent(DELEGATE_AGENT, agentDefDir)) {
+  const agentDefDirs = resolveAgentDefDirs({ env, cwd, confContents });
+  if (!hardenedDefPresentIn(DELEGATE_AGENT, agentDefDirs).present) {
     return {
       ok: false,
       rootConflict,
@@ -193,11 +193,12 @@ export async function delegate(
         model: "",
         exitAnalogue: 5,
         message:
-          `The hardened '${DELEGATE_AGENT}' agent def was not found in ${agentDefDir} ` +
-          `(${DELEGATE_AGENT}.md). Refusing to delegate: unlike the bash path there is NO ` +
-          `fallback — and the write-path fallback would be the UNRESTRICTED built-in 'build' ` +
-          `agent (all tools allowed), so silently degrading here is worse than on any read ` +
-          `path. Install the def (or set GUILD_AGENT_DIR to where it lives) and retry.`,
+          `The hardened '${DELEGATE_AGENT}' agent def (${DELEGATE_AGENT}.md) was not found in ` +
+          `any of: ${agentDefDirs.join(", ")}. Refusing to delegate: unlike the bash path there ` +
+          `is NO fallback — and the write-path fallback would be the UNRESTRICTED built-in ` +
+          `'build' agent (all tools allowed), so silently degrading here is worse than on any ` +
+          `read path. Install the def (per-project or via 'init --global'), or set ` +
+          `GUILD_AGENT_DIR to where it lives, and retry.`,
       },
     };
   }

@@ -128,6 +128,50 @@ export function hardenedDefPresent(
   return existsSync(path.join(agentDefDir, `${agent}.md`));
 }
 
+/**
+ * The ORDERED list of dirs to look for a hardened def in — mirroring opencode's own
+ * `--agent` resolution so a GLOBAL install doesn't cause a FALSE refusal.
+ *
+ * With a global-only payload, the def lives in the opencode GLOBAL agent dir
+ * (`${XDG_CONFIG_HOME:-~/.config}/opencode/agent/`), while the serve's PROJECT dir
+ * `.opencode/agent/` is empty. `resolveAgentDefDir` returns only the project sibling, so a
+ * project-only presence check would refuse even though opencode itself resolves the def
+ * globally. This returns [project-sibling (or GUILD_AGENT_DIR override / conf), global
+ * opencode dir], de-duped, so `hardenedDefPresentIn` matches wherever opencode actually
+ * finds it. Still fail-closed: absent in BOTH ⇒ the tool refuses.
+ */
+export function resolveAgentDefDirs(opts: {
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  confContents?: string;
+  home?: string;
+  xdgConfigHome?: string;
+}): string[] {
+  const env = opts.env ?? process.env;
+  const cwd = opts.cwd ?? process.cwd();
+  const primary = resolveAgentDefDir({ env, cwd, confContents: opts.confContents });
+  const home = opts.home ?? os.homedir();
+  const xdg =
+    opts.xdgConfigHome && opts.xdgConfigHome.length > 0
+      ? opts.xdgConfigHome
+      : env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.length > 0
+        ? env.XDG_CONFIG_HOME
+        : path.join(home, ".config");
+  const global = path.join(xdg, "opencode", "agent");
+  return primary === global ? [primary] : [primary, global];
+}
+
+/** First dir (in order) whose `<agent>.md` exists, else `{ present: false }`. Fail-closed. */
+export function hardenedDefPresentIn(
+  agent: string,
+  agentDefDirs: string[],
+): { present: boolean; dir?: string } {
+  for (const d of agentDefDirs) {
+    if (existsSync(path.join(d, `${agent}.md`))) return { present: true, dir: d };
+  }
+  return { present: false };
+}
+
 /* ---------------------------------------------------------------------------
  * Config-file resolution (C9): `$GUILD_CONF` if set, else `<root>/modelguild.conf.local`.
  * Parsed, NEVER sourced.

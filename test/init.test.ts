@@ -155,6 +155,54 @@ export async function run(): Promise<number> {
   const giu = existsSync(path.join(T4, ".gitignore")) ? readFileSync(path.join(T4, ".gitignore"), "utf8") : "";
   c.check(!giu.includes("ModelGuild >>>"), "uninstall strips the gitignore block");
 
+  // --- GLOBAL payload install (init --global) ------------------------------
+  // Inject fake home + XDG dirs so nothing touches the real ~/.claude / ~/.config.
+  const G_HOME = tempProject();
+  const G_XDG = tempProject();
+  const gOpts = { homeDir: G_HOME, xdgConfigHome: G_XDG };
+  const cmdDir = path.join(G_HOME, ".claude/commands/guild");
+  const agentDir = path.join(G_XDG, "opencode/agent");
+  const mgDir = path.join(G_HOME, ".claude/modelguild");
+
+  const resg = init({ targetDir: tempProject(), packageRoot: repoRoot, serverLaunch: LAUNCH, global: true, ...gOpts });
+  c.check(resg.installed.length === 13, `global install writes 13 files (got ${resg.installed.length})`);
+  c.check(existsSync(path.join(cmdDir, "consult.md")), "global: command doc lands in <home>/.claude/commands/guild/");
+  c.check(existsSync(path.join(cmdDir, "configure.md")), "global: configure.md lands in the global commands dir");
+  c.check(existsSync(path.join(agentDir, "guild-read.md")), "global: agent def lands in <xdg>/opencode/agent/");
+  c.check(existsSync(path.join(agentDir, "guild-build.md")), "global: guild-build lands in the global agent dir");
+  c.check(existsSync(path.join(agentDir, "guild-research.md")), "global: guild-research lands in the global agent dir");
+  c.check(existsSync(path.join(mgDir, "models.policy")), "global: policy lands in <home>/.claude/modelguild/");
+  c.check(existsSync(path.join(mgDir, ".modelguild-install.json")), "global: ownership record lands in <home>/.claude/modelguild/");
+  c.check(resg.mcpAction === "skipped", "global install never writes .mcp.json (skipped)");
+  // The project dir must be untouched by a global install.
+  c.check(!existsSync(path.join(G_HOME, ".opencode")), "global: does NOT create a project .opencode under home");
+
+  // Global record is SEPARATE from any project record (distinct file, distinct location).
+  const gRec = readJson(path.join(mgDir, ".modelguild-install.json"));
+  c.check(
+    Object.prototype.hasOwnProperty.call(gRec.files, ".claude/commands/guild/consult.md"),
+    "global record keys by the stable project-relative dest",
+  );
+
+  // Idempotent re-run.
+  const resg2 = init({ targetDir: tempProject(), packageRoot: repoRoot, serverLaunch: LAUNCH, global: true, ...gOpts });
+  c.check(resg2.installed.length === 0 && resg2.skipped.length === 0, "global re-run writes 0 files (idempotent)");
+
+  // A user-edited global file is NOT clobbered.
+  const gConsult = path.join(cmdDir, "consult.md");
+  writeFileSync(gConsult, "MY GLOBAL EDIT\n");
+  const resg3 = init({ targetDir: tempProject(), packageRoot: repoRoot, serverLaunch: LAUNCH, global: true, ...gOpts });
+  c.check(readFileSync(gConsult, "utf8") === "MY GLOBAL EDIT\n", "global: a user-edited file is not clobbered");
+  c.check(resg3.skipped.includes(".claude/commands/guild/consult.md"), "global: the edited file is reported skipped");
+
+  // uninstall --global removes only hash-verified files; the user-edited one survives.
+  const resgu = init({ targetDir: tempProject(), packageRoot: repoRoot, serverLaunch: LAUNCH, global: true, uninstall: true, ...gOpts });
+  c.check(resgu.removed.includes(".opencode/agent/guild-read.md"), "uninstall --global removes a pristine owned agent def");
+  c.check(!existsSync(path.join(agentDir, "guild-read.md")), "uninstall --global deletes the agent def from the global dir");
+  c.check(existsSync(gConsult), "uninstall --global keeps the user-edited file (hash mismatch)");
+  c.check(!existsSync(path.join(mgDir, ".modelguild-install.json")), "uninstall --global removes the global ownership record");
+  c.check(resgu.mcpAction === "unchanged", "uninstall --global does not touch any .mcp.json");
+
   console.log(`init.test: ${c.passes} passed, ${c.failures} failed`);
   return c.failures;
 }

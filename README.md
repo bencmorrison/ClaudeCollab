@@ -77,6 +77,20 @@ node dist/cli.js init --dir /path/to/your/project
 ```
 (Or `cd /path/to/your/project` first and run `node /path/to/modelguild/dist/cli.js init` — `--dir` defaults to the current directory.)
 
+#### 2c. Global (all projects) — one install, no per-project `init`
+
+Instead of installing into each project, install the payload **once** into your global config so `/guild:*` and the hardened agents work in **every** project:
+```bash
+npx modelguild init --global
+# node dist/cli.js init --global      # from a source build
+```
+This is the payload analogue of a user-scoped MCP registration. It places the same files, only at global locations:
+- **Commands** → `~/.claude/commands/guild/*.md` (Claude Code reads user-level slash commands from `~/.claude/commands/`, so `/guild:*` exists in every project).
+- **Agent defs** → the opencode **global** agent dir, `${XDG_CONFIG_HOME:-~/.config}/opencode/agent/guild-*.md` (SINGULAR `agent`; opencode resolves `--agent` there from any project).
+- **Policy/config** → `~/.claude/modelguild/` (where the server already falls back to read the policy + config when a project has no local `modelguild/`).
+
+It records ownership in a **separate** record (`~/.claude/modelguild/.modelguild-install.json`), so global and per-project installs never disturb each other. `--global` takes no `--dir` (there is no project target) and writes no `.gitignore` block. Uninstall with `npx modelguild init --uninstall --global`. You still register the MCP server once, globally — step 3 with `-s user`. Verify with `npx modelguild doctor --global` (checks the global locations). Keep the per-project install (2a/2b) if you'd rather scope the payload to specific repos.
+
 ### 3. Register the MCP server yourself
 
 `init` deliberately leaves `.mcp.json` alone so **you** pick the scope. Register the `modelguild` server with Claude Code's CLI — `-s` chooses the scope:
