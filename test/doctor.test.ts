@@ -11,7 +11,7 @@
  * absent, so the pass/fail is driven only by the docs/agents/policy payload checks under test.
  */
 
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Checker, repoRoot } from "./harness.js";
@@ -93,6 +93,18 @@ export async function run(): Promise<number> {
   // A PROJECT-only install must NOT satisfy --global doctor (global location empty).
   const g2 = await captureDoctor(["--dir", proj, "--global"], { homeDir: emptyHome, xdgConfigHome: emptyXdg });
   c.check(g2.code === 1, `(e) --global doctor FAILS for a project-only install (exit ${g2.code})`);
+
+  // ---- (f) ONE command doc missing must FAIL, naming the doc (issue #33) ----
+  // Regression guard for the `docsPresent >= 7` slack: a full install minus one doc reported
+  // `doctor: OK`. Now a HARD fail, with the missing doc named (not a bare count).
+  const projMissing = tempDir();
+  init({ targetDir: projMissing, packageRoot: repoRoot, serverLaunch: LAUNCH });
+  rmSync(path.join(projMissing, ".claude/commands/guild/consult.md"));
+  const f = await captureDoctor(["--dir", projMissing], { homeDir: tempDir(), xdgConfigHome: tempDir() });
+  c.check(f.code === 1, `(f) one doc missing: plain doctor FAILS (exit ${f.code})`);
+  c.check(f.out.includes("7/8 command docs"), "(f) reports 7/8 docs with one removed");
+  c.check(f.out.includes("missing: consult"), "(f) names the missing doc (consult)");
+  c.check(f.out.includes("✗"), "(f) prints a ✗ line for the missing doc");
 
   console.log(`doctor.test: ${c.passes} passed, ${c.failures} failed`);
   return c.failures;

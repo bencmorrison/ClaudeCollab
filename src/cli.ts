@@ -277,14 +277,24 @@ export async function runDoctor(
     return "none";
   };
 
+  // Expected counts are derived from `payloadFiles()` (the same list `init` installs), so
+  // adding a command or agent def can never silently desync doctor's threshold — nothing is
+  // hardcoded here. A missing piece is a HARD fail, named by basename (not a bare count).
   let docsPresent = 0;
+  let docsTotal = 0;
   let agentsPresent = 0;
   const docsWhere = new Set<Found>();
   const agentsWhere = new Set<Found>();
+  const missingDocs: string[] = [];
   for (const { dest } of payloadFiles()) {
+    const isDoc = dest.startsWith(".claude/commands/");
+    if (isDoc) docsTotal++;
     const where = locate(dest);
-    if (where === "none") continue;
-    if (dest.startsWith(".claude/commands/")) { docsPresent++; docsWhere.add(where); }
+    if (where === "none") {
+      if (isDoc) missingDocs.push(path.basename(dest, ".md"));
+      continue;
+    }
+    if (isDoc) { docsPresent++; docsWhere.add(where); }
     else if (dest.startsWith(".opencode/agent/")) { agentsPresent++; agentsWhere.add(where); }
   }
 
@@ -299,7 +309,11 @@ export async function runDoctor(
   };
   const docsLoc = global ? globalDocsDir : `.claude/commands/guild/ or ${globalDocsDir}`;
   const agentsLoc = global ? globalAgentsDir : `.opencode/agent/ or ${globalAgentsDir}`;
-  line(docsPresent >= 7, `${docsPresent}/8 command docs present in ${docsLoc}${whereSuffix(docsWhere)}`);
+  const docsMsg =
+    missingDocs.length === 0
+      ? `${docsPresent}/${docsTotal} command docs present in ${docsLoc}${whereSuffix(docsWhere)}`
+      : `${docsPresent}/${docsTotal} command docs present in ${docsLoc} — missing: ${missingDocs.join(", ")}`;
+  line(missingDocs.length === 0, docsMsg);
   line(agentsPresent === 3, `${agentsPresent}/3 hardened agent defs present in ${agentsLoc}${whereSuffix(agentsWhere)}`);
 
   // Policy / config template present — project `modelguild/models.policy` OR global.
