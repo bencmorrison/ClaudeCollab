@@ -28,42 +28,111 @@ ClaudeCollab adds to a project:
 - `collab-build` → can edit files for `/collab:delegate`: same allowlist construction, re-allowing only edit/write/patch/bash; everything else is denied. Because `bash` is allowed those non-mutation denies are defense-in-depth, not a guarantee — **review the diff**. Verified by `collab/verify-collab-build.sh`.
 - `collab-research` → the source-backed `/collab:research` path: **same allow-set as `collab-read`** (`read` + `grep` + `glob` + web); mutation and `task` denied. Same posture — **not a confidentiality boundary, trusted repos only**. Verified by `collab/verify-collab-research.sh`.
 
-## Requirements
+## Setup
 
-- **[Node.js](https://nodejs.org)** (ships with `npm`/`npx`) — ClaudeCollab is an npm package.
-- **[opencode](https://opencode.ai)** on your PATH, authenticated to at least one provider (below).
-- A **git repo** for the project you install into (so you can review `/collab:delegate` diffs). Not strictly required for read-only commands.
+Exactly what you do, start to finish. It's five steps: **(1)** prerequisites, **(2)** register the MCP server in your project, **(3)** restart Claude Code so it loads it, **(4)** verify, **(5)** configure which models it uses. Steps 2 and 5 are **different things** and easy to conflate — step 2 *registers the server* (writes `.mcp.json`); step 5 *configures its behavior* (which models, which policy). You want both.
+
+> **Read this first — the package is not on npm yet.** The intended install is `npx claudecollab init`, but ClaudeCollab **hasn't been published to npm** (0.5.0 isn't out). Until it is, `npx claudecollab …` fails with "package not found". **Today you build it locally and register with `--abs`** — that's step 2a below, and it's fully supported (not a hack). The published `npx` path (step 2b) is documented so it's ready when 0.5.0 ships; it will not work before then.
+
+### 1. Prerequisites
+
+- **[Node.js](https://nodejs.org)** (ships with `npm`/`npx`) — ClaudeCollab is a TypeScript CLI + MCP server; you need Node to build and run it.
+- **[opencode](https://opencode.ai)** on your PATH, **authenticated to at least one provider**. The MCP server fronts `opencode serve`, so this is what gives Claude access to other models:
+  ```bash
+  opencode auth login     # interactive OAuth — subscription or free tier, no API keys stored by this tool
+  ```
+  Repeat it for each provider you want (OpenAI / ChatGPT, GitHub Copilot, Google Gemini, …). `opencode models` lists what your auth actually offers.
+- **[Claude Code](https://claude.com/claude-code)** — the driver. ClaudeCollab is loaded by Claude Code as a project MCP server.
+- A **git repo** for the project you install into, so you can review `/collab:delegate` diffs. Not strictly required for the read-only commands.
 
 **Your own MCP servers:** opencode supports MCP, but ClaudeCollab's hardened agents will **not** use your MCP tools — every agent is a default-deny allowlist (`"*": deny`), and that floor covers MCP tools too (verified: an agent under the floor can't even see them). To let a delegated model reach an MCP tool you must explicitly allow it in the agent def, and that is a security decision, not a convenience one.
 
-## Install
+### 2. Register the MCP server in your project
 
-ClaudeCollab installs *into* whatever project you want Claude Code to have these commands in. It registers the MCP server in your `.mcp.json`, copies the command docs / agent defs / policy template, records each written file's SHA-256, and upgrades or removes a file only while its bytes still match that ownership record. Files you edited are left alone.
+This is the step that makes the `/collab:*` commands exist. `init` registers the `claudecollab` server in your project's `.mcp.json`, copies the command docs / agent defs / policy template, records each written file's SHA-256, and upgrades or removes a file only while its bytes still match that ownership record — files you edited are left alone.
 
-**Primary path — `npx` (no global install):**
+#### 2a. Now (works today) — build locally, register with `--abs`
+
+Clone and build the CLI once:
+```bash
+git clone https://github.com/bencmorrison/ClaudeCollab.git
+cd ClaudeCollab
+npm install && npm run build      # produces dist/cli.js
+```
+Then, from the CLI checkout, register it into **your** project. `--abs` writes an absolute local launch line instead of the (unpublished) `npx` one:
+```bash
+node dist/cli.js init --abs --dir /path/to/your/project
+```
+(Or `cd /path/to/your/project` first and run `node /path/to/ClaudeCollab/dist/cli.js init --abs` — `--dir` defaults to the current directory.)
+
+That writes a `claudecollab` block into your project's `.mcp.json`:
+```json
+{
+  "mcpServers": {
+    "claudecollab": {
+      "command": "node",
+      "args": ["/path/to/ClaudeCollab/dist/cli.js", "serve"],
+      "env": { "COLLAB_PROJECT_DIR": "/path/to/your/project" }
+    }
+  }
+}
+```
+The paths are absolute and machine-specific — that's the point of `--abs`: no registry resolution, guaranteed runnable. If you move or delete the ClaudeCollab checkout, re-run `init --abs` (or hand-edit the paths). **Hand-written alternative:** if you'd rather not run `init`, you can paste the block above into `.mcp.json` yourself (fixing the two paths) for the same effect — but then you don't get the command docs, agent defs, or policy template, which `init` also places. Prefer `init`.
+
+#### 2b. Once 0.5.0 is published (the intended path — not available yet)
+
+When the package is on npm, this replaces all of 2a:
 ```bash
 cd /path/to/your/project
-npx claudecollab init
+npx claudecollab init            # writes the published `npx -y claudecollab serve` launch line
 ```
-
-**Or the one-liner** (a thin `install.sh` bootstrap that just runs `npx claudecollab init` for you):
+Or the one-liner bootstrap (a thin `install.sh` that runs `npx claudecollab init` for you, for the classic `curl | bash` habit):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash
 ```
-This requires Node.js on PATH. It installs into the current directory; pass `-s -- --dir /path/to/project` to target another, or `-s -- --global` to `npm i -g` the CLI first. Pin a version with `-s -- --ref 0.5.0` (or `CLAUDECOLLAB_REF=0.5.0`).
+The bootstrap installs into the current directory; pass `-s -- --dir /path/to/project` to target another. Pin a version with `-s -- --ref 0.5.0` (or `CLAUDECOLLAB_REF=0.5.0`). **Both of these require the package to be on npm and will fail until 0.5.0 ships.**
 
-Both paths do the same thing — the bootstrap is only there so the classic `curl | bash` habit keeps working; `npx claudecollab init` is the honest, direct form.
+### 3. Restart Claude Code
 
-Then authenticate opencode and verify:
+Claude Code reads a project-root `.mcp.json` **at session start**, so it will not see the server you just registered until you restart it in that project. Quit and reopen Claude Code (or start a fresh session) in `/path/to/your/project`.
+
+### 4. Verify
+
+Run the token-free `doctor` — it checks opencode is present, the `.mcp.json` registration, the agent defs, and the policy, without calling any model:
 ```bash
-opencode auth login          # interactive OAuth — your provider login (subscription or free tier), no API keys
-npx claudecollab doctor      # token-free check of the whole setup
+node /path/to/ClaudeCollab/dist/cli.js doctor --dir /path/to/your/project   # local build (today)
+# npx claudecollab doctor                                                   # once published
 ```
-Repeat `opencode auth login` for each provider you want (OpenAI / ChatGPT, GitHub Copilot, Google Gemini, …). **Restart Claude Code** after installing so it picks up the new MCP server.
+A healthy result looks like:
+```
+✓ MCP server registered in .mcp.json under key 'claudecollab'
+✓ 8/8 command docs present in .claude/commands/collab/
+✓ 3/3 hardened agent defs present in .opencode/agent/
+✓ model policy present (collab/models.policy)
+✓ opencode present (…)
+
+doctor: OK
+```
+Inside the restarted Claude Code, the `/collab:*` commands now appear in the slash-command list and the `collab_*` MCP tools are available. **The first time** Claude Code calls one, it asks a one-time permission for that tool (e.g. `mcp__claudecollab__collab_consult`) — approve it (see [Skip the permission prompts](#skip-the-permission-prompts) to pre-approve them all).
+
+### 5. Configure which models it uses
+
+Registering the server (step 2) does not choose *which* models it talks to or what your policy allows — that's this step, and it's separate. Two ways, both effective immediately (no restart):
+
+- **Interactive:** run **`/collab:configure`** inside Claude Code. It interviews you and writes your model policy (deny/ask/allow) and preferred-model defaults to the git-ignored config files.
+- **By hand:** edit the two git-ignored files under `collab/`:
+  - `collab/models.policy.local` — per-model `deny`/`ask`/`allow` rules (the committed `collab/models.policy` is default-allow).
+  - `collab/collab.conf.local` (copy from `collab/collab.conf.example`) — your default single model and panel set:
+    ```
+    COLLAB_MODEL=openai/gpt-5
+    COLLAB_MODELS=openai/gpt-5 google/gemini-2.5-pro
+    ```
+
+Prefer a **non-Claude** model for consults so the second opinion is genuinely independent. This step is optional — without it, commands use opencode's default model — but setting a policy and defaults is what makes day-to-day use smooth.
 
 ### Updating
 
-Re-run the same command — `npx claudecollab init` is idempotent. It upgrades files you haven't touched (bytes still matching the recorded hash), leaves any file you edited locally alone, and adds new payload files. To move to a specific release, `npx claudecollab@0.5.0 init`. There is no separate update mode.
+Re-run `init` (locally: `node dist/cli.js init --abs --dir <project>`; once published: `npx claudecollab init`). It's idempotent: it upgrades files you haven't touched (bytes still matching the recorded hash), leaves any file you edited locally alone, and adds new payload files. After a local rebuild (`npm run build`), re-running `init` refreshes the project's payload. There is no separate update mode.
 
 ## Usage
 
@@ -99,6 +168,14 @@ COLLAB_MODELS=openai/gpt-5 google/gemini-2.5-pro
 ```
 These take effect immediately — no restart. (The matching env vars still work as one-off overrides; precedence is arg → env → config file → opencode's default.) Prefer a **non-Claude** model for consults so the second opinion is genuinely independent.
 
+## Troubleshooting
+
+- **`npx claudecollab …` says "package not found".** Expected — it isn't published to npm yet. Use the local build path: `npm run build` in the ClaudeCollab checkout, then `node dist/cli.js init --abs --dir <project>` (see [Setup step 2a](#2a-now-works-today--build-locally-register-with---abs)).
+- **The `/collab:*` commands don't appear in Claude Code.** Restart Claude Code — it only reads `.mcp.json` at session start (Setup step 3). Still missing? Confirm your project's `.mcp.json` has a `claudecollab` key under `mcpServers`, and run `doctor` (step 4) to check registration and payload.
+- **A `collab_*` tool call errors about opencode.** opencode isn't installed on PATH or isn't authenticated. Run `opencode auth login`, and `opencode models` to confirm at least one provider answers. If you built locally and moved the checkout, the `.mcp.json` `args` path is stale — re-run `init --abs`.
+- **A model is denied / not allowed.** That's the model policy. Run `/collab:configure`, or edit `collab/models.policy.local` (Setup step 5).
+- **Not sure what's wrong.** Run `doctor` — it reports each check with `✓`/`✗` and needs no model call.
+
 ## Safety
 
 ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Use it on trusted repositories. See **[SECURITY.md](SECURITY.md)** for the full threat model; the essentials:
@@ -107,7 +184,7 @@ ClaudeCollab has real, verifiable guardrails — but it is **not a sandbox**. Us
 - **`/collab:research` is the source-backed web path.** Same read + web exposure and same "trusted repos only" posture; its value is the workflow requiring citations and Claude verification. Proven by `collab/verify-collab-research.sh`.
 - **`/collab:delegate` can edit files and run shell.** Its non-mutation restrictions are defense-in-depth, not a guarantee (a coding task needs `bash`, and `bash` can reach around them), so **the trust boundary is you reviewing the diff.** The tool snapshots the worktree first and records the model's patch separately, so dirty worktrees are allowed.
 - **External model output is treated as data, not instructions** — a consulted model can't smuggle commands into Claude's control flow.
-- Run `npx claudecollab doctor` to check your setup before relying on any of this.
+- Run `doctor` (step 4 of [Setup](#setup)) to check your setup before relying on any of this.
 
 ## The record it keeps
 
@@ -122,7 +199,8 @@ This is **receipts**. When Claude tells you "GPT-5 agreed with my approach", tha
 ## Uninstall
 
 ```bash
-npx claudecollab init --uninstall        # in the project you installed into (or --dir <path>)
+node /path/to/ClaudeCollab/dist/cli.js init --uninstall --dir /path/to/your/project   # local build (today)
+# npx claudecollab init --uninstall --dir /path/to/your/project                        # once published
 ```
 It removes only the files ClaudeCollab installed and can still prove it owns (by hash), and removes its `.mcp.json` key; your own files, config, and `collab/logs/` are left in place. Any Claude Code permission grant you added to `.claude/settings*.json` is yours to remove.
 
@@ -154,7 +232,7 @@ The first time Claude Code calls a ClaudeCollab MCP tool it asks for permission.
 Found a bug, hit a rough edge, or want to suggest something? Please open a **[GitHub issue](https://github.com/bencmorrison/ClaudeCollab/issues)**.
 
 What helps most in a bug report:
-- The output of `npx claudecollab doctor`.
+- The output of `doctor` (`node <repo>/dist/cli.js doctor` for a local build, or `npx claudecollab doctor` once published).
 - Which command you ran, and the model it used.
 - Your OS. macOS and BSD support is newer and less exercised than Linux, so please say if you're on one.
 
