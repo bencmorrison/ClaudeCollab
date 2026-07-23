@@ -1,5 +1,5 @@
 /**
- * log.ts — the ModelGuild evidence layer, ported from `collab/log.sh` (PLAN.md M3).
+ * log.ts — the ModelGuild evidence layer, ported from `collab/log.sh`.
  *
  * WHY A PORT, NOT A REWRITE. The log is the ONLY data source a watcher (`/guild:witness`)
  * audits instead of Claude's own summary, so its integrity is the whole honesty story.
@@ -24,8 +24,8 @@
  *     including a lock timeout, a disk error, or an invalid argument. `verify`/`prune`
  *     are audit/maintenance paths and return results too.
  *
- * MIXED-WRITER RUNS ARE SUPPORTED (PLAN.md "no log migration — same schema, mixed-origin
- * logs verify as one run"). The `.lock` dir protocol and line format are identical to
+ * MIXED-WRITER RUNS ARE SUPPORTED (no log migration — same schema, mixed-origin
+ * logs verify as one run). The `.lock` dir protocol and line format are identical to
  * bash, so bash and TS appends interleave safely; test/log.test.ts pins concurrent
  * distinct-turn behavior and bash↔TS coexistence in a single run.
  */

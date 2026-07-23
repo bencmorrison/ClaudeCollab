@@ -26,7 +26,7 @@ permission:
   # agent. That scoping stays; it is role definition, not a floor.
   #
   # The former secret-glob read-denies and the grep/glob denies were REMOVED
-  # (2026-07-22 permission realignment, PLAN.md): both were vendor-asymmetry bias in a
+  # (2026-07-22 permission realignment): both were vendor-asymmetry bias in a
   # costume — you would not fence a Claude review subagent out of `grep`, out of
   # dotfiles, or off the web, so you do not fence this one. The secret globs were
   # already conceded to be a list, never a boundary; the "opencode grep leaks content

@@ -1,6 +1,6 @@
 /**
  * Canonical JSON + hashing — the byte-for-byte bridge to the bash evidence layer
- * (PLAN.md M3; CONTRACT.md area D, C25/C27).
+ * (CONTRACT.md area D, C25/C27).
  *
  * The bash `log.sh` writes every entry with `jq -cS` (compact, KEY-SORTED) and its
  * `verify` recomputes hashes over `jq -cjS del(.entry_hash)`. For a TS-written log to

@@ -1,5 +1,5 @@
 /**
- * guild_delegate tests (PLAN.md M8; CONTRACT.md C1–C7, C12, C16-deviation, C22–C25,
+ * guild_delegate tests (CONTRACT.md C1–C7, C12, C16-deviation, C22–C25,
  * C36–C40, C42/C52, C57) — OFFLINE.
  *
  * The fake `opencode` server can't edit files, so the WRITE path is driven with REAL git

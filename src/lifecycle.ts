@@ -1,5 +1,5 @@
 /**
- * `opencode serve` lifecycle supervisor (PLAN.md milestone M1).
+ * `opencode serve` lifecycle supervisor.
  *
  * Manages a single `opencode serve` child on loopback: lazy spawn, free-port
  * negotiation, readiness poll, crash-revive, idle timeout, and — the load-bearing
@@ -7,7 +7,7 @@
  *
  * Why not signals: the spike proved Claude Code's MCP teardown does NOT deliver a
  * catchable signal to the server process (reproduced under both `claude -p` and the
- * maintainer's interactive session — see spike/mcp-consult/REPORT.md and PLAN.md G0).
+ * maintainer's interactive session).
  * What it DOES do is close the server's stdin. And the MCP SDK's StdioServerTransport
  * only ever registers a `data` listener on stdin — never `end`/`close` — so stdin EOF
  * does not fire the transport's `onclose` either. The only reliable trigger is to watch

@@ -1,5 +1,5 @@
 /**
- * guild_models test (PLAN.md M11). Offline: a tiny node:http fixture serves a
+ * guild_models test. Offline: a tiny node:http fixture serves a
  * `/config/providers` payload shaped exactly like opencode 1.18.4's, and a stub serve
  * runner points `models()` at it — no opencode, no model call. Also unit-tests the pure
  * `parseProviders`, the error path (serve throws), and the tool-result mapping.

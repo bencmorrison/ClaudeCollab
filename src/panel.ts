@@ -1,5 +1,5 @@
 /**
- * guild_panel — multi-model orchestration over the committed substrate (PLAN.md M6).
+ * guild_panel — multi-model orchestration over the committed substrate.
  *
  * Generalizes the single-call guild_consult flow (src/consult.ts) to a PANEL: ask the
  * SAME question to 2–3 models from (ideally) different families, concurrently, each

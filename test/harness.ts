@@ -1,5 +1,5 @@
 /**
- * Shared test helpers (PLAN.md M1 test suite).
+ * Shared test helpers.
  *
  * Plain-script style like the spike — no test-framework dependency. Every test is
  * offline: spawning `opencode serve` is free and allowed, but NO model is called.

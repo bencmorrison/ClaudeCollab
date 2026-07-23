@@ -1,5 +1,5 @@
 /**
- * guild_consult — the first PRODUCTION tool (PLAN.md M5).
+ * guild_consult — the first PRODUCTION tool.
  *
  * Composes the four committed layers into the read-only "second opinion" flow the bash
  * `/guild:consult` gives, translated to the MCP surface:
@@ -177,7 +177,7 @@ export interface ConsultOk {
    * session's id is useless). This is the sole way a caller threads a follow-up turn:
    * pass it back as `sessionId`. There is deliberately NO parameter for handing back the
    * peer's previous ANSWER — continuation is by session id, never by re-transmitting the
-   * other model's words (PLAN.md "Option B" guarantee).
+   * other model's words (the "Option B" session-continuation guarantee).
    */
   sessionId?: string;
 }

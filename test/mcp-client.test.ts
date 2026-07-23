@@ -1,5 +1,5 @@
 /**
- * MCP client test (PLAN.md M1): drive the server through the real MCP SDK client over
+ * MCP client test: drive the server through the real MCP SDK client over
  * stdio — guild_status is listed, its call returns coherent data, and NO `opencode
  * serve` process survives the client's close. Offline (guild_status makes no model
  * call; it only reads /doc, /global/health, /agent).

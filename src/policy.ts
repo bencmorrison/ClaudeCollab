@@ -1,5 +1,5 @@
 /**
- * Model policy port (PLAN.md M4; CONTRACT.md area A, C1–C7).
+ * Model policy port (CONTRACT.md area A, C1–C7).
  *
  * The oracle is `collab/ask.sh` — its `_has_rules`, `policy_tier`, and the policy
  * resolution/enforcement block. This module reproduces those semantics EXACTLY, so a
@@ -11,7 +11,7 @@
  * Two invariants worth stating up front because they drove the shape of the code:
  *   1. FAIL-CLOSED. A resolved-but-unreadable policy file, or any malformed active
  *      line, resolves to `deny` with a loud reason — never a silent `allow`. This
- *      closed two real fail-opens (PLAN.md ~line 91).
+ *      closed two real fail-opens (see AGENTS.md, model-policy resolution).
  *   2. BASH `case`-GLOB semantics, not minimatch. `*` and `?` cross `/`; there is no
  *      pathname/dotfile special-casing (a `case` statement is a pure pattern match).
  *      `bashGlobMatch` replicates `*`, `?`, `[...]` (ranges, `!`/`^` negation, POSIX

@@ -9,7 +9,7 @@
 # when the user has a modern bash installed. `env bash` gets the user's real bash.
 #   (Corollary for anyone adding macOS CI: because env bash prefers a Homebrew
 #   bash 5 over the stock /bin/bash 3.2, a macOS job must invoke /bin/bash
-#   EXPLICITLY to exercise the 3.2 worst case — see PLAN.md portability notes.)
+#   EXPLICITLY to exercise the 3.2 worst case — see the macOS CI job.)
 #
 # It inspects every file git tracks whose first two bytes are `#!` — not just
 # *.sh — so an extension-less script (like modelguild/tests/fake-opencode) can't slip

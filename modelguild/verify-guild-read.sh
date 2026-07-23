@@ -3,7 +3,7 @@
 # ROLE shape: read + grep + glob + web ALLOWED, mutation (bash/edit/write/patch) and
 # sub-agent spawning (task) DENIED, under a `"*": deny` floor.
 #
-# 2026-07-22 permission realignment (PLAN.md): guild-read is now a Claude review
+# 2026-07-22 permission realignment: guild-read is now a Claude review
 # subagent's tool surface. grep/glob are ALLOWED and the secret-glob read-denies were
 # REMOVED — both were vendor-asymmetry bias, not a real boundary (you would not fence a
 # Claude reviewer out of grep, dotfiles, or the web). So this script no longer asserts
@@ -151,7 +151,7 @@ if [ "$fail" -eq 0 ] && [ "$inconclusive" -eq 0 ]; then
   else
     printf '\033[32mguild-read VERIFIED\033[0m — read/grep/glob/webfetch/websearch allowed; mutation + task denied; no secret-glob read-deny remains, with no runtime contradiction.\n'
   fi
-  printf '  NOTE: read-only ROLE, not a security boundary — trusted-repo posture. Repo contents (including any secrets present) plus web are accepted exposure; this agent enforces no-write/no-task, nothing more. See PLAN.md 2026-07-22 realignment.\n'
+  printf '  NOTE: read-only ROLE, not a security boundary — trusted-repo posture. Repo contents (including any secrets present) plus web are accepted exposure; this agent enforces no-write/no-task, nothing more. See AGENTS.md (2026-07-22 realignment).\n'
 elif [ "$fail" -ne 0 ]; then
   printf '\033[31mguild-read NOT verified\033[0m — do not claim the read-only role holds by construction.\n'
 else

@@ -1,5 +1,5 @@
 /**
- * `modelguild` CLI dispatcher (PLAN.md M11).
+ * `modelguild` CLI dispatcher.
  *
  * The published npm package's `bin`. Subcommands:
  *   serve   (default) — start the MCP stdio server (what `.mcp.json` launches).

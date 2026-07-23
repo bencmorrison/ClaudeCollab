@@ -2,7 +2,7 @@
 # verify-guild-research.sh — check the `guild-research` opencode agent (the
 # --research / /guild:research path) has the read-only ROLE shape it claims.
 #
-# 2026-07-22 permission realignment (PLAN.md): guild-research is now a web-capable
+# 2026-07-22 permission realignment: guild-research is now a web-capable
 # Claude review subagent's tool surface, IDENTICAL to guild-read. grep/glob are
 # ALLOWED and the secret-glob read-denies were REMOVED — both were vendor-asymmetry
 # bias, not a real boundary. So this script asserts grep/glob/read are ALLOWED, not

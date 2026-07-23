@@ -1,5 +1,5 @@
 /**
- * guild_delegate — the WRITE path (PLAN.md M8).
+ * guild_delegate — the WRITE path.
  *
  * The MCP translation of bash `/guild:delegate` / `ask.sh --edit`: one model turn through
  * the UNMODIFIED `guild-build` agent (`.opencode/agent/guild-build.md` — a default-deny
@@ -10,7 +10,7 @@
  * boundary (SECURITY.md guild-build: `bash` is allowed by design, so the non-mutation
  * denies are defense-in-depth, not by construction).
  *
- * TWO DELIBERATE DEVIATIONS FROM bash C16, both task-directed (PLAN.md M7 precedent, applied
+ * TWO DELIBERATE DEVIATIONS FROM bash C16, both task-directed (applied
  * to the write path):
  *   1. NO fallback EVER. bash falls back to the UNRESTRICTED built-in `build` when
  *      guild-build.md is missing (loud warning; hard-error only under

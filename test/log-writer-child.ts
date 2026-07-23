@@ -1,6 +1,6 @@
 /**
  * A standalone log writer, spawned as a child PROCESS by log.test.ts's concurrency
- * cases (PLAN.md M3, C34). It appends a full expect→started→completed lifecycle for one
+ * cases (C34). It appends a full expect→started→completed lifecycle for one
  * call_id under the run named by the environment, holding briefly BETWEEN appends so its
  * lifetime overlaps its siblings', then prints its own wall-clock start/end so the parent
  * can PROVE the writers ran simultaneously rather than in series.

@@ -1,5 +1,5 @@
 /**
- * Typed opencode client tests (PLAN.md M2) — OFFLINE-FIRST.
+ * Typed opencode client tests — OFFLINE-FIRST.
  *
  * Every case runs against the `node:http` fake (test/fake-opencode-server.ts): no
  * opencode, no model. They pin the wire-shape contract (the two distinct model key

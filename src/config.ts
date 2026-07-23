@@ -1,5 +1,5 @@
 /**
- * Config & model resolution port (PLAN.md M4; CONTRACT.md area B, C8–C14).
+ * Config & model resolution port (CONTRACT.md area B, C8–C14).
  *
  * Oracle: `collab/ask.sh` (`conf_get`, default-model precedence, the leading-`-`
  * refusal) and `collab/panel-models.sh` (panel-set resolution + diversity warnings).
@@ -22,7 +22,7 @@ import { bashGlobMatch } from "./policy.js";
 export { confGet };
 
 /* ---------------------------------------------------------------------------
- * Collab-root resolution (PLAN.md M4 npm-server order).
+ * Collab-root resolution.
  *
  * The bash scripts resolve their config/policy/log siblings via `dirname "$0"` — the
  * directory of the running script, which for a per-project install is the project's
@@ -45,7 +45,7 @@ export { confGet };
  * process's CWD, so the caller must invoke from the intended project. Before M5 wires
  * this into production, `doctor` MUST use `candidateRoots()` to warn when more than one
  * root exists on disk — otherwise a user's policy in one root silently doesn't bind
- * because a different root won (the fail-open class of PLAN.md ~line 91).
+ * because a different root won (the fail-open class — see AGENTS.md, model-policy resolution).
  * --------------------------------------------------------------------------- */
 export type RootSource = "env" | "project" | "home";
 
