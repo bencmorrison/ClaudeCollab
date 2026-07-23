@@ -1,0 +1,83 @@
+name: Publish to npm
+
+# Publishes the package when a version tag (v*) is pushed. Uses npm "trusted
+# publishing" (OIDC): no long-lived NPM_TOKEN lives in GitHub secrets — npm mints a
+# short-lived token from the workflow's OIDC id-token and records build provenance
+# automatically. This matches the repo's no-stored-keys posture.
+#
+# ONE-TIME SETUP (maintainer, on npmjs.com):
+#   Package settings -> Trusted Publishers -> add a GitHub Actions publisher for
+#   repo `bencmorrison/ClaudeCollab`, workflow `publish.yml`. Trusted publishing
+#   requires the package to already exist, so publish 0.5.0 MANUALLY once
+#   (`npm publish`), then configure the trusted publisher; every subsequent
+#   `git tag vX.Y.Z && git push origin vX.Y.Z` auto-publishes.
+#
+# OPENCODE-FREE like the rest of CI (see ci.yml): the full `npm test` spawns a real
+# `opencode serve` in three suites with no graceful skip, and this runner never
+# installs or authenticates opencode. So this job runs the TEN offline suites, then
+# publishes with `--ignore-scripts` (which also skips prepublishOnly's opencode-bound
+# full test) AFTER an explicit `npm run build`.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # required for OIDC trusted publishing
+
+jobs:
+  publish:
+    name: build, test (offline), publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22 (matches the dev container's major)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Upgrade npm to a trusted-publishing-capable version
+        # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 22 ships npm 10.x.
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Guard — git tag must match package.json version
+        # A mistagged push must NOT publish the wrong version (npm versions are
+        # immutable and a same-version republish is blocked forever).
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          echo "tag=${tag}  package.json=${pkg}"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v${tag} does not match package.json version ${pkg} — bump one to match, retag, re-push."
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Offline test suites (10 of 13 — opencode-free, see ci.yml)
+        run: |
+          echo "Running 10/13 offline suites; lifecycle/orphan/mcp-client need the real"
+          echo "opencode binary and are excluded here (this runner never installs it)."
+          rc=0
+          for suite in client log policy config consult panel research delegate models init; do
+            echo "=== test/${suite}.test.ts ==="
+            npx tsx "test/${suite}.test.ts" || rc=1
+          done
+          exit "$rc"
+
+      - name: Build (produces dist/ + prepends the node shebang to dist/cli.js)
+        run: npm run build
+
+      - name: Publish to npm (OIDC provenance; --ignore-scripts skips prepublishOnly)
+        # --ignore-scripts is load-bearing: prepublishOnly runs the FULL `npm test`,
+        # whose lifecycle/orphan/mcp-client suites spawn opencode and would crash here.
+        # We build + run the offline suites above, so nothing is lost.
+        run: npm publish --provenance --access public --ignore-scripts

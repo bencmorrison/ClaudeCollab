@@ -4,6 +4,25 @@
   "type": "module",
   "description": "An MCP server fronting `opencode serve`, letting Claude Code collaborate with other LLMs (consult, panel, research, review, delegate). Ships slash commands + hardened opencode agents; `npx claudecollab init` wires it into a project. The bash layer in collab/ was retired at 0.5.0 (PLAN.md M12); this is the sole path now.",
   "license": "MIT",
+  "author": "Benjamin Beno Morrison <ai@bcm.co>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bencmorrison/ClaudeCollab.git"
+  },
+  "homepage": "https://github.com/bencmorrison/ClaudeCollab#readme",
+  "bugs": {
+    "url": "https://github.com/bencmorrison/ClaudeCollab/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "opencode",
+    "llm",
+    "multi-model",
+    "code-review",
+    "anthropic"
+  ],
   "bin": {
     "claudecollab": "dist/cli.js"
   },
