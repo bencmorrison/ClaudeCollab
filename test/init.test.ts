@@ -28,7 +28,7 @@ export async function run(): Promise<number> {
   const c = new Checker();
   console.log("== init.test ==");
 
-  // --- fresh install -------------------------------------------------------
+  // --- fresh install (DEFAULT: does NOT write .mcp.json) -------------------
   const T = tempProject();
   const res = init({ targetDir: T, packageRoot: repoRoot, serverLaunch: LAUNCH });
 
@@ -49,12 +49,18 @@ export async function run(): Promise<number> {
   c.check(!existsSync(path.join(T, ".claude/commands/collab/witness.md")), "does NOT install witness.md");
   c.check(!existsSync(path.join(T, ".opencode/agent/collab-watch.md")), "does NOT install collab-watch (witness) agent");
 
-  // --- .mcp.json under the exact key the command grants require ------------
-  c.check(res.mcpAction === "created", ".mcp.json reported as created");
-  const mcp = readJson(path.join(T, ".mcp.json"));
+  // --- DEFAULT: .mcp.json is NOT written; user registers the server -------
+  c.check(res.mcpAction === "skipped", "default install reports .mcp.json 'skipped' (user registers it)");
+  c.check(!existsSync(path.join(T, ".mcp.json")), "default install does NOT create .mcp.json");
+
+  // --- opt-in --write-mcp: the old auto-write of the project .mcp.json ----
+  const Tw = tempProject();
+  const resw = init({ targetDir: Tw, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
+  c.check(resw.mcpAction === "created", "--write-mcp reports .mcp.json created");
+  const mcp = readJson(path.join(Tw, ".mcp.json"));
   c.check(
     !!mcp.mcpServers && Object.prototype.hasOwnProperty.call(mcp.mcpServers, "claudecollab"),
-    ".mcp.json has the 'claudecollab' key (matches mcp__claudecollab__* grants)",
+    "--write-mcp .mcp.json has the 'claudecollab' key (matches mcp__claudecollab__* grants)",
   );
   const entry = mcp.mcpServers.claudecollab;
   c.check(
@@ -62,7 +68,7 @@ export async function run(): Promise<number> {
       JSON.stringify(entry.args) === JSON.stringify(["-y", "claudecollab", "serve"]),
     "launch line is the portable non-interactive default `npx -y claudecollab serve`",
   );
-  c.check(entry.env?.COLLAB_PROJECT_DIR === T, ".mcp.json entry sets COLLAB_PROJECT_DIR to the target dir");
+  c.check(entry.env?.COLLAB_PROJECT_DIR === Tw, "--write-mcp .mcp.json entry sets COLLAB_PROJECT_DIR to the target dir");
 
   // --- gitignore -----------------------------------------------------------
   const gi = readFileSync(path.join(T, ".gitignore"), "utf8");
@@ -99,33 +105,34 @@ export async function run(): Promise<number> {
   c.check(res4.skipped.includes(".claude/commands/collab/consult.md"), "the edited file is reported skipped");
   c.check(res4.shadowed.includes(".claude/commands/collab/consult.md"), "an unowned command doc raises a shadow warning");
 
-  // --- .mcp.json merge preserves a sibling server --------------------------
+  // --- --write-mcp merge preserves a sibling server ------------------------
   const T2 = tempProject();
   writeFileSync(
     path.join(T2, ".mcp.json"),
     JSON.stringify({ mcpServers: { other: { command: "x", args: [] } }, someOtherKey: 1 }, null, 2),
   );
-  const resm = init({ targetDir: T2, packageRoot: repoRoot, serverLaunch: LAUNCH });
-  c.check(resm.mcpAction === "merged", "existing .mcp.json without our key → merged");
+  const resm = init({ targetDir: T2, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
+  c.check(resm.mcpAction === "merged", "existing .mcp.json without our key → merged (--write-mcp)");
   const mcp2 = readJson(path.join(T2, ".mcp.json"));
   c.check(!!mcp2.mcpServers.other && !!mcp2.mcpServers.claudecollab, "merge keeps the sibling server AND adds ours");
   c.check(mcp2.someOtherKey === 1, "merge preserves unrelated top-level keys");
 
-  // --- invalid .mcp.json is refused, not clobbered -------------------------
+  // --- invalid .mcp.json is refused, not clobbered (--write-mcp path) ------
   const T3 = tempProject();
   writeFileSync(path.join(T3, ".mcp.json"), "{ not json");
   let refused = false;
   try {
-    init({ targetDir: T3, packageRoot: repoRoot, serverLaunch: LAUNCH });
+    init({ targetDir: T3, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
   } catch {
     refused = true;
   }
   c.check(refused, "invalid .mcp.json is refused rather than overwritten");
   c.check(readFileSync(path.join(T3, ".mcp.json"), "utf8") === "{ not json", "the invalid .mcp.json is left untouched");
 
-  // --- uninstall: hash-verified removal ------------------------------------
+  // --- uninstall: hash-verified removal (install with --write-mcp so there is
+  //     a .mcp.json key for uninstall to clean up) --------------------------
   const T4 = tempProject();
-  init({ targetDir: T4, packageRoot: repoRoot, serverLaunch: LAUNCH });
+  init({ targetDir: T4, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
   // A user file the installer never wrote must survive.
   writeFileSync(path.join(T4, ".claude/commands/collab/mine.md"), "keep me\n");
   // A user EDIT to one of our files must survive uninstall (hash no longer matches).
