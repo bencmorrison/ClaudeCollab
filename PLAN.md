@@ -509,6 +509,24 @@ Nothing else in the spike: no panel, no policy, no witness.
 
 **Provenance.** Maintainer-requested feature (re-add of a shipped bash-era capability); no parity or permission change — the payload and the hardened defs are byte-identical, only their install location is new.
 
+### Layered config: global baseline + per-project override — WANTED, NOT BUILT 2026-07-23
+
+**The ask (maintainer).** Config/policy resolution is single-root, first-match today: `$GUILD_ROOT` → `<project>/modelguild/` → `~/.claude/modelguild/`. A project's `modelguild/` **shadows** the global one entirely — you cannot have a global baseline *and* per-project tweaks both active. Change to **layered**: global is the baseline, the project overrides/extends it.
+
+**Agreed design (to build).**
+- **Preferences** (`modelguild.conf.local`: `GUILD_MODEL`, `GUILD_MODELS`, log knobs): read global first, overlay the project's — a project key overrides the global key; keys the project does not set fall through to global.
+- **Policy** (`models.policy`: ordered deny/ask/allow, first-match-wins): evaluate **project rules first**, then fall through to **global** rules, then the default. A project can add a stricter deny or a looser allow on top of the global baseline. (Chosen over "project replaces global".)
+- **`/guild:configure`**: gains a **target selector** — write to global (`~/.claude/modelguild/`) or the current project.
+- **Precedence across the `.local`/committed split**, most-specific first: project `.local` → project committed → global `.local` → global committed → default-allow.
+
+**Migration / cost.** Changes today's shadowing semantics (a project `modelguild/` currently *replaces* global). Needs `doctor` to report both layers, tests, and a decision on any existing per-project `modelguild/` in the wild. `resolveCollabRoot`/`candidateRoots` (single-root) become a layered resolution in `src/config.ts`; `src/policy.ts` merges rules across roots.
+
+**Provenance.** Maintainer-requested; design agreed 2026-07-23. Not started — to be scoped in an upcoming review.
+
+### Known issue: `delegate`/`research` def-missing tests are not hermetic — NOTED 2026-07-23
+
+Surfaced by the global-payload work: `resolveAgentDefDirs` now includes the **real** `~/.config/opencode/agent/` as a fallback, so `test/delegate.test.ts` / `test/research.test.ts` "def-missing" cases (which expect the tool to **refuse** when no hardened def is present) **fail locally** whenever the dev container has a global install there — the def is resolved globally, so the tool does not refuse. CI is unaffected (clean env, no global agent dir). Fix: those cases should point `XDG_CONFIG_HOME` at an empty temp dir (or inject `home`/`xdg`) so they do not depend on the real global dir. Small; not yet done.
+
 ## Risks & mitigations (carry forward)
 - **False read-only safety** → *addressed for the read path by a default-deny allowlist:* `collab-read` sets `"*": deny` and re-allows reading non-secret files plus webfetch/websearch — mutation, `grep`/`glob`, sub-agents, and secret reads are denied by construction, including tools opencode adds later. Two review rounds drove this: the readable `.env` hole, then `patch` (mutation), `grep` (secret **content** — it bypasses read denies), and `glob` (paths) — the denylist kept missing tools, so it was replaced with the allowlist. `grep`/`glob` remain denied as a concrete opencode harness limitation, not a permanent parity principle. Verified by `collab/verify-collab-read.sh` (asserts the `"*"` floor + effective actions + grep/read secret-canary runtime probes); re-run on opencode upgrades. *The `--edit` path (`collab-build`) uses the same allowlist* — re-allows only edit/write/patch/bash — but allows `bash` by choice, so its non-mutation denies are defense-in-depth, not by construction; the diff review is the boundary (verified by `collab/verify-collab-build.sh`). *Done:* both verify scripts' `--static` checks run in `collab/doctor.sh` (local); CI catches drift with the opencode-free source lint `check-agent-permissions.sh` instead (CI never runs opencode). **Lesson: allowlist with a deny floor, never a denylist, for a versioned tool surface.**
 - **Destructive/secret-leaking delegation** → the clean-worktree guard was removed; `ask.sh` snapshots dirty worktrees and records the model-only patch; collab-build denies tool-native secret reads/egress (defense-in-depth — bash bypasses); trusted repos only; mandatory post-run diff review. Not a security sandbox.
