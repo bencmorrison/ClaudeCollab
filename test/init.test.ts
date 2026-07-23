@@ -155,6 +155,92 @@ export async function run(): Promise<number> {
   const giu = existsSync(path.join(T4, ".gitignore")) ? readFileSync(path.join(T4, ".gitignore"), "utf8") : "";
   c.check(!giu.includes("ModelGuild >>>"), "uninstall strips the gitignore block");
 
+  // --- issue #32: uninstall must NOT delete a USER-created .mcp.json key -----
+  // A DEFAULT install never writes .mcp.json; a user who registered the server themselves
+  // (hand-placed key or `claude mcp add -s project`) must keep it through uninstall.
+  const T5 = tempProject();
+  init({ targetDir: T5, packageRoot: repoRoot, serverLaunch: LAUNCH }); // default: no --write-mcp
+  writeFileSync(
+    path.join(T5, ".mcp.json"),
+    JSON.stringify({ mcpServers: { modelguild: { command: "npx", args: ["-y", "modelguild", "serve"] } } }, null, 2) + "\n",
+  );
+  const res5 = init({ targetDir: T5, packageRoot: repoRoot, serverLaunch: LAUNCH, uninstall: true });
+  c.check(res5.mcpAction === "kept", "uninstall reports 'kept' for a user-created modelguild key (no ownership record)");
+  const m5 = readJson(path.join(T5, ".mcp.json"));
+  c.check(
+    !!m5.mcpServers && Object.prototype.hasOwnProperty.call(m5.mcpServers, "modelguild"),
+    "the user-created modelguild key SURVIVES uninstall (never written by init → not ours to delete)",
+  );
+  c.check(
+    res5.warnings.some((w) => w.includes("no ownership record")),
+    "uninstall warns it kept the unproven key",
+  );
+
+  // --- issue #32: uninstall DOES remove a --write-mcp-written key (proven) ----
+  // (T4 above already exercises this end-to-end; assert the record carries the proof.)
+  const T6 = tempProject();
+  init({ targetDir: T6, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
+  const rec6 = readJson(path.join(T6, "modelguild/.modelguild-install.json"));
+  c.check(
+    rec6.mcp && rec6.mcp.key === "modelguild" && /^[0-9a-f]{64}$/.test(rec6.mcp.entryHash),
+    "--write-mcp records the mcp ownership proof (key + entry hash) in the install record",
+  );
+  const res6 = init({ targetDir: T6, packageRoot: repoRoot, serverLaunch: LAUNCH, uninstall: true });
+  c.check(res6.mcpAction === "removed", "uninstall removes a --write-mcp-written key whose entry still matches");
+  const m6 = readJson(path.join(T6, ".mcp.json"));
+  c.check(
+    !m6.mcpServers || !Object.prototype.hasOwnProperty.call(m6.mcpServers, "modelguild"),
+    "the proven-owned modelguild key is gone after uninstall",
+  );
+
+  // --- issue #32: a USER-EDITED --write-mcp entry is kept + warned -----------
+  const T7 = tempProject();
+  init({ targetDir: T7, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
+  const m7path = path.join(T7, ".mcp.json");
+  const m7 = readJson(m7path);
+  m7.mcpServers.modelguild.args = ["--user-changed"]; // edit the entry init wrote
+  writeFileSync(m7path, JSON.stringify(m7, null, 2) + "\n");
+  const res7 = init({ targetDir: T7, packageRoot: repoRoot, serverLaunch: LAUNCH, uninstall: true });
+  c.check(res7.mcpAction === "kept", "uninstall keeps an EDITED --write-mcp entry (hash mismatch)");
+  c.check(
+    readJson(m7path).mcpServers.modelguild.args[0] === "--user-changed",
+    "the edited entry survives uninstall",
+  );
+  c.check(
+    res7.warnings.some((w) => w.includes("no longer matches")),
+    "uninstall warns it kept the changed key",
+  );
+
+  // --- issue #32: a LEGACY record without the mcp field → key NOT removed ----
+  // Fail-safe: a pre-fix --write-mcp install has no `mcp` field; treat as NOT owned.
+  const T8 = tempProject();
+  init({ targetDir: T8, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
+  const rec8path = path.join(T8, "modelguild/.modelguild-install.json");
+  const rec8 = readJson(rec8path);
+  delete rec8.mcp; // simulate a legacy record written before the ownership proof existed
+  writeFileSync(rec8path, JSON.stringify(rec8, null, 2) + "\n");
+  const res8 = init({ targetDir: T8, packageRoot: repoRoot, serverLaunch: LAUNCH, uninstall: true });
+  c.check(res8.mcpAction === "kept", "legacy record (no mcp field): uninstall keeps the key");
+  const m8 = readJson(path.join(T8, ".mcp.json"));
+  c.check(
+    !!m8.mcpServers && Object.prototype.hasOwnProperty.call(m8.mcpServers, "modelguild"),
+    "legacy: the key survives (can't prove init wrote it)",
+  );
+  c.check(
+    res8.warnings.some((w) => w.includes("no ownership record")),
+    "legacy: uninstall warns it kept the unproven key",
+  );
+
+  // --- issue #32: a DEFAULT re-run carries the mcp ownership proof forward ----
+  // A --write-mcp install, then a plain re-run, must NOT forget it owns the key.
+  const T9 = tempProject();
+  init({ targetDir: T9, packageRoot: repoRoot, serverLaunch: LAUNCH, writeMcp: true });
+  init({ targetDir: T9, packageRoot: repoRoot, serverLaunch: LAUNCH }); // default re-run
+  const rec9 = readJson(path.join(T9, "modelguild/.modelguild-install.json"));
+  c.check(rec9.mcp && rec9.mcp.key === "modelguild", "a default re-run preserves the mcp ownership proof");
+  const res9 = init({ targetDir: T9, packageRoot: repoRoot, serverLaunch: LAUNCH, uninstall: true });
+  c.check(res9.mcpAction === "removed", "uninstall after a default re-run still removes the proven-owned key");
+
   // --- GLOBAL payload install (init --global) ------------------------------
   // Inject fake home + XDG dirs so nothing touches the real ~/.claude / ~/.config.
   const G_HOME = tempProject();
