@@ -71,6 +71,13 @@ jobs:
 
       - name: CONTRACT count lint (+ self-test)
         run: bash modelguild/tests/check-contract-counts.sh --self-test
+      - name: CLAUDE.md thin-pointer lint (+ self-test)
+        # Machine-checks the CLAUDE.md/AGENTS.md thin-pointer invariant that went
+        # unchecked when the bash doctor.sh retired at M12 (issue #28): @AGENTS.md
+        # first line, under the anti-fork ceiling, and no literal restatement of
+        # AGENTS.md's shared rules. Structural only — semantic restatement in novel
+        # words is still human judgment in review.
+        run: bash modelguild/tests/check-claude-md.sh --self-test
 
       - name: Host-config symlink confinement
         run: bash .devcontainer/test-prepare-host-config.sh
@@ -150,6 +157,10 @@ jobs:
 
       - name: CONTRACT count lint (+ self-test)
         run: bash modelguild/tests/check-contract-counts.sh --self-test
+      - name: CLAUDE.md thin-pointer lint (+ self-test)
+        # Same lint on stock bash 3.2 + BSD awk/grep — its checks lean on awk and
+        # grep -Fi, so the macOS job exercises the portability the Linux job can't.
+        run: bash modelguild/tests/check-claude-md.sh --self-test
 
       - name: ShellCheck lint script (skips cleanly without shellcheck; + self-test)
         run: |
