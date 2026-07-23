@@ -8,7 +8,7 @@ Think this through WITH another model as a **peer** — not as a boss collecting
 Problem:
 $ARGUMENTS
 
-This uses `guild_consult` with **session continuation** (`keepSession` / `sessionId`), so the other model keeps its own memory of the exchange in opencode and **you never re-transmit its words** — that keeps its side of the record faithful by construction, not by your discipline.
+This uses `guild_consult` with **session continuation** (`keepSession` / `sessionId`), so the other model keeps its own memory of the exchange in opencode and **you never re-transmit its words** — that keeps its side of the record faithful by construction, not by your discipline. The peer runs on the read-only `guild-read` agent, which is **not a confidentiality boundary**: it can read any repo file including credentials, and its reads egress to a third-party provider (see AGENTS.md).
 
 1. **Independent first pass — before calling anyone.** Write your own preliminary view: your leaning, 2-3 reasons, where you're unsure. Do NOT put this in the prompt you send the other model (anti-anchoring). It's your baseline for noticing real updates.
 

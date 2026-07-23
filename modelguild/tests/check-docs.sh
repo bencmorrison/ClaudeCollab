@@ -111,6 +111,28 @@ for file in AGENTS.md README.md SECURITY.md; do
   grep -Fq 'expected-call' "$file" || bad "$file must document the expected-call lifecycle entry"
 done
 
+# Read-path permission claims must match the post-2026-07-22-realignment agent defs
+# (issue #35). The read paths — guild-read (consult/panel/review/collaborate/workshop) and
+# guild-research (research) — ALLOW read+grep+glob+web and are explicitly NOT confidentiality
+# boundaries: they no longer deny grep/glob nor carve secret reads out of `read`. So these
+# docs must not resurrect the retired fencing wording. delegate.md is EXCLUDED on purpose —
+# it describes guild-build, which really does deny grep/glob and block secret reads, so those
+# phrases are TRUE there. This is a NARROW phrase tripwire on unambiguous refuted wording, not
+# a semantic proof of every claim against the YAML (that would be brittle — see issue #35).
+read_path_docs=(
+  .claude/commands/guild/consult.md
+  .claude/commands/guild/panel.md
+  .claude/commands/guild/research.md
+  .claude/commands/guild/review.md
+  .claude/commands/guild/workshop.md
+  .claude/commands/guild/collaborate.md
+)
+stale_perm_matches="$(grep -RInE 'non-secret|cannot [`]?grep|denied under [`]?read' "${read_path_docs[@]}" || true)"
+if [ -n "$stale_perm_matches" ]; then
+  printf '%s\n' "$stale_perm_matches" >&2
+  bad "stale read-path permission claim (issue #35): guild-read/guild-research allow grep/glob and can read any file — they do not deny grep/glob or fence secrets"
+fi
+
 [ "$failed" -eq 0 ] || exit 1
 echo "documentation workflow lint: PASS"
 
@@ -180,6 +202,25 @@ EOF
   cp -a "$baseline" "$fixture"
   printf '\nThe current lifecycle has two entries per call.\n' >> "$fixture/README.md"
   expect_rejected "stale current lifecycle wording" "$fixture"
+
+  # All three tripwire phrases must be proven rejected, each in a read-path doc.
+  fixture="$tmp/stale-read-path-nonsecret"
+  cp -a "$baseline" "$fixture"
+  printf '\nThe reviewer can only read non-secret files.\n' \
+    >> "$fixture/.claude/commands/guild/consult.md"
+  expect_rejected "stale read-path claim: non-secret (issue #35)" "$fixture"
+
+  fixture="$tmp/stale-read-path-nogrep"
+  cp -a "$baseline" "$fixture"
+  printf '\nThe reviewer cannot `grep` the tree.\n' \
+    >> "$fixture/.claude/commands/guild/review.md"
+  expect_rejected "stale read-path claim: cannot grep (issue #35)" "$fixture"
+
+  fixture="$tmp/stale-read-path-denied-read"
+  cp -a "$baseline" "$fixture"
+  printf '\nCredential paths are denied under `read`.\n' \
+    >> "$fixture/.claude/commands/guild/research.md"
+  expect_rejected "stale read-path claim: denied under read (issue #35)" "$fixture"
 
   if ! DOCS_LINT_ROOT="$baseline" bash "$script_path" >/dev/null 2>&1; then
     printf 'FAIL: self-test rejected intentional historical passages\n' >&2
