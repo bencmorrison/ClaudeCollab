@@ -47,7 +47,7 @@ import {
   runAgentLifecycle,
   type McpToolResult,
 } from "./consult.js";
-import { readConfContents, resolvePanelModels } from "./config.js";
+import { readConfContents, resolvePanelModels, resolveMessageTimeoutMs } from "./config.js";
 import { type PolicyTier } from "./policy.js";
 
 /** The read-only agent every panel member uses, unmodified (C15/C47/C48). */
@@ -76,6 +76,12 @@ export interface PanelParams {
    * workshop is one auditable run. Default (unset) deletes each session after its turn.
    */
   keepSessions?: boolean;
+  /**
+   * Per-call model-turn HTTP timeout (ms), ALREADY validated/resolved by the server layer
+   * (`parsePerCallTimeoutMs`). Applies to EVERY member of this panel. Precedence: over
+   * `GUILD_MESSAGE_TIMEOUT_MS` env/conf/default; the test seam `deps.messageTimeoutMs` wins.
+   */
+  timeoutMs?: number;
 }
 
 export interface PanelDeps {
@@ -180,6 +186,10 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
   const runId = params.runId && params.runId.length > 0 ? params.runId : log.newRun(PANEL_COMMAND);
   const confirmed = params.confirmed === true;
   const keepSessions = params.keepSessions === true;
+  // Loop-invariant: resolve the per-turn timeout once for the whole panel. A per-call
+  // param (validated by the server) applies to every member; else env/conf/default.
+  const messageTimeoutMs =
+    deps.messageTimeoutMs ?? params.timeoutMs ?? resolveMessageTimeoutMs({ env, confContents });
 
   // 4. Members run CONCURRENTLY; each is gated + logged independently. One member's
   //    refusal or failure never touches another's result (order preserved by Promise.all).
@@ -210,7 +220,7 @@ export async function panel(params: PanelParams, deps: PanelDeps): Promise<Panel
           confirmed: gate.confirmed,
           keepSession: keepSessions,
         },
-        { serve: deps.serve, log, messageTimeoutMs: deps.messageTimeoutMs },
+        { serve: deps.serve, log, messageTimeoutMs },
       );
       if (outcome.ok) {
         const member: PanelMemberResult = {

@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { confGet } from "./log.js";
 import { bashGlobMatch } from "./policy.js";
+import { MESSAGE_HTTP_MS } from "./client.js";
 
 export { confGet };
 
@@ -196,6 +197,98 @@ export function readConfContents(
   const file = resolveConfFile(collabDir, env);
   if (!file) return "";
   try { return readFileSync(file, "utf8"); } catch { return ""; }
+}
+
+/* ---------------------------------------------------------------------------
+ * Per-model-turn HTTP timeout (`GUILD_MESSAGE_TIMEOUT_MS`).
+ *
+ * The message POST is the long call — a heavy task on a slow reasoning model can
+ * legitimately exceed the 15-min default (`client.ts` `MESSAGE_HTTP_MS`) and abort with
+ * "operation was aborted due to timeout". This knob raises (or lowers) that ceiling
+ * with the standard chain: env override > conf `GUILD_MESSAGE_TIMEOUT_MS` > default.
+ * ONLY the model-turn POST uses it; the fast control-plane calls (session
+ * create/delete, history fetch, health) keep their own `SHORT_HTTP_MS`.
+ *
+ * The literal `max` (case-insensitive, trimmed) resolves to `TIMER_MAX_MS` — the longest
+ * delay Node can honour (~24.8 days), i.e. "effectively never abort a working model". The
+ * trade-off is explicit: a genuinely HUNG turn then blocks until that ceiling, so `max` is
+ * for someone who would rather wait than lose a long, expensive turn to the clock.
+ *
+ * VALIDATION — fail SAFE to the default: a numeric value must be a positive number of ms.
+ * 0, negative, and non-numeric (other than `max`) all fall back to the default. 0 is
+ * deliberately NOT a "disable timeout" — `AbortSignal.timeout(0)` fires immediately
+ * (aborting every turn), and there is no no-timeout path (a hung model turn must eventually
+ * abort). Number() (not parseInt) so a trailing-garbage value like "900000abc" is rejected,
+ * matching the `envInt` idiom in `lifecycle.ts`.
+ *
+ * A valid numeric value is CLAMPED to `TIMER_MAX_MS` (2^31 - 1). Node's timer subsystem —
+ * `setTimeout`, hence `AbortSignal.timeout` — holds the delay in a signed 32-bit int:
+ * a larger delay triggers a TimeoutOverflowWarning and is silently clamped to ~1ms, so
+ * a user who adds a digit to RAISE the timeout would instead get every turn aborted
+ * immediately. Capping gives them the longest delay Node can honour rather than that trap
+ * (and rather than a silent revert to the default, which is not what "very long" asked for).
+ * --------------------------------------------------------------------------- */
+export const TIMER_MAX_MS = 2 ** 31 - 1;
+
+/**
+ * Shared core: parse a raw timeout token to a capped positive ms value, or `null` if
+ * invalid. The env/conf knob (invalid → default) and the per-call tool param (invalid →
+ * tool error) both go through this so `max`/cap/positivity are IDENTICAL on both paths.
+ * `max` (trimmed, case-insensitive) → `TIMER_MAX_MS`; a positive finite number →
+ * `min(n, TIMER_MAX_MS)`; 0, negative, and non-numeric → `null`. `Number` (not parseInt)
+ * so trailing garbage ("900000abc") is rejected.
+ */
+function coerceTimeoutMs(raw: string): number | null {
+  if (raw.trim().toLowerCase() === "max") return TIMER_MAX_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, TIMER_MAX_MS) : null;
+}
+
+export function resolveMessageTimeoutMs(opts: {
+  env?: NodeJS.ProcessEnv;
+  confContents?: string;
+  fallback?: number;
+}): number {
+  const env = opts.env ?? process.env;
+  const fallback = opts.fallback ?? MESSAGE_HTTP_MS;
+  const fromEnv = env.GUILD_MESSAGE_TIMEOUT_MS;
+  const raw =
+    fromEnv && fromEnv.length > 0
+      ? fromEnv
+      : confGet(opts.confContents ?? "", "GUILD_MESSAGE_TIMEOUT_MS");
+  if (raw.length === 0) return fallback;
+  // Knob path is LENIENT: an unusable env/conf value falls SAFE to the default.
+  return coerceTimeoutMs(raw) ?? fallback;
+}
+
+/**
+ * Validate a PER-CALL `timeoutMs` tool input (number or the string `"max"`). Unlike the
+ * env/conf knob, this path is STRICT: a per-call value is an explicit ask by the calling
+ * agent, so an invalid one is a tool INPUT ERROR (surfaced to the caller), NOT a silent
+ * fall-through to the default. Returns the resolved (capped) ms on success. A number is
+ * validated through the same `coerceTimeoutMs` core as strings so `"max"`, the 2^31-1 cap,
+ * and the positivity rule are identical to the knob.
+ */
+export function parsePerCallTimeoutMs(
+  value: unknown,
+): { ok: true; value: number } | { ok: false; error: string } {
+  if (typeof value !== "number" && typeof value !== "string") {
+    // Name the value too (short) so every invalid path reports field + value + accepted inputs.
+    const shown =
+      value === null || value === undefined ? String(value) : JSON.stringify(value);
+    return {
+      ok: false,
+      error: `timeoutMs '${shown}' is invalid (got ${typeof value}) — pass a positive number of milliseconds or the string "max".`,
+    };
+  }
+  const coerced = coerceTimeoutMs(typeof value === "number" ? String(value) : value);
+  if (coerced === null) {
+    return {
+      ok: false,
+      error: `timeoutMs '${String(value)}' is invalid — pass a positive number of milliseconds (capped at ${TIMER_MAX_MS}) or the string "max".`,
+    };
+  }
+  return { ok: true, value: coerced };
 }
 
 /* ---------------------------------------------------------------------------

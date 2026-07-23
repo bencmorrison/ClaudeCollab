@@ -36,6 +36,7 @@ import {
 import {
   readConfContents,
   resolveModel,
+  resolveMessageTimeoutMs,
   resolveAgentDefDirs,
   hardenedDefPresentIn,
 } from "./config.js";
@@ -52,6 +53,12 @@ export interface ResearchParams {
   model?: string;
   runId?: string;
   confirmed?: boolean;
+  /**
+   * Per-call model-turn HTTP timeout (ms), ALREADY validated/resolved by the server layer
+   * (`parsePerCallTimeoutMs`). Precedence over `GUILD_MESSAGE_TIMEOUT_MS` env/conf/default;
+   * the test seam `deps.messageTimeoutMs` wins.
+   */
+  timeoutMs?: number;
 }
 
 export interface ResearchDeps {
@@ -186,7 +193,12 @@ export async function research(
       tier: gate.tier,
       confirmed: gate.confirmed,
     },
-    { serve: deps.serve, log, messageTimeoutMs: deps.messageTimeoutMs },
+    {
+      serve: deps.serve,
+      log,
+      messageTimeoutMs:
+        deps.messageTimeoutMs ?? params.timeoutMs ?? resolveMessageTimeoutMs({ env, confContents }),
+    },
   );
 
   if (outcome.ok) {

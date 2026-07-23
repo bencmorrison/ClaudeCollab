@@ -549,6 +549,32 @@ export async function run(): Promise<number> {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Per-call timeoutMs applies to EVERY panel member (issue #37). A small per-call
+  // value wins over a large env value and aborts each delayed member. No deps seam.
+  // -------------------------------------------------------------------------
+  {
+    const root = rootWithPolicy(""); // default-allow
+    const logDir = tmp("m6-logs-");
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "60000" });
+    const fake = await startFakeOpencode({ historyText: "voice", messageDelayMs: 300 });
+    try {
+      const r = await panel(
+        { question: "q", models: ["alpha/one", "beta/two"], timeoutMs: 40 },
+        { serve: fakeServe(fake), env }, // NO messageTimeoutMs seam: params.timeoutMs is the source
+      );
+      c.check(r.ok, "per-call: panel resolves");
+      if (r.ok) {
+        c.check(
+          r.results.length === 2 && r.results.every((m) => m.error?.kind === "call-failed"),
+          "per-call: a small timeoutMs aborts EVERY member (wins over large env value)",
+        );
+      }
+    } finally {
+      await fake.close();
+    }
+  }
+
   // cleanup
   for (const d of tmpDirs) {
     try {

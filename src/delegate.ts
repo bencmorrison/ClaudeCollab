@@ -49,6 +49,7 @@ import {
 import {
   readConfContents,
   resolveModel,
+  resolveMessageTimeoutMs,
   resolveAgentDefDirs,
   hardenedDefPresentIn,
 } from "./config.js";
@@ -66,6 +67,12 @@ export interface DelegateParams {
   model?: string;
   runId?: string;
   confirmed?: boolean;
+  /**
+   * Per-call model-turn HTTP timeout (ms), ALREADY validated/resolved by the server layer
+   * (`parsePerCallTimeoutMs`). Precedence over `GUILD_MESSAGE_TIMEOUT_MS` env/conf/default;
+   * the test seam `deps.messageTimeoutMs` wins.
+   */
+  timeoutMs?: number;
 }
 
 export interface DelegateDeps {
@@ -244,7 +251,12 @@ export async function delegate(
       tier: gate.tier,
       confirmed: gate.confirmed,
     },
-    { serve: deps.serve, log, messageTimeoutMs: deps.messageTimeoutMs },
+    {
+      serve: deps.serve,
+      log,
+      messageTimeoutMs:
+        deps.messageTimeoutMs ?? params.timeoutMs ?? resolveMessageTimeoutMs({ env, confContents }),
+    },
   );
 
   // 7. Capture AFTER — on EVERY path, including a failed call: whatever the model changed
