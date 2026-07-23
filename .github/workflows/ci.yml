@@ -2,7 +2,7 @@ name: CI
 
 # Fast, token-free checks that need no opencode auth and call no model. Since the
 # bash wrapper layer was retired at M12, the surviving shell is a handful of
-# lint scripts (shebangs, frontmatter, docs, agent-permissions, shellcheck) plus the
+# lint scripts (shebangs, frontmatter, docs, contract-counts, agent-permissions, shellcheck) plus the
 # dev-container host-config tooling — so the shell jobs lint THOSE, and the product
 # is the TypeScript/MCP server, exercised by the `node` job.
 #
@@ -68,6 +68,9 @@ jobs:
 
       - name: Documentation workflow lint (+ self-test)
         run: bash modelguild/tests/check-docs.sh --self-test
+
+      - name: CONTRACT count lint (+ self-test)
+        run: bash modelguild/tests/check-contract-counts.sh --self-test
 
       - name: Host-config symlink confinement
         run: bash .devcontainer/test-prepare-host-config.sh
@@ -144,6 +147,9 @@ jobs:
 
       - name: Documentation workflow lint (+ self-test)
         run: bash modelguild/tests/check-docs.sh --self-test
+
+      - name: CONTRACT count lint (+ self-test)
+        run: bash modelguild/tests/check-contract-counts.sh --self-test
 
       - name: ShellCheck lint script (skips cleanly without shellcheck; + self-test)
         run: |
