@@ -57,6 +57,17 @@ function makeCollabRoot(): string {
   return root;
 }
 
+/** An agent-def dir CONTAINING a guild-read.md so the presence gate passes. Pinned via
+ * GUILD_AGENT_DIR on every gate-traversing test so the pass does NOT depend on an ambient
+ * def (repo cwd `.opencode/agent/` or a container-global install) — the #24 hermeticity rule
+ * (mirrors defDirWithResearch/defDirWithBuild). The content is irrelevant offline — only the
+ * file's existence is checked. */
+function defDirWithRead(): string {
+  const dir = tmp("m5-agent-");
+  writeFileSync(path.join(dir, "guild-read.md"), "---\nmode: all\n---\nfake\n");
+  return dir;
+}
+
 /** A clean env: process.env minus every GUILD_* knob, then the given overrides. */
 function envWith(overrides: Record<string, string>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = { ...process.env };
@@ -81,12 +92,86 @@ export async function run(): Promise<number> {
   console.log("== consult.test (M5 guild_consult) ==");
 
   // -------------------------------------------------------------------------
+  // 0. NO-FALLBACK def gate: a MISSING guild-read.md refuses (exit-5), NOTHING logged, NO
+  //    model call — the deliberate deviation from bash C16, mirroring research/delegate
+  //    (issue #34). Phase-1 probe: opencode 1.18.4 hard-errors (HTTP 500) on a message
+  //    naming a nonexistent agent rather than falling back, so the post-hoc agent-mismatch
+  //    check never fires on this path — this pre-flight guard is the version-independent,
+  //    fail-closed refusal.
+  // -------------------------------------------------------------------------
+  {
+    const root = makeCollabRoot();
+    const logDir = tmp("m5-logs-");
+    const emptyDefDir = tmp("m5-emptyagent-"); // no guild-read.md inside
+    // HERMETICITY (issue #24): resolveAgentDefDirs also looks in the GLOBAL opencode dir
+    // (`${XDG_CONFIG_HOME:-~/.config}/opencode/agent/`). On a box with a global install (e.g.
+    // this dev container) that dir HAS guild-read.md, so the def would resolve globally and the
+    // tool would NOT refuse. Point XDG_CONFIG_HOME at an empty temp dir: non-empty, so it wins
+    // over the ~/.config fallback, making the global dir resolve to an empty location. Now BOTH
+    // dirs are genuinely def-free.
+    const emptyXdg = tmp("m5-emptyxdg-"); // <emptyXdg>/opencode/agent does not exist
+    const env = envWith({
+      GUILD_ROOT: root,
+      GUILD_LOG_DIR: logDir,
+      GUILD_AGENT_DIR: emptyDefDir,
+      XDG_CONFIG_HOME: emptyXdg,
+    });
+    const fake = await startFakeOpencode({ historyText: "should never be reached" });
+    try {
+      const r = await consult(
+        { question: "hi", model: "openai/allow-model" },
+        { serve: fakeServe(fake), env, messageTimeoutMs: 5_000 },
+      );
+      c.check(!r.ok, "def-missing: consult refuses");
+      if (!r.ok) {
+        c.check(r.error.kind === "agent-def-missing", "def-missing: kind is agent-def-missing");
+        c.check(r.error.exitAnalogue === 5, "def-missing: exit analogue is 5 (C57)");
+        c.check(r.error.message.includes("guild-read"), "def-missing: message names the agent");
+        c.check(r.error.message.includes(emptyDefDir), "def-missing: message names the dir searched");
+        c.check(/no.*fallback/i.test(r.error.message), "def-missing: message states there is no fallback");
+      }
+      c.check(fake.recorded.messageBodies.length === 0, "def-missing: no model call was made");
+      c.check(readdirSync(logDir).length === 0, "def-missing: NOTHING logged (gap parity)");
+      c.check(consultToToolResult(r).isError === true, "def-missing: MCP result flags isError");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // Def-missing STILL refuses on a sessionId continuation (the def governs the agent
+  // regardless of session reuse) — a continuation must not slip past the guard.
+  {
+    const root = tmp("m5-collab-");
+    const logDir = tmp("m5-logs-");
+    const emptyDefDir = tmp("m5-emptyagent-");
+    const emptyXdg = tmp("m5-emptyxdg-");
+    const env = envWith({
+      GUILD_ROOT: root,
+      GUILD_LOG_DIR: logDir,
+      GUILD_AGENT_DIR: emptyDefDir,
+      XDG_CONFIG_HOME: emptyXdg,
+    });
+    const fake = await startFakeOpencode({ historyText: "unreached" });
+    try {
+      const r = await consult(
+        { question: "continue", model: "openai/allow-model", sessionId: "ses_prior", keepSession: true },
+        { serve: fakeServe(fake), env, messageTimeoutMs: 5_000 },
+      );
+      c.check(!r.ok && r.error.kind === "agent-def-missing", "def-missing (continuation): refuses with agent-def-missing");
+      c.check(fake.recorded.messageBodies.length === 0, "def-missing (continuation): no model call (session not continued)");
+      c.check(readdirSync(logDir).length === 0, "def-missing (continuation): NOTHING logged");
+    } finally {
+      await fake.close();
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 1. Policy DENY → structured error (exit-3 analogue); NOTHING logged (C7/C24).
   // -------------------------------------------------------------------------
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "should never be reached" });
     try {
       const r = await consult(
@@ -115,7 +200,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
       const r = await consult(
@@ -148,7 +233,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "approved answer" });
     try {
       const r = await consult(
@@ -180,7 +265,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "the second opinion", syncText: "SYNC-MUST-NOT-LEAK" });
     try {
       const r = await consult(
@@ -226,7 +311,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: AWKWARD });
     try {
       const r = await consult(
@@ -259,7 +344,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "" });
     try {
       const r = await consult(
@@ -288,7 +373,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "x", failMessage: true });
     try {
       const r = await consult(
@@ -324,7 +409,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "answer" });
     try {
       const r1 = await consult(
@@ -388,7 +473,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
       const r = await consult(
@@ -414,7 +499,7 @@ export async function run(): Promise<number> {
   {
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG: "off" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG: "off", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "x", failMessage: true });
     try {
       let threw = false;
@@ -446,7 +531,7 @@ export async function run(): Promise<number> {
     // `deny -*` would ALSO deny the dash-leading id — but model-id is checked first.
     writeFileSync(path.join(root, "models.policy.local"), "# double-refusal\ndeny -*\n");
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "unreached" });
     try {
       const r = await consult(
@@ -473,7 +558,7 @@ export async function run(): Promise<number> {
   {
     const root = tmp("m5-collab-"); // no policy ⇒ default-allow
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "turn answer" });
     try {
       // Round 1: keepSession → session id returned, session NOT deleted yet.
@@ -527,7 +612,7 @@ export async function run(): Promise<number> {
   {
     const root = tmp("m5-collab-"); // default-allow
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_LOG_PROMPTS: "full", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "FULL-ACCESS ANSWER", servedAgent: "build" });
     try {
       const r = await consult(
@@ -565,7 +650,7 @@ export async function run(): Promise<number> {
   {
     const root = tmp("m5-collab-");
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "read-only answer", servedAgent: "guild-read" });
     try {
       const r = await consult(
@@ -590,7 +675,7 @@ export async function run(): Promise<number> {
     //     the call aborts despite env allowing it — proving the param reached the turn.
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "60000" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "60000", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "late answer", messageDelayMs: 300 });
     try {
       const r = await consult(
@@ -609,7 +694,7 @@ export async function run(): Promise<number> {
     //     env value aborts the same delayed response — proving the resolver fallback path.
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "100" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "100", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "late answer", messageDelayMs: 300 });
     try {
       const r = await consult(
@@ -626,7 +711,7 @@ export async function run(): Promise<number> {
     //     control for (a), proving the abort in (a) was the timeout, not something else.
     const root = makeCollabRoot();
     const logDir = tmp("m5-logs-");
-    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "40" });
+    const env = envWith({ GUILD_ROOT: root, GUILD_LOG_DIR: logDir, GUILD_MESSAGE_TIMEOUT_MS: "40", GUILD_AGENT_DIR: defDirWithRead() });
     const fake = await startFakeOpencode({ historyText: "late answer", messageDelayMs: 200 });
     try {
       const r = await consult(

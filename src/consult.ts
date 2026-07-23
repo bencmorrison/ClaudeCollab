@@ -40,6 +40,8 @@ import {
   resolveModel,
   resolveMessageTimeoutMs,
   checkResolvedModelId,
+  resolveAgentDefDirs,
+  hardenedDefPresentIn,
   type CollabRoot,
   type RootSource,
 } from "./config.js";
@@ -132,6 +134,7 @@ export function collabDoctorSeed(
 
 // --- Result / error shapes -------------------------------------------------
 export type ConsultErrorKind =
+  | "agent-def-missing"
   | "model-id"
   | "policy-deny"
   | "policy-ask"
@@ -154,11 +157,11 @@ export interface ConsultError {
   kind: ConsultErrorKind;
   message: string;
   /**
-   * The bash exit code this maps to: 2 model-id (C55), 3 deny (C56), 4 ask (C56). For a
-   * `call-failed` this is **null**, NOT 0 — bash propagates opencode's own non-zero
-   * status verbatim (C53) with no fixed collab code, and 0 is reserved for success
-   * (C53), so a numeric code here would be a lie. `kind:"call-failed"` + `isError` is the
-   * failure signal; the message carries the underlying reason.
+   * The bash exit code this maps to: 5 agent-def-missing (C57), 2 model-id (C55), 3 deny
+   * (C56), 4 ask (C56). For a `call-failed`/`agent-mismatch` this is **null**, NOT 0 — bash
+   * propagates opencode's own non-zero status verbatim (C53) with no fixed collab code, and
+   * 0 is reserved for success (C53), so a numeric code here would be a lie. `kind` + `isError`
+   * is the failure signal; the message carries the underlying reason.
    */
   exitAnalogue: number | null;
   /** The model id involved, for a machine-readable error envelope. */
@@ -446,12 +449,39 @@ export async function consult(params: ConsultParams, deps: ConsultDeps): Promise
   const rootRes = resolveRootWithConflict(env, cwd, home);
   const collabDir = rootRes.root;
   const rootConflict = rootRes.conflict;
-
-  // 2. Resolve the model (param > GUILD_MODEL env > conf > opencode default).
   const confContents = readConfContents(collabDir, env);
+
+  // 2. NO-FALLBACK def gate (deviation from bash C16, mirroring guild_research/guild_delegate).
+  //    If the hardened guild-read def is not present in the resolved agent-def dir(s), REFUSE
+  //    loudly — never silently run the consult on whatever opencode resolves in its place (a
+  //    missing def hard-errors on opencode 1.18.4, but that is a version artifact, not a
+  //    guarantee; the pre-flight is version-independent and fail-closed). Refused BEFORE any
+  //    log write (gap parity) and BEFORE any session/model work, so a `sessionId` continuation
+  //    is governed identically — the def governs the agent regardless of session reuse.
+  const agentDefDirs = resolveAgentDefDirs({ env, cwd, confContents });
+  if (!hardenedDefPresentIn(CONSULT_AGENT, agentDefDirs).present) {
+    return {
+      ok: false,
+      rootConflict,
+      error: {
+        kind: "agent-def-missing",
+        model: "",
+        exitAnalogue: 5,
+        message:
+          `The hardened '${CONSULT_AGENT}' agent def (${CONSULT_AGENT}.md) was not found in ` +
+          `any of: ${agentDefDirs.join(", ")}. Refusing to run the consult: unlike the bash path ` +
+          `there is NO fallback to a weaker agent, because silently degrading a hardened path ` +
+          `while the caller still expects its guarantees is worse than refusing. Install the ` +
+          `def (per-project or via 'init --global'), or set GUILD_AGENT_DIR to where it lives, ` +
+          `and retry.`,
+      },
+    };
+  }
+
+  // 3. Resolve the model (param > GUILD_MODEL env > conf > opencode default).
   const requestedModel = resolveModel({ flag: params.model, env, confContents });
 
-  // 3. Gate: the leading-dash refusal (C12) THEN the policy tier gate (C1–C7). deny →
+  // 4. Gate: the leading-dash refusal (C12) THEN the policy tier gate (C1–C7). deny →
   //    exit-3 analogue; ask without confirmed → exit-4 analogue instructing the DRIVER to
   //    ask the human; ask+confirmed or allow → proceed. All BEFORE any log write, so a
   //    refusal logs nothing (C24 gap parity).
@@ -483,11 +513,11 @@ export async function consult(params: ConsultParams, deps: ConsultDeps): Promise
   // --- Past the gate: from here every path writes exactly one started + completed. ---
   const log = deps.log ?? new EvidenceLog({ env, cwd, collabDir });
 
-  // 4. Evidence lifecycle. Mint a fresh run only when the caller did not thread one; a
+  // 5. Evidence lifecycle. Mint a fresh run only when the caller did not thread one; a
   //    provided runId reuses that run (so a workflow's calls share one auditable unit).
   const runId = params.runId && params.runId.length > 0 ? params.runId : log.newRun(CONSULT_COMMAND);
 
-  // 5. The model turn, via the UNMODIFIED guild-read agent (shared spine).
+  // 6. The model turn, via the UNMODIFIED guild-read agent (shared spine).
   const outcome = await runAgentLifecycle(
     {
       question: params.question,
