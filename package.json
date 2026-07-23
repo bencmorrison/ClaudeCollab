@@ -1,8 +1,8 @@
 {
   "name": "claudecollab",
-  "version": "0.0.0",
+  "version": "0.5.0",
   "type": "module",
-  "description": "An MCP server fronting `opencode serve`, letting Claude Code collaborate with other LLMs (consult, panel, research, review, delegate). Ships slash commands + hardened opencode agents; `npx claudecollab init` wires it into a project. Coexists with the retiring bash layer in collab/ until v1.0.0 (PLAN.md M12).",
+  "description": "An MCP server fronting `opencode serve`, letting Claude Code collaborate with other LLMs (consult, panel, research, review, delegate). Ships slash commands + hardened opencode agents; `npx claudecollab init` wires it into a project. The bash layer in collab/ was retired at 0.5.0 (PLAN.md M12); this is the sole path now.",
   "license": "MIT",
   "bin": {
     "claudecollab": "dist/cli.js"

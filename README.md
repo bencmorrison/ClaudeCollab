@@ -50,7 +50,7 @@ npx claudecollab init
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bencmorrison/ClaudeCollab/main/install.sh | bash
 ```
-This requires Node.js on PATH. It installs into the current directory; pass `-s -- --dir /path/to/project` to target another, or `-s -- --global` to `npm i -g` the CLI first. Pin a version with `-s -- --ref 1.0.0` (or `CLAUDECOLLAB_REF=1.0.0`).
+This requires Node.js on PATH. It installs into the current directory; pass `-s -- --dir /path/to/project` to target another, or `-s -- --global` to `npm i -g` the CLI first. Pin a version with `-s -- --ref 0.5.0` (or `CLAUDECOLLAB_REF=0.5.0`).
 
 Both paths do the same thing — the bootstrap is only there so the classic `curl | bash` habit keeps working; `npx claudecollab init` is the honest, direct form.
 
@@ -63,7 +63,7 @@ Repeat `opencode auth login` for each provider you want (OpenAI / ChatGPT, GitHu
 
 ### Updating
 
-Re-run the same command — `npx claudecollab init` is idempotent. It upgrades files you haven't touched (bytes still matching the recorded hash), leaves any file you edited locally alone, and adds new payload files. To move to a specific release, `npx claudecollab@1.0.0 init`. There is no separate update mode.
+Re-run the same command — `npx claudecollab init` is idempotent. It upgrades files you haven't touched (bytes still matching the recorded hash), leaves any file you edited locally alone, and adds new payload files. To move to a specific release, `npx claudecollab@0.5.0 init`. There is no separate update mode.
 
 ## Usage
 
