@@ -17,4 +17,5 @@
 ## Documentation Discipline
 
 - Keep shared behavior in `AGENTS.md`; keep only Claude-specific behavior here. If a rule would apply to a delegated model too, it belongs in `AGENTS.md` — not both.
-- If this file changes the relationship between Claude and delegated models, update `AGENTS.md`, `doctor.sh`, and the tests in the same change.
+- If this file changes the relationship between Claude and delegated models, update `AGENTS.md` and the tests in the same change.
+- **The `CLAUDE.md`/`AGENTS.md` relationship is no longer machine-checked.** The bash `doctor.sh` that enforced the four-guardrail set and the 60-line anti-fork ceiling retired with the rest of the bash layer (M12), and `claudecollab doctor` does not check this repo-internal invariant. Keeping this file a thin pointer that restates nothing from `AGENTS.md` is now a discipline, not a guarded construction — hold it by hand.

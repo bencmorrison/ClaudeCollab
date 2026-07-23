@@ -5,12 +5,10 @@
  * No model is called: the model turn is served by the `node:http` fake
  * (test/fake-opencode-server.ts) behind a `ServeProvider`, exactly like the M2 client
  * tests. The evidence layer writes to a temp COLLAB_LOG_DIR, and the flagship case
- * cross-verifies a TOOL-PRODUCED run with BOTH the bash `collab/log.sh verify` and the
- * TS `verify()` — the property that keeps `/collab:witness` working unchanged on TS-era
- * logs.
+ * verifies a TOOL-PRODUCED run with the TS `verify()` (the reference verifier; the bash
+ * `collab/log.sh verify` it was cross-checked against retired at M12).
  */
 
-import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   mkdirSync,
@@ -32,9 +30,8 @@ import { EvidenceLog } from "../src/log.js";
 import { startFakeOpencode, type FakeOpencode } from "./fake-opencode-server.js";
 import type { ServeProvider } from "../src/client.js";
 import type { ServeHandle } from "../src/lifecycle.js";
-import { Checker, repoRoot } from "./harness.js";
+import { Checker } from "./harness.js";
 
-const LOGSH = path.join(repoRoot, "collab", "log.sh");
 const SHA256_EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 /** A `ServeProvider` pointing `withServe` at an already-running fake (no opencode). */
@@ -48,12 +45,6 @@ function tmp(prefix = "m5-"): string {
   const d = mkdtempSync(path.join(tmpdir(), prefix));
   tmpDirs.push(d);
   return d;
-}
-
-/** Run `bash collab/log.sh …`; returns the exit status. Never throws on nonzero. */
-function bashVerify(runId: string, env: NodeJS.ProcessEnv): number {
-  const r = spawnSync("bash", [LOGSH, "verify", runId], { env, encoding: "utf8" });
-  return r.status ?? -1;
 }
 
 /** A collab root carrying a deny/ask test policy; returns its path. */
@@ -175,7 +166,7 @@ export async function run(): Promise<number> {
         const completed = entries.find((e) => e.type === "call" && e.status === "completed");
         c.check(started?.tier === "ask" && started?.confirmed === true, "ask+confirmed: started records tier=ask, confirmed=true");
         c.check(completed?.tier === "ask" && completed?.confirmed === true, "ask+confirmed: completed records tier=ask, confirmed=true");
-        c.check(bashVerify(r.attribution.runId, env) === 0, "ask+confirmed: bash verify accepts entries carrying the NEW tier/confirmed fields");
+        c.check(new EvidenceLog({ env }).verify(r.attribution.runId).code === 0, "ask+confirmed: verify accepts entries carrying the tier/confirmed fields");
       }
     } finally {
       await fake.close();
@@ -183,9 +174,8 @@ export async function run(): Promise<number> {
   }
 
   // -------------------------------------------------------------------------
-  // 4. FLAGSHIP: allow → full lifecycle logged; a TOOL-PRODUCED run passes BOTH
-  //    `bash collab/log.sh verify` AND TS verify(). This is what makes /collab:witness
-  //    work unchanged on TS-era logs.
+  // 4. FLAGSHIP: allow → full lifecycle logged; a TOOL-PRODUCED run passes TS verify().
+  //    This is the receipts guarantee — every real call leaves a verifiable record.
   // -------------------------------------------------------------------------
   {
     const root = makeCollabRoot();
@@ -221,11 +211,9 @@ export async function run(): Promise<number> {
         c.check(startedEntry?.tier === "allow" && startedEntry?.confirmed === false, "allow: started records tier=allow, confirmed=false");
         c.check(completed?.tier === "allow" && completed?.confirmed === false, "allow: completed records tier=allow, confirmed=false");
 
-        // BOTH verifiers on the tool-produced run.
+        // verify on the tool-produced run.
         const tsCode = new EvidenceLog({ env }).verify(runId).code;
         c.check(tsCode === 0, "FLAGSHIP: TS verify() passes the tool-produced run (code 0)");
-        const bashCode = bashVerify(runId, env);
-        c.check(bashCode === 0, "FLAGSHIP: `bash collab/log.sh verify` passes the SAME run (exit 0)");
       }
     } finally {
       await fake.close();
@@ -357,7 +345,6 @@ export async function run(): Promise<number> {
         const expected = entries.filter((e) => e.type === "expected-call");
         c.check(expected.length === 2, "thread: two expected-call entries in one run");
         c.check(new EvidenceLog({ env }).verify(runId).code === 0, "thread: the two-call run verifies (cardinality both directions)");
-        c.check(bashVerify(runId, env) === 0, "thread: bash verify also accepts the two-call run");
       }
     } finally {
       await fake.close();
@@ -481,7 +468,7 @@ export async function run(): Promise<number> {
   // Session continuation (M7 / Option B): consult keepSession → id returned + session
   // KEPT; a follow-up consult threads that sessionId (no re-transmitting the peer's
   // words) and carries the session id on BOTH its started and completed entries; the
-  // one threaded run verifies under BOTH verifiers with session ids present.
+  // one threaded run verifies under verify with session ids present.
   // -------------------------------------------------------------------------
   {
     const root = tmp("m5-collab-"); // no policy ⇒ default-allow
@@ -524,9 +511,8 @@ export async function run(): Promise<number> {
       c.check(started2?.session_id === "ses_fake", "session: round-2 STARTED entry carries session_id");
       c.check(completed2?.session_id === "ses_fake", "session: round-2 COMPLETED entry carries session_id");
 
-      // The single threaded run verifies under BOTH verifiers, session ids present.
+      // The single threaded run verifies under verify, session ids present.
       c.check(new EvidenceLog({ env }).verify(runId).code === 0, "session: threaded run passes TS verify()");
-      c.check(bashVerify(runId, env) === 0, "session: threaded run passes bash verify (exit 0)");
     } finally {
       await fake.close();
     }
@@ -569,8 +555,7 @@ export async function run(): Promise<number> {
       const completed = entries.find((e) => e.type === "call" && e.status === "completed");
       c.check(completed?.capture_state === "failed", "mismatch: completed entry is capture_state:failed");
       c.check(completed?.raw_response === "", "mismatch: NO wrong-agent response captured");
-      c.check(new EvidenceLog({ env }).verify(rid).code === 7, "mismatch: verify FLAGS the failed capture (TS code 7) — the gap is visible");
-      c.check(bashVerify(rid, env) === 7, "mismatch: bash verify FLAGS the same gap (exit 7)");
+      c.check(new EvidenceLog({ env }).verify(rid).code === 7, "mismatch: verify FLAGS the failed capture (code 7) — the gap is visible");
     } finally {
       await fake.close();
     }

@@ -1,14 +1,26 @@
-# ClaudeCollab — Frozen Behavioral Contract (M0)
+# ClaudeCollab — Behavioral Contract (the TS/MCP reference spec)
 
-This is the **frozen behavioral contract of the bash layer** (v0.2.0 + current `main`) that the
-TypeScript/MCP rewrite must preserve. See `PLAN.md` → "Implementation plan — synthesized 2026-07-22".
+This began (M0) as the **frozen behavioral contract of the bash layer**, captured so the
+TypeScript/MCP rewrite could be verified against it. **The rewrite is complete and the bash layer
+retired at M12 (2026-07-23).** These C-items are no longer a bash-parity target — they are the
+**behavioral specification the TypeScript implementation holds**, now verified by the TS test suite
+under `test/` (the reference). See `PLAN.md` → "Implementation plan — synthesized 2026-07-22" for the
+milestone history.
 
-- **The bash implementation and its test suites are the oracle.** Where this document and the code
-  disagree, the code wins; fix the document.
-- **A TS feature is "done" only with an explicit parity statement citing the C-numbers below.** See
-  "How parity is declared" at the end.
-- Oracle sources are cited per group: `ask.sh`, `log.sh`, `panel-models.sh`, `AGENTS.md`, and the test
-  files under `collab/tests/`. Item counts: 8 areas, C1–C58.
+- **The TypeScript implementation and `test/*.test.ts` are the reference.** Where this document and the
+  code disagree, the code wins; fix the document.
+- **Reading the `Oracle:` citations below.** Each group cites the *retired bash sources* (`ask.sh`,
+  `log.sh`, `panel-models.sh`) the item was originally derived from — kept as provenance, not as a live
+  file to consult. The behavior each item names now lives in `src/` and is asserted by the TS suite:
+  policy → `src/policy.ts` (`test/policy.test.ts`); config/panel → `src/config.ts`
+  (`test/config.test.ts`); evidence layer → `src/log.ts` (`test/log.test.ts`); the tools →
+  `src/{consult,panel,research,delegate}.ts` and their tests.
+- Item counts: 8 areas, C1–C58. **Retired items:** the witness path (C18–C21 `--watch`, and the
+  witness parts of C29/C45) shipped in bash but the automated witness was retired at M12; those items
+  are historical. **C46's forward-looking "mixed transport is a surfaced error" sentence was deleted
+  (maintainer-ratified 2026-07-22 — both bash and TS snapshot per CALL, so mixed transport breaks no
+  guarantee).** Exit-code items (area H) described `ask.sh`; the MCP tools express the same verdicts as
+  structured `isError` results with the exit code carried as an analogue (see `test/consult.test.ts`).
 
 ---
 
@@ -106,11 +118,14 @@ TypeScript/MCP rewrite must preserve. See `PLAN.md` → "Implementation plan —
 
 ---
 
-## How parity is declared
+## How this spec is held (historical: "how parity was declared")
 
-A TypeScript milestone PR **cites the C-numbers it implements** and states, for each, that the ported
-behavior matches the bash oracle (test, live probe, or cross-verified log). Any **intentional deviation**
-from a cited item must be recorded in the PR with a **reason** (e.g. "transport artifact — the
-`</dev/null` stdin hack (part of C-transport) is obviated by the SSE client"). **A deviation from a
-contract item without a recorded reason is a contract violation.** Unported bash test cases each get a
-written disposition: transport-artifact, or covered-by-new-test.
+During the rewrite, each TypeScript milestone PR **cited the C-numbers it implemented** and stated, for
+each, that the ported behavior matched the bash oracle (test, live probe, or cross-verified log), with
+any **intentional deviation** recorded with a reason. That parity process is complete. The bash
+cross-verification the TS suite used ("until bash retires", CONTRACT M3) was removed at M12 when the
+bash layer was deleted; the TS verifier now stands alone as the reference.
+
+**Going forward**, a change to any behavior an item names must keep this document and the TS suite in
+agreement — the code wins, and the document is fixed to match. Recorded deviations from the original
+bash behavior (transport artifacts and superseded items) are noted inline above and in `PLAN.md`.

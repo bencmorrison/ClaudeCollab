@@ -116,7 +116,7 @@ function runInit(argv: string[]): number {
 }
 
 /** A light, token-free doctor: no model call. Confirms the MCP-era payload is present
- * and coherent. The bash `collab/doctor.sh` remains the deep check until M12. */
+ * and coherent. This is the deep check — the bash `collab/doctor.sh` was retired at M12. */
 async function runDoctor(argv: string[]): Promise<number> {
   let targetDir = process.cwd();
   for (let i = 0; i < argv.length; i++) {

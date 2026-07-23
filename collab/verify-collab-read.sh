@@ -27,8 +27,8 @@
 #
 # Usage:  bash collab/verify-collab-read.sh [--static]
 #   --static  run only the token-free static checks (steps 1-2); skip the runtime
-#             probes (steps 3-4) that call a model. Used by doctor.sh; CI uses the
-#             opencode-free check-agent-permissions.sh source lint instead.
+#             probes (steps 3-4) that call a model. Run this locally after an opencode
+#             or agent-def bump; CI uses the opencode-free check-agent-permissions.sh lint.
 # Exit 0 = static proof holds AND (unless --static) no runtime contradiction.
 # COLLAB_VERIFY_MODEL overrides the (free by default) runtime model.
 set -uo pipefail

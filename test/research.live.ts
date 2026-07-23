@@ -9,14 +9,14 @@
  * The question is a REPO-FILE question (read marker.txt), NOT an egress-dependent web
  * query — web capability is already proven opencode-side by verify-collab-research.sh, and
  * a network-dependent assertion would be flaky. We assert the marker round-trips byte-exact,
- * attribution names collab-research, and the run verifies under BOTH verifiers. A separate
+ * attribution names collab-research, and the run verifies under the TS verifier. A separate
  * check confirms the NO-FALLBACK def refusal fires live when the def is absent.
  *
  * Hygiene: free model only, timeout-bounded, benign canary, disposable dir.
  */
 
 import { mkdtemp, mkdir, copyFile, writeFile, rm } from "node:fs/promises";
-import { spawnSync, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { OpencodeLifecycle } from "../src/lifecycle.js";
@@ -27,7 +27,6 @@ import { Checker, repoRoot, withTimeout, waitFor, pidAlive } from "./harness.js"
 const FREE_MODEL = "opencode/deepseek-v4-flash-free";
 const ASK_MS = 120_000;
 const MARKER = "PLATYPUS-ORBIT-7731";
-const LOGSH = path.join(repoRoot, "collab", "log.sh");
 
 async function main(): Promise<number> {
   const c = new Checker();
@@ -96,8 +95,6 @@ async function main(): Promise<number> {
 
       const runId = result.attribution.runId;
       c.check(new EvidenceLog({ env }).verify(runId).code === 0, "research run passes TS verify()");
-      const bash = spawnSync("bash", [LOGSH, "verify", runId], { env, encoding: "utf8" });
-      c.check((bash.status ?? -1) === 0, "research run passes `bash collab/log.sh verify` (exit 0)");
     } else {
       console.error(`  research error: ${result.error.kind} — ${result.error.message}`);
     }

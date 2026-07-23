@@ -2,14 +2,11 @@
  * Config & model-resolution port tests (PLAN.md M4; CONTRACT.md area B, C8–C14) — OFFLINE.
  *
  * `conf_get` byte-identity (C11) is held by REUSE — `config.ts` re-exports `log.ts`'s
- * `confGet`, so there is one parser. We re-pin the run-tests.sh footgun cases here
- * anyway. Panel resolution (C13/C14) is additionally cross-checked against the real
- * `collab/panel-models.sh` (which prints the resolved list to stdout, exit 2 on none):
- * for a corpus of arg/env/conf inputs the TS model list and exit intent must match the
- * bash oracle's. No model is called.
+ * `confGet`, so there is one parser. Panel resolution (C13/C14) is unit-tested directly
+ * against `resolvePanelModels` (the reference implementation; the bash `panel-models.sh`
+ * oracle it was ported against retired at M12). No model is called.
  */
 
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,9 +20,7 @@ import {
   readConfContents,
   resolvePanelModels,
 } from "../src/config.js";
-import { Checker, repoRoot } from "./harness.js";
-
-const PANEL = path.join(repoRoot, "collab", "panel-models.sh");
+import { Checker } from "./harness.js";
 
 const tmpDirs: string[] = [];
 function tmp(prefix = "m4cfg-"): string {
@@ -35,16 +30,6 @@ function tmp(prefix = "m4cfg-"): string {
 }
 function cleanup(): void {
   for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true }); } catch { /* noop */ } }
-}
-
-/** Run panel-models.sh; return the resolved model list (stdout) + exit code. */
-function panelOracle(args: string[], extraEnv: Record<string, string> = {}): { models: string[]; code: number } {
-  const env = { ...process.env } as NodeJS.ProcessEnv;
-  for (const k of ["COLLAB_MODELS", "COLLAB_CONF", "COLLAB_MODEL", "COLLAB_POLICY"]) delete env[k];
-  Object.assign(env, extraEnv);
-  const r = spawnSync("bash", [PANEL, ...args], { env, encoding: "utf8" });
-  const models = (r.stdout ?? "").split("\n").filter((l) => l.length > 0);
-  return { models, code: r.status ?? -1 };
 }
 
 export async function run(): Promise<number> {
@@ -153,49 +138,6 @@ export async function run(): Promise<number> {
       t.check(fromEnv.models.join(",") === "openai/env,google/env", "panel: env overrides conf");
     }
 
-    // ---- FLAGSHIP-style oracle cross-check against panel-models.sh --------------
-    interface PCase { args: string[]; env?: Record<string, string>; conf?: string }
-    const pcases: PCase[] = [
-      { args: ["openai/gpt-5", "google/gemini-2.5-pro"] },
-      { args: ["openai/gpt-5", "openai/gpt-5"] },              // dup
-      { args: ["openai/gpt-5", "openai/gpt-5-mini"] },         // single provider
-      { args: ["openai/gpt-5"] },                              // <2
-      { args: ["justname", "openai/gpt-5"] },                  // bad token kept
-      { args: ["openai/a,google/b, opencode/c"] },             // comma/space mix
-      { args: [], env: {}, conf: "" },                         // none → exit 2
-      { args: [], env: { COLLAB_MODELS: "openai/e google/f" } },  // env source
-    ];
-
-    let pChecks = 0;
-    let pAgree = 0;
-    let pMismatch = 0;
-    for (const pc of pcases) {
-      pChecks += 1;
-      const env: Record<string, string> = { ...(pc.env ?? {}) };
-      let confContents = "";
-      if (pc.conf !== undefined) {
-        // Point BOTH bash and TS at the same conf via $COLLAB_CONF.
-        const d = tmp("m4pconf-");
-        const f = path.join(d, "conf");
-        writeFileSync(f, pc.conf);
-        env.COLLAB_CONF = f;
-        confContents = pc.conf;
-      }
-      const ts = resolvePanelModels({ args: pc.args, env: env as NodeJS.ProcessEnv, confContents });
-      const bash = panelOracle(pc.args, env);
-      const listMatch = ts.models.join("\n") === bash.models.join("\n");
-      const codeMatch = (ts.exitCode ?? 0) === (bash.code ?? 0);
-      if (listMatch && codeMatch) {
-        pAgree += 1;
-      } else {
-        pMismatch += 1;
-        t.check(false,
-          `panel oracle mismatch: args=${JSON.stringify(pc.args)} ts=[${ts.models.join(",")}]/${ts.exitCode ?? 0} bash=[${bash.models.join(",")}]/${bash.code}`);
-      }
-    }
-    t.check(pMismatch === 0,
-      `panel oracle cross-check: ${pAgree}/${pChecks} cases agree (model list + exit), 0 mismatches`);
-    console.log(`    [panel oracle corpus] ${pChecks} arg/env/conf cross-checks against panel-models.sh`);
   } finally {
     cleanup();
   }

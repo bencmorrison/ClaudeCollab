@@ -24,6 +24,39 @@ set -uo pipefail
 
 SEVERITY=warning
 
+# --self-test: prove THIS lint skips cleanly without shellcheck, and (when shellcheck is
+# present) accepts a clean script and catches a warning-level finding (ported from the
+# retired run-tests.sh meta-tests). Runs before the absent-guard so the skip path is tested.
+if [ "${1:-}" = "--self-test" ]; then
+  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  st_fail=0
+  st_ok() { printf '\033[32mok\033[0m   self-test: %s\n' "$1"; }
+  st_no() { printf '\033[31mFAIL\033[0m self-test: %s\n' "$1"; st_fail=1; }
+  d="$(mktemp -d "${TMPDIR:-/tmp}/collab-scc.XXXXXX")"
+  # Skip-when-absent: an empty PATH makes shellcheck genuinely absent (the script runs no
+  # external command before its skip-and-exit); bash is invoked by absolute path so the
+  # child still starts. Stripping shellcheck's dir from PATH is unreliable on usrmerge Linux.
+  self_bash="$(command -v bash)"
+  printf '#!/usr/bin/env bash\necho hi\n' > "$d/none.sh"
+  out="$(PATH=/nonexistent "$self_bash" "$self" "$d/none.sh" 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi 'not installed'; } \
+    && st_ok "skips cleanly (exit 0 + note) when shellcheck is absent" \
+    || st_no "did not skip cleanly without shellcheck (rc=$rc): $out"
+  if command -v shellcheck >/dev/null 2>&1; then
+    printf '#!/usr/bin/env bash\necho hi\n' > "$d/good.sh"
+    bash "$self" "$d/good.sh" >/dev/null 2>&1 && st_ok "accepts a clean script" || st_no "rejects a clean script (false positive)"
+    printf '#!/usr/bin/env bash\necho $(ls)\n' > "$d/bad.sh"   # SC2046 word-splitting
+    bash "$self" "$d/bad.sh" >/dev/null 2>&1 && st_no "MISSED a warning-level issue (SC2046)" || st_ok "catches a warning-level issue (SC2046)"
+  else
+    st_ok "accept/catch cases skipped (shellcheck not installed here)"
+  fi
+  rm -rf "$d"
+  echo
+  if [ "$st_fail" -eq 0 ]; then printf '\033[32mshellcheck self-test: OK\033[0m\n'
+  else printf '\033[31mshellcheck self-test: FAILED\033[0m\n'; fi
+  exit "$st_fail"
+fi
+
 if ! command -v shellcheck >/dev/null 2>&1; then
   echo "shellcheck not installed — skipping (CI's Linux job enforces it). Install with: brew install shellcheck"
   exit 0

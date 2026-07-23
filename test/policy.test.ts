@@ -1,16 +1,14 @@
 /**
- * Model-policy port tests (PLAN.md M4; CONTRACT.md area A, C1–C7) — OFFLINE.
+ * Model-policy tests (CONTRACT.md area A, C1–C7) — OFFLINE.
  *
- * No model is ever called: the flagship cross-check drives `collab/ask.sh --dry-run`,
- * which enforces the policy and expresses the verdict purely through its EXIT CODE
- * (0 = allowed, 3 = deny, 4 = ask-unconfirmed) before any opencode invocation. For a
- * corpus of policy files × model ids we assert the TS `policyTier` verdict equals the
- * bash oracle's observed exit-code verdict, case by case. A mismatch is a defect in the
- * port (or a genuine bash discovery) — either way it fails loudly here.
+ * The TypeScript `policyTier` is the reference implementation (the bash oracle it was
+ * ported against retired at M12). No model is ever called. A corpus of policy files ×
+ * model ids asserts the `policyTier` verdict against the expected tier, case by case.
  *
- * A second oracle pins the glob semantics directly: `bashGlobMatch` is cross-checked
- * against a real bash `case … in <pat>)` over a pattern×string grid, proving `*`/`?`
- * cross `/`, `[...]` ranges/negation, and POSIX-ish edges match bash, not minimatch.
+ * The glob semantics are still pinned against real bash: `bashGlobMatch` is cross-checked
+ * against a live bash `case … in <pat>)` (a shell builtin, not a ClaudeCollab script) over
+ * a pattern×string grid, proving `*`/`?` cross `/`, `[...]` ranges/negation, and POSIX-ish
+ * edges match bash's own matcher, not minimatch.
  */
 
 import { spawnSync } from "node:child_process";
@@ -25,9 +23,8 @@ import {
   policyTier,
   type PolicyTier,
 } from "../src/policy.js";
-import { Checker, repoRoot } from "./harness.js";
+import { Checker } from "./harness.js";
 
-const ASK = path.join(repoRoot, "collab", "ask.sh");
 const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
 
 const tmpDirs: string[] = [];
@@ -48,48 +45,20 @@ function bashCaseGlob(pattern: string, subject: string): boolean {
   return r.status === 0;
 }
 
-/** Build a `<dir>/collab/` with ask.sh + the given policy files, return the collab dir. */
+/** Build a `<dir>/collab/` with the given policy files, return the collab dir. */
 function makeCollabDir(files: { policy?: string; local?: string }): string {
   const base = tmp();
   const collab = path.join(base, "collab");
   spawnSync("mkdir", ["-p", collab]);
-  spawnSync("cp", [ASK, path.join(collab, "ask.sh")]);
   if (files.policy !== undefined) writeFileSync(path.join(collab, "models.policy"), files.policy);
   if (files.local !== undefined) writeFileSync(path.join(collab, "models.policy.local"), files.local);
   return collab;
 }
 
-/** Run the bash oracle; map exit code → tier, or a raw "exit:N" for anything else. */
-function oracleTier(collabDir: string, model: string, extraEnv: Record<string, string> = {}): string {
-  const env = { ...process.env } as NodeJS.ProcessEnv;
-  for (const k of ["COLLAB_POLICY", "COLLAB_MODEL", "COLLAB_CONF", "COLLAB_CONFIRMED", "COLLAB_MODELS"]) {
-    delete env[k];
-  }
-  env.COLLAB_LOG = "off";
-  Object.assign(env, extraEnv);
-  // An empty model id cannot be supplied via `-m ""` — the CLI rejects an empty flag
-  // value as a usage error (exit 1, C12/C54). The empty-id policy path is reached by
-  // OMITTING -m entirely (and having no COLLAB_MODEL/conf), so `model=""` falls through
-  // to `policy_tier ""`, matching the TS `policyTier("", …)` call.
-  const argv = model === ""
-    ? ["--dry-run", "q"]
-    : ["--dry-run", "-m", model, "q"];
-  const r = spawnSync("bash", [path.join(collabDir, "ask.sh"), ...argv], {
-    env,
-    encoding: "utf8",
-  });
-  switch (r.status) {
-    case 0: return "allow";
-    case 3: return "deny";
-    case 4: return "ask";
-    default: return `exit:${r.status}`;
-  }
-}
-
 interface Scenario {
   name: string;
   files: { policy?: string; local?: string };
-  /** env applied to BOTH oracle and TS (only COLLAB_POLICY matters to TS resolution). */
+  /** env applied to TS resolution (only COLLAB_POLICY matters). */
   env?: Record<string, string>;
   /** map absolute path of a policy file to chmod 000 (unreadable-fails-closed). */
   chmodZero?: "policy" | "local";
@@ -211,7 +180,7 @@ export async function run(): Promise<number> {
         "policyTier: selected malformed file → deny with loud reason (C6)");
     }
 
-    // ---- FLAGSHIP oracle cross-check --------------------------------------------
+    // ---- policy scenario corpus (TS is the reference; bash oracle retired M12) ---
     const scenarios: Scenario[] = [
       {
         name: "deny-first over allow-*",
@@ -353,14 +322,12 @@ export async function run(): Promise<number> {
       for (const cs of sc.cases) {
         crossChecks += 1;
         const tsTier = policyTier(cs.model, { collabDir: collab, env: env as NodeJS.ProcessEnv }).tier;
-        const bashTier = oracleTier(collab, cs.model, env);
-        const agree = tsTier === bashTier && tsTier === cs.expect;
-        if (agree) {
+        if (tsTier === cs.expect) {
           crossAgree += 1;
         } else {
           crossMismatch += 1;
           t.check(false,
-            `[${sc.name}] model='${cs.model}': ts=${tsTier} bash=${bashTier} expected=${cs.expect}`);
+            `[${sc.name}] model='${cs.model}': ts=${tsTier} expected=${cs.expect}`);
         }
       }
 
@@ -370,8 +337,8 @@ export async function run(): Promise<number> {
       }
     }
     t.check(crossMismatch === 0,
-      `oracle cross-check: ${crossAgree}/${crossChecks} cases agree (TS === bash === expected), 0 mismatches`);
-    console.log(`    [oracle corpus] ${scenarios.length} policy scenarios, ${crossChecks} model×policy cross-checks`);
+      `policy corpus: ${crossAgree}/${crossChecks} cases match the expected tier, 0 mismatches`);
+    console.log(`    [policy corpus] ${scenarios.length} scenarios, ${crossChecks} model×policy checks`);
     console.log(`    [glob corpus] ${globChecks} pattern×subject cross-checks against bash \`case\``);
   } finally {
     cleanup();

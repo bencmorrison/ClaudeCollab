@@ -1,14 +1,11 @@
 /**
- * Evidence-layer tests (PLAN.md M3; CONTRACT.md area D, C22–C35) — OFFLINE.
+ * Evidence-layer tests (CONTRACT.md area D, C22–C35) — OFFLINE.
  *
- * No model is called. The suite drives `src/log.ts` directly, and — for the flagship
- * cross-compatibility contract — spawns the bash `collab/log.sh` and `git` (both free).
- * The four cross-verification directions are pinned explicitly:
- *   (a) TS-written run passes `bash log.sh verify` (exit 0),
- *   (b) bash-written run passes TS `verify` (code 0),
- *   (c) a corrupted TS-written run FAILS `bash log.sh verify`,
- *   (d) a corrupted bash-written run FAILS TS `verify` (code 7),
- * plus a mixed bash+TS single run that both verifiers accept.
+ * No model is called. The suite drives `src/log.ts` (the reference implementation; the
+ * bash `collab/log.sh` it was cross-verified against retired at M12). Canonicalization is
+ * still pinned byte-for-byte against `jq` (a system tool, not a ClaudeCollab script), and
+ * cross-process concurrency is proven with genuinely-racing TS writer child processes
+ * (`test/log-writer-child.ts`) contending the shared `mkdir` lock.
  */
 
 import { execFileSync, spawnSync, spawn } from "node:child_process";
@@ -31,7 +28,6 @@ import {
 import { canonicalStringify, buildEntryLine } from "../src/canonical.js";
 import { Checker, repoRoot, tsxBin, sleep } from "./harness.js";
 
-const LOGSH = path.join(repoRoot, "collab", "log.sh");
 const CHILD = path.join(repoRoot, "test", "log-writer-child.ts");
 
 /** A fresh temp dir, cleaned at suite end. */
@@ -40,16 +36,6 @@ function tmp(prefix = "m3log-"): string {
   const d = mkdtempSync(path.join(tmpdir(), prefix));
   tmpDirs.push(d);
   return d;
-}
-
-/** Run `bash collab/log.sh …`. Returns `{ status, stdout }`; never throws on nonzero. */
-function bashLog(
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  input?: string,
-): { status: number; stdout: string; stderr: string } {
-  const r = spawnSync("bash", [LOGSH, ...args], { env, input, encoding: "utf8" });
-  return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
 function envFor(logDir: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
@@ -104,9 +90,8 @@ export async function run(): Promise<number> {
   }
 
   // -------------------------------------------------------------------------
-  // 1. Flagship cross-verification (a) TS-written → bash verify exit 0.
-  //    A run with every entry type: lifecycle + final + disposition +
-  //    subagent-voice + a delegate-diff with a real patch artifact.
+  // 1. A run with every entry type: lifecycle + final + disposition +
+  //    subagent-voice + a delegate-diff with a real patch artifact, verified.
   // -------------------------------------------------------------------------
   let tsRunDir = "";
   let tsRunId = "";
@@ -135,13 +120,10 @@ export async function run(): Promise<number> {
 
     const tsv = l.verify(tsRunId);
     c.check(tsv.ok && tsv.code === 0, "verify: TS verifies its own full run (all 7 entry types)");
-
-    const bv = bashLog(["verify", tsRunId], env);
-    c.check(bv.status === 0, "cross (a): TS-written run passes `bash log.sh verify` (exit 0)");
   }
 
   // -------------------------------------------------------------------------
-  // 1c. Negative: corrupt one byte of a TS-written run → bash verify FAILS.
+  // 1c. Negative: corrupt one byte of a TS-written run → verify FAILS (code 7).
   // -------------------------------------------------------------------------
   {
     const env = envFor(tsLogDir, { COLLAB_LOG_PROMPTS: "full" });
@@ -151,49 +133,16 @@ export async function run(): Promise<number> {
     // Edit the completed (line 3) raw_response — a middle entry, breaks the chain.
     arr[2] = arr[2].replace("model reply", "MODEL LIED");
     writeFileSync(file, arr.join("\n"));
-    const bv = bashLog(["verify", tsRunId], env);
-    c.check(bv.status === 7, "cross (c): a corrupted TS-written entry FAILS `bash log.sh verify` (exit 7)");
+    const v = new EvidenceLog({ env }).verify(tsRunId);
+    c.check(!v.ok && v.code === 7, "1c: a corrupted middle entry FAILS verify (code 7)");
     writeFileSync(file, orig); // restore
   }
 
   // -------------------------------------------------------------------------
-  // 2. Cross-verification (b) bash-written → TS verify code 0, and (d) negative.
-  // -------------------------------------------------------------------------
-  let bashRunId = "";
-  let bashLogDir = "";
-  {
-    bashLogDir = tmp();
-    const env = envFor(bashLogDir, { COLLAB_LOG_PROMPTS: "full" });
-    bashRunId = bashLog(["new-run", "/collab:consult"], env).stdout.trim();
-    const runEnv = envFor(bashLogDir, { COLLAB_RUN_ID: bashRunId, COLLAB_LOG_PROMPTS: "full" });
-    const resp = path.join(bashLogDir, "resp.txt");
-    writeFileSync(resp, 'bash resp "q" \\b\ntrailing\n\n');
-    const pf = path.join(bashLogDir, "p.txt");
-    writeFileSync(pf, "the prompt\n");
-    bashLog(["expect", "--call-id", "b1", "--command", "/collab:consult", "--model", "m/x", "--agent", "collab-read"], runEnv);
-    const turn = bashLog(["started", "--call-id", "b1", "--command", "/collab:consult", "--model", "m/x", "--agent", "collab-read", "--prompt-file", pf], runEnv).stdout.trim();
-    bashLog(["completed", "--call-id", "b1", "--exit", "0", "--turn", turn, "--command", "/collab:consult", "--model", "m/x", "--agent", "collab-read", "--capture-state", "complete", "--response-file", resp], runEnv);
-    bashLog(["final"], runEnv, "the summary the user saw");
-    bashLog(["subagent-voice", "--model", "claude-opus-4-8", "--response-file", resp], runEnv);
-
-    const log = new EvidenceLog({ env });
-    const v = log.verify(bashRunId);
-    c.check(v.ok && v.code === 0, "cross (b): bash-written run passes TS verify (code 0)");
-
-    // (d) corrupt a bash-written run → TS verify code 7.
-    const file = path.join(bashLogDir, bashRunId, "calls.jsonl");
-    const arr = readFileSync(file, "utf8").split("\n");
-    arr[2] = arr[2].replace("collab-read", "collab-XXXX");
-    writeFileSync(file, arr.join("\n"));
-    const v2 = log.verify(bashRunId);
-    c.check(!v2.ok && v2.code === 7, "cross (d): a corrupted bash-written run FAILS TS verify (code 7)");
-  }
-
-  // -------------------------------------------------------------------------
-  // 2b. LONE-SURROGATE parity (reviewer probe): a completed response carrying a lone
-  //     \ud800 must FAIL both verifiers. jq (bash) rejects the escape as invalid JSON;
-  //     JS JSON.parse ACCEPTS it — so without the round-trip cleanliness check TS would
-  //     pass a log bash fails, a false-clean in the exact direction this project kills.
+  // 2b. LONE-SURROGATE (reviewer probe): a completed response carrying a lone \ud800
+  //     must FAIL verify. JS JSON.parse ACCEPTS the escape while jq rejects it, so
+  //     without the round-trip cleanliness check the verifier would pass an invalid log —
+  //     a false-clean in the exact direction this project kills.
   // -------------------------------------------------------------------------
   {
     const dir = tmp();
@@ -207,87 +156,7 @@ export async function run(): Promise<number> {
     const file = path.join(dir, "surr", "calls.jsonl");
     c.check(readFileSync(file, "utf8").includes("\\ud800"), "2b setup: the stored line carries a lone \\ud800 escape");
     const tsv = log.verify("surr");
-    c.check(!tsv.ok && tsv.code === 7, "2b: TS verify FAILS a lone-surrogate response (code 7), matching jq");
-    const bv = bashLog(["verify", "surr"], env);
-    c.check(bv.status === 7, "2b: bash verify ALSO fails the same log (exit 7) — parity confirmed");
-  }
-
-  // -------------------------------------------------------------------------
-  // 3. Mixed-writer single run (SUPPORTED per PLAN "no log migration"): bash and TS
-  //    append into ONE run, sharing the lock protocol + line format; both verify.
-  // -------------------------------------------------------------------------
-  {
-    const dir = tmp();
-    // full prompt mode (the default) requires a prompt on each started, exactly as
-    // ask.sh always supplies one — so both writers pass a prompt.
-    const env = envFor(dir, { COLLAB_LOG_PROMPTS: "full" });
-    const runId = bashLog(["new-run", "/collab:panel"], env).stdout.trim();
-    const runEnv = envFor(dir, { COLLAB_RUN_ID: runId, COLLAB_LOG_PROMPTS: "full" });
-    // bash writes call m1's lifecycle; TS writes call m2's lifecycle; interleaved.
-    const resp = path.join(dir, "r.txt"); writeFileSync(resp, "bash answer\n");
-    const pf = path.join(dir, "p.txt"); writeFileSync(pf, "bash prompt\n");
-    bashLog(["expect", "--call-id", "m1", "--command", "/collab:panel", "--model", "a/1", "--agent", "collab-read"], runEnv);
-    const tsl = new EvidenceLog({ env: runEnv });
-    await tsl.expect({ callId: "m2", command: "/collab:panel", model: "b/2", agent: "collab-read" });
-    const t1 = bashLog(["started", "--call-id", "m1", "--command", "/collab:panel", "--model", "a/1", "--agent", "collab-read", "--prompt-file", pf], runEnv).stdout.trim();
-    const st2 = await tsl.started({ callId: "m2", command: "/collab:panel", model: "b/2", agent: "collab-read", prompt: "ts prompt\n" });
-    bashLog(["completed", "--call-id", "m1", "--exit", "0", "--turn", t1, "--command", "/collab:panel", "--model", "a/1", "--agent", "collab-read", "--capture-state", "complete", "--response-file", resp], runEnv);
-    await tsl.completed({ callId: "m2", exit: 0, turn: st2.turn, command: "/collab:panel", model: "b/2", agent: "collab-read", captureState: "complete", response: "ts answer\n" });
-
-    const file = path.join(dir, runId, "calls.jsonl");
-    const es = parsed(file);
-    const turns = new Set(es.filter((e) => e.status === "started").map((e) => e.turn));
-    c.check(es.length === 6 && turns.size === 2, "mixed-writer: bash+TS in one run → 6 entries, distinct turns");
-    c.check(tsl.verify(runId).ok, "mixed-writer: TS verify accepts a bash+TS run");
-    c.check(bashLog(["verify", runId], env).status === 0, "mixed-writer: bash verify accepts a bash+TS run");
-  }
-
-  // -------------------------------------------------------------------------
-  // 3b. GENUINELY-CONCURRENT mixed writers: a bash full lifecycle and a TS full lifecycle
-  //     race into ONE run, contending the shared `mkdir` lock. The bash child is launched
-  //     via async `spawn` (so it runs WHILE the TS lifecycle runs — not spawnSync, which
-  //     would block the event loop and serialize them, contending no lock). Both sides
-  //     hold between appends and emit wall-clock spans; the test asserts the bash and TS
-  //     writers OVERLAP in time. If the lock did not interoperate across writers, appends
-  //     would tear (invalid JSONL) or the chain would break; both verifiers must accept
-  //     the result. This is the load-bearing proof that mixed-writer runs are SUPPORTED
-  //     (PLAN "no log migration"), under actual contention.
-  // -------------------------------------------------------------------------
-  {
-    const dir = tmp();
-    const env = envFor(dir, { COLLAB_LOG_PROMPTS: "off" }); // off ⇒ no prompt file needed
-    const runId = bashLog(["new-run", "/collab:panel"], env).stdout.trim();
-    const runEnv = envFor(dir, { COLLAB_RUN_ID: runId, COLLAB_LOG_PROMPTS: "off" });
-    const resp = path.join(dir, "cr.txt"); writeFileSync(resp, "bash concurrent answer\n");
-    // bash does its whole expect→started→completed as one shell process, holding 150ms
-    // between subcommands and printing its own START/END span.
-    const bashScript =
-      `set -e; S=$(date +%s%3N); ` +
-      `bash ${shellQuote(LOGSH)} expect --call-id bx --command /collab:panel --model a/1 --agent collab-read; sleep 0.15; ` +
-      `t=$(bash ${shellQuote(LOGSH)} started --call-id bx --command /collab:panel --model a/1 --agent collab-read); sleep 0.15; ` +
-      `bash ${shellQuote(LOGSH)} completed --call-id bx --exit 0 --turn "$t" --command /collab:panel --model a/1 --agent collab-read --capture-state complete --response-file ${shellQuote(resp)}; ` +
-      `E=$(date +%s%3N); echo "START $S END $E"`;
-    const bashDone = spawnAsync("bash", ["-c", bashScript], runEnv);
-    const tsl = new EvidenceLog({ env: runEnv });
-    const tsDone = (async (): Promise<{ start: number; end: number }> => {
-      const start = Date.now();
-      await tsl.expect({ callId: "tx", command: "/collab:panel", model: "b/2", agent: "collab-read" });
-      await sleep(150);
-      const st = await tsl.started({ callId: "tx", command: "/collab:panel", model: "b/2", agent: "collab-read" });
-      await sleep(150);
-      await tsl.completed({ callId: "tx", exit: 0, turn: st.turn, command: "/collab:panel", model: "b/2", agent: "collab-read", captureState: "complete", response: "ts concurrent answer\n" });
-      return { start, end: Date.now() };
-    })();
-    const [bashRes, tsSpan] = await Promise.all([bashDone, tsDone]);
-    const bashSpan = parseSpan(bashRes.stdout);
-    const overlapped = !!bashSpan && Math.max(bashSpan.start, tsSpan.start) < Math.min(bashSpan.end, tsSpan.end);
-    const file = path.join(dir, runId, "calls.jsonl");
-    const es = parsed(file); // parsed() throws if any line is torn/invalid JSON
-    const startedTurns = new Set(es.filter((e) => e.status === "started").map((e) => e.turn));
-    c.check(bashRes.status === 0 && es.length === 6, "mixed-writer (concurrent): 6 intact JSONL lines under lock contention");
-    c.check(overlapped, "mixed-writer (concurrent): the bash and TS writers genuinely OVERLAP in time");
-    c.check(startedTurns.size === 2, "mixed-writer (concurrent): distinct turns across bash+TS writers");
-    c.check(tsl.verify(runId).ok && bashLog(["verify", runId], env).status === 0, "mixed-writer (concurrent): both verifiers accept the raced run");
+    c.check(!tsv.ok && tsv.code === 7, "2b: verify FAILS a lone-surrogate response (code 7)");
   }
 
   // -------------------------------------------------------------------------
@@ -675,7 +544,7 @@ export async function run(): Promise<number> {
   // 17. C35 — config resolution env > collab.conf.local > default (confGet + live).
   // -------------------------------------------------------------------------
   {
-    // confGet parsing parity with log.sh's awk.
+    // confGet parsing (the parser the whole config layer shares).
     const conf = [
       "# comment",
       "  COLLAB_LOG_PROMPTS = hash   # inline comment",

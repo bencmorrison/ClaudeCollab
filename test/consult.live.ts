@@ -6,13 +6,12 @@
  * and the typed client, against the UNMODIFIED read-only `collab-read` agent in a
  * disposable scratch project carrying a planted marker file. We assert the marker
  * round-trips byte-exact through the tool result, the tool-produced run verifies under
- * BOTH the TS verifier and `bash collab/log.sh verify`, and no `opencode serve` survives.
+ * the TS verifier, and no `opencode serve` survives.
  *
  * Hygiene (repo rule): free model only, timeout-bounded, benign canary, disposable dir.
  */
 
 import { mkdtemp, mkdir, copyFile, writeFile, rm } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -24,7 +23,6 @@ import { Checker, repoRoot, withTimeout, waitFor, pidAlive } from "./harness.js"
 const FREE_MODEL = "opencode/deepseek-v4-flash-free";
 const ASK_MS = 120_000;
 const MARKER = "PLATYPUS-ORBIT-7731";
-const LOGSH = path.join(repoRoot, "collab", "log.sh");
 
 async function main(): Promise<number> {
   const c = new Checker();
@@ -81,11 +79,9 @@ async function main(): Promise<number> {
       const roundTripped = JSON.parse(JSON.stringify(wire)) as { content: Array<{ text: string }> };
       c.check(roundTripped.content[0].text.includes(MARKER), "marker survives the MCP tool boundary");
 
-      // The tool-produced run verifies under BOTH verifiers.
+      // The tool-produced run verifies under the TS verifier.
       const runId = result.attribution.runId;
       c.check(new EvidenceLog({ env }).verify(runId).code === 0, "tool-produced run passes TS verify()");
-      const bash = spawnSync("bash", [LOGSH, "verify", runId], { env, encoding: "utf8" });
-      c.check((bash.status ?? -1) === 0, "tool-produced run passes `bash collab/log.sh verify` (exit 0)");
     } else {
       console.error(`  consult error: ${result.error.kind} — ${result.error.message}`);
     }

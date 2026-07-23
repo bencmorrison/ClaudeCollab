@@ -5,10 +5,10 @@
 # Why a file and not environment variables: this tool is driven by Claude Code, whose
 # shell runs each command in a subshell — so a setup command can't `export` a value
 # into your interactive shell and have it persist. A git-ignored file can. The env
-# vars still work as one-off overrides (precedence: -m flag / args > env > this file).
+# vars still work as one-off overrides (precedence: explicit arg > env > this file).
 #
-# Values here are read by collab/ask.sh (COLLAB_MODEL) and collab/panel-models.sh
-# (COLLAB_MODELS). Model policy (deny/ask/allow) lives separately in
+# Values here are read by the collab MCP tools (COLLAB_MODEL for single-model calls,
+# COLLAB_MODELS for the panel). Model policy (deny/ask/allow) lives separately in
 # $COLLAB_POLICY when set, otherwise a ruleful collab/models.policy.local,
 # otherwise committed collab/models.policy. See /collab:configure.
 
@@ -17,24 +17,27 @@
 # COLLAB_MODEL=openai/gpt-5
 
 # Default panel for /collab:panel: 2-3 ordered ids from DIFFERENT providers (space- or
-# comma-separated). panel-models.sh warns if the set isn't cross-provider.
+# comma-separated). collab_panel warns if the set isn't cross-provider.
 # COLLAB_MODELS=openai/gpt-5 google/gemini-2.5-pro
 
-# Where collab/ask.sh looks for the collab-* agent DEFS when deciding whether to fall
-# back to a weaker built-in agent. Default: the sibling .opencode/agent of the install.
-# Set this only for a non-sibling layout (e.g. a shared/global install whose agent defs
-# live in opencode's global config dir). NOTE: this governs ONLY the wrapper's fallback
-# decision — opencode resolves --agent independently from its own config, so this MUST
-# point at the SAME directory the defs were actually installed to, or the wrapper's
-# "def present" check and opencode's resolution disagree.
+# Where the collab tools look for the collab-* agent DEFS when deciding whether to refuse
+# a call whose hardened def is missing. Default: the .opencode/agent of the project the
+# MCP server was spawned from (COLLAB_PROJECT_DIR, else the CWD). NOTE: this governs ONLY
+# the tool's refusal decision — opencode resolves --agent independently from its own
+# config, so this MUST point at the SAME directory the defs were actually installed to.
 # COLLAB_AGENT_DIR=~/.config/opencode/agent
 
-# --- Evidence layer (collab/log.sh) ---------------------------------------------
+# The collab root (where the policy/config/logs live). Resolved as $COLLAB_ROOT, else
+# <cwd>/collab/, else ~/.claude/collab/. Set this only for a non-standard layout.
+# COLLAB_ROOT=/path/to/collab
+
+# --- Evidence layer (src/log.ts) ------------------------------------------------
 # Every model call is recorded to the git-ignored collab/logs/<run_id>/calls.jsonl:
 # raw prompts and responses, with `expected-call`, `started`, and `completed`
-# lifecycle entries sharing one call_id. This is what a watcher agent
-# audits INSTEAD of Claude's own summary of the exchange — so it is on by default.
-# COLLAB_LOG=off                  # stop recording entirely (nothing to audit)
+# lifecycle entries sharing one call_id. These are the RECEIPTS of every exchange —
+# the other model's actual words, on disk and yours to read — so logging is on by default.
+# COLLAB_LOG=off                  # stop recording entirely
+# COLLAB_LOG_DIR=/custom/path     # override the log root (disables partitioning below)
 # COLLAB_LOG_PROMPTS=full         # full | hash | off — what to keep of the prompt
 #                                 # Claude SENT. Default `full`: the brief Claude
 #                                 # wrote is itself prime audit material. But it
@@ -48,22 +51,9 @@
 #                                 # per-project subdir BELOW the base logs tree:
 #                                 # <base>/<project-key>/<run>, keyed by the CWD's git
 #                                 # top-level (else the CWD). Keeps each project's runs,
-#                                 # `latest` symlink, retention, and /collab:witness
-#                                 # resolution separate under a single shared install.
-#                                 # DISABLED when COLLAB_LOG_DIR is explicitly set (an
-#                                 # explicit dir wins). The subdir stays under
-#                                 # collab/logs/, so --watch's scope still matches.
-#                                 # For a NON-repo project the key uses $PWD (logical),
-#                                 # so entering the same dir via different symlink paths
-#                                 # yields two buckets (split logs / stale `latest`) —
-#                                 # bounded, not corruption.
-
-# Model the watcher (/collab:witness) uses to audit whether Claude's account of a model
-# exchange matched what the models actually said. Falls back to COLLAB_MODEL if unset.
-# It MUST NOT be a Claude model — Claude is the party under audit, so ask.sh refuses
-# one (exit 8) unless you explicitly confirm.
-# COLLAB_WATCH_MODEL=openai/gpt-5.5
-
-# /collab:witness accepts the default collab/logs root or a child beneath it.
-# `collab/ask.sh --watch` mechanically rejects an effective COLLAB_LOG_DIR outside
-# that tree before calling a model; arbitrary custom roots still work for logging.
+#                                 # `latest` symlink, and retention separate under a
+#                                 # single shared install. DISABLED when COLLAB_LOG_DIR
+#                                 # is explicitly set (an explicit dir wins). For a
+#                                 # NON-repo project the key uses $PWD (logical), so
+#                                 # entering the same dir via different symlink paths
+#                                 # yields two buckets — bounded, not corruption.

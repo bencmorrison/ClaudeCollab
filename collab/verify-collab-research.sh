@@ -27,7 +27,8 @@
 #
 # Usage:  bash collab/verify-collab-research.sh [--static]
 #   --static  run only the token-free static checks (steps 1-2); skip the runtime
-#             probe (step 3) that calls a model. Used by doctor.sh / CI.
+#             probe (step 3) that calls a model. Run locally after an opencode bump
+#             (CI uses the opencode-free check-agent-permissions.sh lint).
 # Exit 0 = static shape holds AND (unless --static) the mutation probe left no file.
 # COLLAB_VERIFY_MODEL overrides the (free by default) runtime model.
 set -uo pipefail

@@ -16,10 +16,12 @@
  *   - .gitignore'd files excluded from the patch (pre-existing, unchanged ⇒ complete)
  *   - recovery hint: `git checkout <preTree> -- <path>` actually restores the pre-state
  *   - C40: unrepresentable state (ignored file changed) → captureComplete:false + the entry
- *     says so + the run FAILS integrity under BOTH verifiers
- *   - the delegate-diff entry passes BOTH verifiers; a corrupted patch fails BOTH (C39 neg)
- *   - PARITY FIXTURE: bash `ask.sh --edit` making the SAME mutation → semantically equal patch
+ *     says so + the run FAILS integrity under verify
+ *   - the delegate-diff entry passes verify; a corrupted patch fails it (C39 neg)
  *   - NO-FALLBACK def gate, gate deny/ask, agent-mismatch, partially-failed-call capture
+ *
+ * The TS verifier is the reference (the bash `collab/log.sh verify` + `ask.sh --edit`
+ * parity fixture these were cross-checked against retired at M12).
  */
 
 import { spawnSync } from "node:child_process";
@@ -41,11 +43,7 @@ import { EvidenceLog } from "../src/log.js";
 import { startFakeOpencode, type FakeOpencode } from "./fake-opencode-server.js";
 import type { ServeProvider } from "../src/client.js";
 import type { ServeHandle } from "../src/lifecycle.js";
-import { Checker, repoRoot } from "./harness.js";
-
-const LOGSH = path.join(repoRoot, "collab", "log.sh");
-const ASKSH = path.join(repoRoot, "collab", "ask.sh");
-const REAL_AGENT_DIR = path.join(repoRoot, ".opencode", "agent");
+import { Checker } from "./harness.js";
 
 const tmpDirs: string[] = [];
 function tmp(prefix = "m8-"): string {
@@ -120,38 +118,6 @@ function envWith(overrides: Record<string, string>): NodeJS.ProcessEnv {
   return { ...base, ...overrides };
 }
 
-/** Normalize a patch to {path → [+/- content lines]} so two patches over identical content
- * in DIFFERENT repos compare equal: index/blob-sha header lines and tree ids are ignored;
- * only the changed file paths and the added/removed content lines are compared. */
-function normalizePatch(patch: string): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  const blocks = patch.split(/^diff --git /m).slice(1);
-  for (const b of blocks) {
-    const firstLine = b.split("\n")[0];
-    const m = firstLine.match(/^a\/(.+?) b\/(.+)$/);
-    const key = m ? m[2] : firstLine.trim();
-    const changes = b
-      .split("\n")
-      .filter(
-        (l) =>
-          (l.startsWith("+") && !l.startsWith("+++")) ||
-          (l.startsWith("-") && !l.startsWith("---")),
-      );
-    map.set(key, changes);
-  }
-  return map;
-}
-
-function mapsEqual(a: Map<string, string[]>, b: Map<string, string[]>): boolean {
-  if (a.size !== b.size) return false;
-  for (const [k, va] of a) {
-    const vb = b.get(k);
-    if (!vb || vb.length !== va.length) return false;
-    for (let i = 0; i < va.length; i++) if (va[i] !== vb[i]) return false;
-  }
-  return true;
-}
-
 export async function run(): Promise<number> {
   const c = new Checker();
   console.log("== delegate.test (M8 collab_delegate) ==");
@@ -179,10 +145,7 @@ export async function run(): Promise<number> {
         c.check(/^diff --git a\/new\.txt b\/new\.txt$/m.test(patch), "scar: patch names the CREATED file");
         c.check(patch.includes("+NEWCONTENT"), "scar: patch carries the created content");
         c.check(r.report === "created new.txt", "scar: report is the model's text (DATA to review)");
-        // The run verifies under BOTH verifiers.
         c.check(new EvidenceLog({ env }).verify(r.attribution.runId).code === 0, "scar: TS verify() passes");
-        const bv = spawnSync("bash", [LOGSH, "verify", r.attribution.runId], { env, encoding: "utf8" });
-        c.check((bv.status ?? -1) === 0, "scar: bash log.sh verify passes");
       }
     } finally {
       await fake.close();
@@ -307,7 +270,7 @@ export async function run(): Promise<number> {
 
   // -------------------------------------------------------------------------
   // 6. C40: UNREPRESENTABLE state (model changed an ignored file) → captureComplete:false,
-  //    the delegate-diff entry SAYS so, and the run FAILS integrity under BOTH verifiers.
+  //    the delegate-diff entry SAYS so, and the run FAILS integrity under verify.
   // -------------------------------------------------------------------------
   {
     const repo = initRepo({ ".gitignore": "*.log\n", "a.txt": "A0\n" });
@@ -335,8 +298,6 @@ export async function run(): Promise<number> {
         c.check(r.capture.patchPath !== null, "incomplete: the reviewable-subset patch is still written");
         // The delegate-diff entry with capture_complete:false makes the run FAIL integrity.
         c.check(new EvidenceLog({ env }).verify(r.attribution.runId).code === 7, "incomplete: TS verify() reports integrity failure (7)");
-        const bv = spawnSync("bash", [LOGSH, "verify", r.attribution.runId], { env, encoding: "utf8" });
-        c.check((bv.status ?? -1) === 7, "incomplete: bash log.sh verify reports integrity failure (7)");
       }
     } finally {
       await fake.close();
@@ -344,7 +305,7 @@ export async function run(): Promise<number> {
   }
 
   // -------------------------------------------------------------------------
-  // 7. C39 NEGATIVE: a CORRUPTED patch file fails BOTH verifiers (the diff was altered).
+  // 7. C39 NEGATIVE: a CORRUPTED patch file fails verify (the diff was altered).
   // -------------------------------------------------------------------------
   {
     const repo = initRepo({ "a.txt": "A0\n" });
@@ -362,86 +323,9 @@ export async function run(): Promise<number> {
         c.check(new EvidenceLog({ env }).verify(runId).code === 0, "corrupt: run is clean BEFORE corruption");
         appendFileSync(r.capture.patchPath, "TAMPERED\n"); // alter the recorded diff
         c.check(new EvidenceLog({ env }).verify(runId).code === 7, "corrupt: TS verify() fails after tampering (7)");
-        const bv = spawnSync("bash", [LOGSH, "verify", runId], { env, encoding: "utf8" });
-        c.check((bv.status ?? -1) === 7, "corrupt: bash log.sh verify fails after tampering (7)");
       }
     } finally {
       await fake.close();
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // 8. PARITY FIXTURE: bash `ask.sh --edit` making the SAME mutation → a SEMANTICALLY equal
-  //    patch (same files, same +/- content lines; index/blob-sha headers ignored).
-  //    METHOD: identical initial repos; a scripted-mutation fake `opencode` for bash; compare
-  //    normalizePatch() maps.
-  // -------------------------------------------------------------------------
-  {
-    const seed = { "a.txt": "A0\n", "b.txt": "B0\n" };
-    const mutate = (repo: string) => {
-      writeFileSync(path.join(repo, "a.txt"), "A1\n");
-      writeFileSync(path.join(repo, "c.txt"), "C0\n");
-      rmSync(path.join(repo, "b.txt"));
-    };
-
-    // TS side.
-    const tsRepo = initRepo(seed, "m8-parity-ts-");
-    const tsLogs = tmp("m8-parity-tslogs-");
-    const tsEnv = envWith({ COLLAB_ROOT: tmp("m8-collab-"), COLLAB_LOG_DIR: tsLogs, COLLAB_AGENT_DIR: defDirWithBuild() });
-    const fake = await startFakeOpencode({ historyText: "done" });
-    let tsPatch = "";
-    try {
-      const r = await delegate(
-        { task: "same mutation", model: "openai/m" },
-        { serve: mutatingServe(fake, () => mutate(tsRepo)), env: tsEnv, repoDir: tsRepo, messageTimeoutMs: 5_000 },
-      );
-      if (r.ok && r.capture.patchPath) tsPatch = readFileSync(r.capture.patchPath, "utf8");
-      c.check(r.ok && tsPatch.length > 0, "parity: TS produced a patch");
-    } finally {
-      await fake.close();
-    }
-
-    // Bash side: a scripted-mutation fake `opencode` on PATH; real ask.sh --edit; read patch.
-    const bashRepo = initRepo(seed, "m8-parity-bash-");
-    const bashLogs = tmp("m8-parity-bashlogs-");
-    const binDir = tmp("m8-parity-bin-");
-    const fakeOpencode =
-      "#!/usr/bin/env bash\n" +
-      "cat >/dev/null\n" +
-      "printf 'A1\\n' > a.txt\n" +
-      "printf 'C0\\n' > c.txt\n" +
-      "rm -f b.txt\n" +
-      "printf 'done\\n'\n" +
-      "exit 0\n";
-    writeFileSync(path.join(binDir, "opencode"), fakeOpencode);
-    chmodSync(path.join(binDir, "opencode"), 0o755);
-    const runId = "m8parity-run";
-    const bashEnv = {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
-      COLLAB_LOG_DIR: bashLogs,
-      COLLAB_RUN_ID: runId,
-      COLLAB_AGENT_DIR: REAL_AGENT_DIR, // real collab-build.md ⇒ no fallback, snapshot runs
-    };
-    const ask = spawnSync("bash", [ASKSH, "--edit", "-m", "openai/m", "make the same mutation"], {
-      cwd: bashRepo,
-      env: bashEnv,
-      encoding: "utf8",
-    });
-    c.check(ask.status === 0, "parity: bash ask.sh --edit exited 0");
-    const runDir = path.join(bashLogs, runId);
-    const patchFile = existsSync(runDir)
-      ? readdirSync(runDir).find((f) => f.startsWith("diff-") && f.endsWith(".patch"))
-      : undefined;
-    let bashPatch = "";
-    if (patchFile) bashPatch = readFileSync(path.join(runDir, patchFile), "utf8");
-    c.check(bashPatch.length > 0, "parity: bash recorded a patch");
-
-    const eq = mapsEqual(normalizePatch(tsPatch), normalizePatch(bashPatch));
-    c.check(eq, "parity: TS and bash patches are SEMANTICALLY equal (same files, same hunks)");
-    if (!eq) {
-      console.error("  TS  patch:\n" + tsPatch);
-      console.error("  bash patch:\n" + bashPatch);
     }
   }
 
@@ -591,8 +475,6 @@ export async function run(): Promise<number> {
         const jsonl = readFileSync(path.join(logDir, r.attribution.runId, "calls.jsonl"), "utf8");
         c.check(!jsonl.includes('"delegate-diff"'), "nothing-to-review: NO delegate-diff entry logged");
         c.check(new EvidenceLog({ env }).verify(r.attribution.runId).code === 0, "nothing-to-review: run still verifies (lifecycle triple only)");
-        const bv = spawnSync("bash", [LOGSH, "verify", r.attribution.runId], { env, encoding: "utf8" });
-        c.check((bv.status ?? -1) === 0, "nothing-to-review: bash verify passes too");
       }
     } finally {
       await fake.close();
@@ -640,8 +522,6 @@ export async function run(): Promise<number> {
         // ...and does NOT trip capture-incomplete (the whole point of the exclusion).
         c.check(r.capture.captureComplete === true, "narrow: capture stays COMPLETE despite the concurrent scaffolding change");
         c.check(new EvidenceLog({ env }).verify(r.attribution.runId).code === 0, "narrow: TS verify passes (complete)");
-        const bv = spawnSync("bash", [LOGSH, "verify", r.attribution.runId], { env, encoding: "utf8" });
-        c.check((bv.status ?? -1) === 0, "narrow: bash verify passes (complete)");
       }
     } finally {
       await fake.close();
@@ -696,8 +576,6 @@ export async function run(): Promise<number> {
           const jsonl = readFileSync(path.join(logDir, r.attribution.runId, "calls.jsonl"), "utf8");
           c.check(/"scaffold_changed":true/.test(jsonl), "scaffold-changed: delegate-diff entry records scaffold_changed:true");
           c.check(new EvidenceLog({ env }).verify(r.attribution.runId).code === 0, "scaffold-changed: TS verify accepts the new field (green)");
-          const bv = spawnSync("bash", [LOGSH, "verify", r.attribution.runId], { env, encoding: "utf8" });
-          c.check((bv.status ?? -1) === 0, "scaffold-changed: bash verify accepts the new field (green)");
         }
       } finally {
         await fake.close();
@@ -722,8 +600,6 @@ export async function run(): Promise<number> {
           const jsonl = readFileSync(path.join(logDir, r.attribution.runId, "calls.jsonl"), "utf8");
           c.check(/"scaffold_changed":false/.test(jsonl), "scaffold-quiet: delegate-diff entry records scaffold_changed:false");
           c.check(new EvidenceLog({ env }).verify(r.attribution.runId).code === 0, "scaffold-quiet: TS verify green");
-          const bv = spawnSync("bash", [LOGSH, "verify", r.attribution.runId], { env, encoding: "utf8" });
-          c.check((bv.status ?? -1) === 0, "scaffold-quiet: bash verify green");
         }
       } finally {
         await fake.close();

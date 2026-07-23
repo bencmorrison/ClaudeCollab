@@ -43,7 +43,7 @@ fi
 # for the cancelled witness; the log's receipts are the external models' auto-captured
 # responses). Assert each grants the MCP tool(s) it invokes. (bash 3.2 has no
 # associative arrays — the macOS CI job runs this lint — so use a case, not declare -A.)
-for command in panel workshop collaborate; do
+for command in panel workshop collaborate configure; do
   file=".claude/commands/collab/$command.md"
   grep -Fq 'allowed-tools:' "$file" || bad "$command has no allowed-tools frontmatter"
   # collab_models (M11) replaced the `Bash(opencode models:*)` binary shell-out in every
@@ -52,6 +52,7 @@ for command in panel workshop collaborate; do
     panel)       mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_models" ;;
     workshop)    mcp_grants="mcp__claudecollab__collab_panel mcp__claudecollab__collab_consult mcp__claudecollab__collab_models" ;;
     collaborate) mcp_grants="mcp__claudecollab__collab_consult mcp__claudecollab__collab_models" ;;
+    configure)   mcp_grants="mcp__claudecollab__collab_models" ;;
     *)           mcp_grants="" ;;
   esac
   fm_line="$(grep -m1 '^allowed-tools:' "$file")"
@@ -61,12 +62,12 @@ for command in panel workshop collaborate; do
   done
 done
 
-# The 7 migrated command docs must touch ZERO collab bash (M10): no ask.sh, no log.sh,
-# no panel-models.sh, and none of the old env-var invocation forms. witness.md and
-# configure.md are intentionally excluded — they keep their bash until M11/M12.
-# M11 also retires the LAST opencode-binary shell-out (`Bash(opencode models:*)`),
-# replaced by the collab_models MCP tool — so a migrated doc must not grant `Bash(opencode`.
-migrated_cmds=(consult panel research delegate review workshop collaborate)
+# Every command doc must touch ZERO collab bash (M12, bash layer retired): no ask.sh, no
+# log.sh, no panel-models.sh, and none of the old env-var invocation forms. The last
+# opencode-binary shell-out (`Bash(opencode models:*)`) was replaced by the collab_models
+# MCP tool, so a doc must not grant `Bash(opencode` either. (witness.md retired with the
+# witness; configure.md was migrated to the MCP tools + `claudecollab doctor` at M12.)
+migrated_cmds=(consult panel research delegate review workshop collaborate configure)
 for command in "${migrated_cmds[@]}"; do
   file=".claude/commands/collab/$command.md"
   if grep -nE 'collab/ask\.sh|collab/log\.sh|panel-models\.sh|COLLAB_RUN_ID|COLLAB_CONFIRMED' "$file"; then
@@ -77,22 +78,12 @@ for command in "${migrated_cmds[@]}"; do
   fi
 done
 
-# The bash wrapper layer still ships until the v1.0.0 retirement (PLAN.md M12), so
-# README continues to document its optional pre-approval grants.
-grep -Fq '"Bash(COLLAB_RUN_ID=* COLLAB_COMMAND=/collab:* COLLAB_CONFIRMED=1 bash collab/ask.sh:*)"' README.md \
-  || bad "README optional permissions omit the combined run-id, command, and confirmation invocation"
-
 delegate=.claude/commands/collab/delegate.md
 grep -m1 '^allowed-tools:' "$delegate" | grep -Fq 'Read' || bad "delegate patch review requires Read in allowed-tools"
 grep -Fq 'with the `Read` tool' "$delegate" || bad "delegate must review the recorded patch with Read"
 
 review=.claude/commands/collab/review.md
 grep -m1 '^allowed-tools:' "$review" | grep -Fq 'Bash(git ls-files:*)' || bad "review uses git ls-files but does not grant it"
-grep -Fq '"Bash(git ls-files:*)"' README.md || bad "README optional permissions omit review's git ls-files command"
-
-witness=.claude/commands/collab/witness.md
-grep -Fq 'outside ASCII `[A-Za-z0-9._-]`' "$witness" || bad "witness report filename sanitization rule is missing"
-grep -Fq 'use `model` if nothing remains' "$witness" || bad "witness filename empty-result fallback is missing"
 
 lifecycle_files=(
   AGENTS.md
@@ -118,10 +109,6 @@ done < <(grep -RInE 'started[[:space:]]*[/+&][[:space:]]*completed([^[:alnum:]]|
 for file in AGENTS.md README.md SECURITY.md; do
   grep -Fq 'expected-call' "$file" || bad "$file must document the expected-call lifecycle entry"
 done
-
-if ! grep -Fq 'PAYLOAD_FILES' AGENTS.md || ! grep -Fq 'check-docs.sh' install.sh; then
-  bad "docs lint must be described in AGENTS.md and included in install.sh PAYLOAD_FILES"
-fi
 
 [ "$failed" -eq 0 ] || exit 1
 echo "documentation workflow lint: PASS"

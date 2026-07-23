@@ -27,6 +27,33 @@ fail=0
 pass() { printf '\033[32mok\033[0m   %s\n' "$*"; }
 bad()  { printf '\033[31mFAIL\033[0m %s — %s\n' "$1" "$2"; fail=1; }
 
+# --self-test: prove THIS lint accepts the conforming form and rejects every drift
+# (ported from the retired run-tests.sh meta-tests). Self-contained; run in CI + doctor.sh.
+if [ "${1:-}" = "--self-test" ]; then
+  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  st_fail=0
+  st_ok() { printf '\033[32mok\033[0m   self-test: %s\n' "$1"; }
+  st_no() { printf '\033[31mFAIL\033[0m self-test: %s\n' "$1"; st_fail=1; }
+  d="$(mktemp -d "${TMPDIR:-/tmp}/collab-shb.XXXXXX")"
+  printf '#!/usr/bin/env bash\necho hi\n' > "$d/good.sh"
+  bash "$self" "$d/good.sh" >/dev/null 2>&1 && st_ok "accepts #!/usr/bin/env bash" || st_no "rejects the correct form (false positive)"
+  printf '#!/bin/bash\necho hi\n' > "$d/bad.sh"
+  bash "$self" "$d/bad.sh" >/dev/null 2>&1 && st_no "MISSED #!/bin/bash" || st_ok "catches #!/bin/bash"
+  printf '#!/bin/sh\necho hi\n' > "$d/sh.sh"
+  bash "$self" "$d/sh.sh" >/dev/null 2>&1 && st_no "MISSED #!/bin/sh" || st_ok "catches #!/bin/sh"
+  printf '#!/usr/bin/env bash -e\necho hi\n' > "$d/flag.sh"
+  bash "$self" "$d/flag.sh" >/dev/null 2>&1 && st_no "MISSED '#!/usr/bin/env bash -e'" || st_ok "catches a trailing-flag variant"
+  printf '#!/bin/bash\necho hi\n' > "$d/noext"
+  bash "$self" "$d/noext" >/dev/null 2>&1 && st_no "MISSED an extension-less script" || st_ok "covers extension-less scripts"
+  printf 'just data\n' > "$d/data.txt"
+  bash "$self" "$d/data.txt" >/dev/null 2>&1 && st_ok "ignores files without a shebang" || st_no "wrongly failed a non-script file"
+  rm -rf "$d"
+  echo
+  if [ "$st_fail" -eq 0 ]; then printf '\033[32mshebang self-test: the lint catches every drift\033[0m\n'
+  else printf '\033[31mshebang self-test: FAILED\033[0m\n'; fi
+  exit "$st_fail"
+fi
+
 if [ "$#" -gt 0 ]; then
   # Explicit paths: the meta-tests pass non-scripts here on purpose and expect a
   # clean pass with nothing checked, so an empty result is legitimate.

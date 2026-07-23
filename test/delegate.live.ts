@@ -27,7 +27,6 @@ const FREE_MODEL = "opencode/deepseek-v4-flash-free";
 const ASK_MS = 180_000;
 const TARGET = "GREETING.txt";
 const MARKER = "OTTER-CANYON-4821";
-const LOGSH = path.join(repoRoot, "collab", "log.sh");
 
 function git(dir: string, args: string[]): { status: number; stdout: string } {
   const r = spawnSync("git", args, {
@@ -152,15 +151,13 @@ async function main(): Promise<number> {
       //    `collab/logs/`, or relocate serve's runtime) is a harness-difference decision for the
       //    maintainer; snapshot.ts stays faithful until then.
       //
-      //    What this test asserts UNCONDITIONALLY is the invariant that must always hold and
-      //    that BOTH verifiers must AGREE on: captureComplete:true ⟺ verify==0. That passes
-      //    whether the scaffolding is present (both 7) or absent (both 0), and would flip to a
-      //    clean pass automatically once the `.opencode/` exclusion lands.
+      //    What this test asserts UNCONDITIONALLY is the invariant that must always hold:
+      //    captureComplete:true ⟺ verify==0. That passes whether the scaffolding is present
+      //    (7) or absent (0), and would flip to a clean pass automatically once the
+      //    `.opencode/` exclusion lands.
       const runId = result.attribution.runId;
       const tsCode = new EvidenceLog({ env }).verify(runId).code;
-      const bashCode = spawnSync("bash", [LOGSH, "verify", runId], { env, encoding: "utf8" }).status ?? -1;
-      console.log(`  captureComplete=${result.capture.captureComplete} reason=${result.capture.incompleteReason} tsVerify=${tsCode} bashVerify=${bashCode}`);
-      c.check(tsCode === bashCode, "TS and bash verifiers AGREE on this run (cross-verify parity)");
+      console.log(`  captureComplete=${result.capture.captureComplete} reason=${result.capture.incompleteReason} tsVerify=${tsCode}`);
       const expectedCode = result.capture.captureComplete ? 0 : 7;
       c.check(tsCode === expectedCode, `verify code matches captureComplete (complete⟺0; got complete=${result.capture.captureComplete}, code=${tsCode})`);
       if (!result.capture.captureComplete) {

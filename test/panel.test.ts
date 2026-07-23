@@ -4,12 +4,11 @@
  *
  * No model is called: every member turn is served by the `node:http` fake
  * (test/fake-opencode-server.ts) behind a `ServeProvider`. The evidence layer writes to
- * a temp COLLAB_LOG_DIR, and the flagship case cross-verifies a TOOL-PRODUCED CONCURRENT
- * run (3 members, 9 lifecycle entries) with BOTH the bash `collab/log.sh verify` and the
- * TS `verify()` — the property that keeps /collab:witness working on TS-era panel runs.
+ * a temp COLLAB_LOG_DIR, and the flagship case verifies a TOOL-PRODUCED CONCURRENT run
+ * (3 members, 9 lifecycle entries) with the TS `verify()` (the reference verifier; the
+ * bash `collab/log.sh verify` it was cross-checked against retired at M12).
  */
 
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -18,9 +17,7 @@ import { EvidenceLog } from "../src/log.js";
 import { startFakeOpencode, type FakeOpencode } from "./fake-opencode-server.js";
 import type { ServeProvider } from "../src/client.js";
 import type { ServeHandle } from "../src/lifecycle.js";
-import { Checker, repoRoot } from "./harness.js";
-
-const LOGSH = path.join(repoRoot, "collab", "log.sh");
+import { Checker } from "./harness.js";
 
 /** A `ServeProvider` pointing `withServe` at an already-running fake (no opencode). */
 function fakeServe(fake: FakeOpencode): ServeProvider {
@@ -33,12 +30,6 @@ function tmp(prefix = "m6-"): string {
   const d = mkdtempSync(path.join(tmpdir(), prefix));
   tmpDirs.push(d);
   return d;
-}
-
-/** Run `bash collab/log.sh verify <run>`; returns the exit status. Never throws. */
-function bashVerify(runId: string, env: NodeJS.ProcessEnv): number {
-  const r = spawnSync("bash", [LOGSH, "verify", runId], { env, encoding: "utf8" });
-  return r.status ?? -1;
 }
 
 /** A collab root with the given policy body; returns its path. */
@@ -167,7 +158,6 @@ export async function run(): Promise<number> {
         const expected = entries.filter((e) => e.type === "expected-call");
         c.check(expected.length === 1, "mixed: exactly one expected-call in the run (only the allow member)");
         c.check(new EvidenceLog({ env }).verify(r.runId).code === 0, "mixed: run verifies clean (TS)");
-        c.check(bashVerify(r.runId, env) === 0, "mixed: run verifies clean (bash)");
       }
     } finally {
       await fake.close();
@@ -230,7 +220,7 @@ export async function run(): Promise<number> {
 
   // -------------------------------------------------------------------------
   // 5. FLAGSHIP: 3-member CONCURRENT panel — distinct call_ids, distinct turns, ONE run,
-  //    passes BOTH `bash collab/log.sh verify` AND TS verify() with exact cardinality.
+  //    passes TS verify() with exact cardinality in both directions.
   // -------------------------------------------------------------------------
   {
     const root = rootWithPolicy(""); // default-allow
@@ -268,9 +258,8 @@ export async function run(): Promise<number> {
         });
         c.check(perCallOk, "flagship: every call_id has exactly one expected/started/completed");
 
-        // BOTH verifiers on the concurrent tool-produced run.
+        // verify on the concurrent tool-produced run.
         c.check(new EvidenceLog({ env }).verify(r.runId).code === 0, "FLAGSHIP: TS verify() passes the 3-member concurrent run (code 0)");
-        c.check(bashVerify(r.runId, env) === 0, "FLAGSHIP: `bash collab/log.sh verify` passes the SAME run (exit 0)");
 
         // The MCP wire shape carries every voice + the warnings, byte-exact through JSON.
         const wire = panelToToolResult(r);
@@ -342,7 +331,6 @@ export async function run(): Promise<number> {
         const entries = readEntries(logDir, runId);
         c.check(entries.filter((e) => e.type === "expected-call").length === 4, "thread: four expected-call entries in ONE run");
         c.check(new EvidenceLog({ env }).verify(runId).code === 0, "thread: the four-call run verifies (TS)");
-        c.check(bashVerify(runId, env) === 0, "thread: the four-call run verifies (bash)");
       }
     } finally {
       await fake.close();
@@ -428,7 +416,6 @@ export async function run(): Promise<number> {
         c.check(betaStarted?.tier === "allow" && betaStarted?.confirmed === false, "non-leak: call 2's beta entry carries tier=allow, confirmed=false");
         c.check(entries.filter((e) => e.type === "expected-call").length === 2, "non-leak: run has exactly 2 expected-calls (gamma call1 + beta call2)");
         c.check(new EvidenceLog({ env }).verify(runId).code === 0, "non-leak: the shared run verifies clean (TS)");
-        c.check(bashVerify(runId, env) === 0, "non-leak: the shared run verifies clean (bash)");
       }
     } finally {
       await fake.close();
@@ -438,7 +425,7 @@ export async function run(): Promise<number> {
   // -------------------------------------------------------------------------
   // 10. Panel-scale corruption NEGATIVE: a clean 3-member run, then one member's
   //     `completed` entry is tampered (raw_response altered, entry_hash left STALE) —
-  //     BOTH verifiers must go red (TS code 7, bash exit 7). The positive flagship
+  //     verify must go red (code 7). The positive flagship
   //     (test 5) shows a clean run passes; this proves the panel run is not passing
   //     vacuously — an altered answer is caught by both.
   // -------------------------------------------------------------------------
@@ -456,9 +443,8 @@ export async function run(): Promise<number> {
       if (r.ok) {
         const runId = r.runId;
         const file = path.join(logDir, runId, "calls.jsonl");
-        // Baseline: the clean run passes BOTH verifiers (so the red below is the tamper).
+        // Baseline: the clean run passes verify (so the red below is the tamper).
         c.check(new EvidenceLog({ env }).verify(runId).code === 0, "corrupt: clean run passes TS verify() first");
-        c.check(bashVerify(runId, env) === 0, "corrupt: clean run passes bash verify first");
 
         // Tamper ONE member's completed entry: alter raw_response, keep entry_hash stale.
         const lines = readFileSync(file, "utf8").split("\n").filter((l) => l.length > 0);
@@ -472,10 +458,9 @@ export async function run(): Promise<number> {
         lines[idx] = JSON.stringify(tampered);
         writeFileSync(file, lines.join("\n") + "\n");
 
-        // BOTH verifiers must now fail LOUDLY.
+        // verify must now fail LOUDLY.
         const ts = new EvidenceLog({ env }).verify(runId);
         c.check(ts.code === 7, "corrupt: TS verify() goes red (code 7) on the tampered answer");
-        c.check(bashVerify(runId, env) === 7, "corrupt: `bash collab/log.sh verify` goes red (exit 7) on the SAME tamper");
       }
     } finally {
       await fake.close();
@@ -486,7 +471,7 @@ export async function run(): Promise<number> {
   // 11. keepSessions (M7 / Option B — workshop round 1): each member's session is KEPT
   //     and its DISTINCT id returned per-member, so round 2 can continue each via a
   //     per-member consult loop. No deletes; each completed entry carries its member's
-  //     session id; the run verifies under BOTH verifiers with session ids present.
+  //     session id; the run verifies under verify with session ids present.
   // -------------------------------------------------------------------------
   {
     const root = rootWithPolicy(""); // default-allow
@@ -513,7 +498,6 @@ export async function run(): Promise<number> {
           c.check(completed?.session_id === m.sessionId, `keepSessions: ${m.model} completed entry carries its session id`);
         }
         c.check(new EvidenceLog({ env }).verify(r.runId).code === 0, "keepSessions: run passes TS verify()");
-        c.check(bashVerify(r.runId, env) === 0, "keepSessions: run passes bash verify (exit 0)");
       }
     } finally {
       await fake.close();
@@ -559,7 +543,6 @@ export async function run(): Promise<number> {
         // witness sees the failed member rather than a false clean. (alpha's lifecycle is
         // well-formed; the flag is specifically the failed capture, not a pairing error.)
         c.check(new EvidenceLog({ env }).verify(r.runId).code === 7, "fail-member: verify FLAGS the failed member's gap (TS code 7)");
-        c.check(bashVerify(r.runId, env) === 7, "fail-member: bash verify FLAGS the same gap (exit 7)");
       }
     } finally {
       await fake.close();

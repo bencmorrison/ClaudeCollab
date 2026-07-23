@@ -7,10 +7,9 @@
  * lifecycle spine as consult, so these tests focus on what is NEW: the NO-FALLBACK
  * agent-def refusal (a missing collab-research.md is a structured exit-5 refusal, never a
  * silent downgrade), gate parity (deny/ask) on the research path, and that a research run
- * verifies under BOTH the TS and bash verifiers (witness works unchanged on research logs).
+ * verifies under the TS verifier (the reference; the bash oracle retired at M12).
  */
 
-import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   mkdirSync,
@@ -25,9 +24,7 @@ import { EvidenceLog } from "../src/log.js";
 import { startFakeOpencode, type FakeOpencode } from "./fake-opencode-server.js";
 import type { ServeProvider } from "../src/client.js";
 import type { ServeHandle } from "../src/lifecycle.js";
-import { Checker, repoRoot } from "./harness.js";
-
-const LOGSH = path.join(repoRoot, "collab", "log.sh");
+import { Checker } from "./harness.js";
 
 function fakeServe(fake: FakeOpencode): ServeProvider {
   const handle: ServeHandle = { baseUrl: fake.baseUrl, port: 0, pid: 0 };
@@ -170,7 +167,7 @@ export async function run(): Promise<number> {
 
   // -------------------------------------------------------------------------
   // 4. SUCCESS: def present + allowed model → answer byte-exact, attribution names
-  //    collab-research, the run verifies under BOTH verifiers (witness parity).
+  //    collab-research, the run verifies under verify (witness parity).
   // -------------------------------------------------------------------------
   {
     const ANSWER = 'Per the source: X.\n"quoted"\tcafé ☕\n';
@@ -199,8 +196,6 @@ export async function run(): Promise<number> {
 
         const runId = r.attribution.runId;
         c.check(new EvidenceLog({ env }).verify(runId).code === 0, "success: run passes TS verify()");
-        const bash = spawnSync("bash", [LOGSH, "verify", runId], { env, encoding: "utf8" });
-        c.check((bash.status ?? -1) === 0, "success: run passes `bash collab/log.sh verify` (exit 0)");
       }
     } finally {
       await fake.close();
